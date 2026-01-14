@@ -84,7 +84,7 @@ static void WalletTxToJSON(const CWallet &wallet, const CWalletTx &wtx,
     for (const uint256 &conflict : wallet.GetTxConflicts(wtx)) {
         conflicts.push_back(conflict.GetHex());
     }
-    entry.pushKV("walletconflicts", conflicts);
+    entry.pushKV("walletconflicts", std::move(conflicts));
     entry.pushKV("time", wtx.GetTxTime());
     entry.pushKV("timereceived", int64_t{wtx.nTimeReceived});
 
@@ -463,9 +463,9 @@ static RPCHelpMan listaddressgroupings() {
                     if (address_book_entry) {
                         addressInfo.push_back(address_book_entry->GetLabel());
                     }
-                    jsonGrouping.push_back(addressInfo);
+                    jsonGrouping.push_back(std::move(addressInfo));
                 }
-                jsonGroupings.push_back(jsonGrouping);
+                jsonGroupings.push_back(std::move(jsonGrouping));
             }
 
             return jsonGroupings;
@@ -962,7 +962,7 @@ struct tallyitem {
     int nConf{std::numeric_limits<int>::max()};
     std::vector<uint256> txids;
     bool fIsWatchonly{false};
-    tallyitem() {}
+    tallyitem() = default;
 };
 
 static UniValue ListReceived(const Config &config, const CWallet *const pwallet,
@@ -1095,8 +1095,8 @@ static UniValue ListReceived(const Config &config, const CWallet *const pwallet,
                     transactions.push_back(_item.GetHex());
                 }
             }
-            obj.pushKV("txids", transactions);
-            ret.push_back(obj);
+            obj.pushKV("txids", std::move(transactions));
+            ret.push_back(std::move(obj));
         }
     }
 
@@ -1112,7 +1112,7 @@ static UniValue ListReceived(const Config &config, const CWallet *const pwallet,
             obj.pushKV("confirmations",
                        (nConf == std::numeric_limits<int>::max() ? 0 : nConf));
             obj.pushKV("label", entry.first);
-            ret.push_back(obj);
+            ret.push_back(std::move(obj));
         }
     }
 
@@ -1312,7 +1312,7 @@ static void ListTransactions(const CWallet *const pwallet, const CWalletTx &wtx,
                 WalletTxToJSON(*pwallet, wtx, entry);
             }
             entry.pushKV("abandoned", wtx.isAbandoned());
-            ret.push_back(entry);
+            ret.push_back(std::move(entry));
         }
     }
 
@@ -1354,7 +1354,7 @@ static void ListTransactions(const CWallet *const pwallet, const CWalletTx &wtx,
             if (fLong) {
                 WalletTxToJSON(*pwallet, wtx, entry);
             }
-            ret.push_back(entry);
+            ret.push_back(std::move(entry));
         }
     }
 }
@@ -1776,9 +1776,9 @@ static RPCHelpMan listsinceblock() {
                 FoundBlock().hash(lastblock)));
 
             UniValue ret(UniValue::VOBJ);
-            ret.pushKV("transactions", transactions);
+            ret.pushKV("transactions", std::move(transactions));
             if (include_removed) {
-                ret.pushKV("removed", removed);
+                ret.pushKV("removed", std::move(removed));
             }
             ret.pushKV("lastblock", lastblock.GetHex());
 
@@ -1868,10 +1868,8 @@ static RPCHelpMan gettransaction() {
                      "Optional, the decoded transaction (only present when "
                      "`verbose` is passed)",
                      {
-                         {RPCResult::Type::ELISION, "",
-                          "Equivalent to the RPC decoderawtransaction method, "
-                          "or the RPC getrawtransaction method when `verbose` "
-                          "is passed."},
+                         DecodeTxDoc(/*txid_field_doc=*/"The transaction id",
+                                     /*wallet=*/true),
                      }},
                 })},
         RPCExamples{HelpExampleCli("gettransaction",
@@ -1938,16 +1936,26 @@ static RPCHelpMan gettransaction() {
             UniValue details(UniValue::VARR);
             ListTransactions(pwallet, wtx, 0, false, details, filter,
                              nullptr /* filter_label */);
-            entry.pushKV("details", details);
+            entry.pushKV("details", std::move(details));
 
-            std::string strHex =
-                EncodeHexTx(*wtx.tx, pwallet->chain().rpcSerializationFlags());
+            std::string strHex = EncodeHexTx(*wtx.tx);
             entry.pushKV("hex", strHex);
 
             if (verbose) {
                 UniValue decoded(UniValue::VOBJ);
-                TxToUniv(*wtx.tx, BlockHash(), decoded, false);
-                entry.pushKV("decoded", decoded);
+                TxToUniv(*wtx.tx,
+                         /*hashBlock=*/BlockHash(),
+                         /*entry=*/decoded,
+                         /*include_hex=*/false,
+                         /*txundo=*/nullptr,
+                         /*verbosity=*/TxVerbosity::SHOW_DETAILS,
+                         /*is_change_func=*/
+                         [&pwallet](const CTxOut &txout)
+                             EXCLUSIVE_LOCKS_REQUIRED(pwallet->cs_wallet) {
+                                 AssertLockHeld(pwallet->cs_wallet);
+                                 return OutputIsChange(*pwallet, txout);
+                             });
+                entry.pushKV("decoded", std::move(decoded));
             }
 
             return entry;
@@ -2289,7 +2297,7 @@ static RPCHelpMan listlockunspent() {
 
                 o.pushKV("txid", output.GetTxId().GetHex());
                 o.pushKV("vout", int(output.GetN()));
-                ret.push_back(o);
+                ret.push_back(std::move(o));
             }
 
             return ret;
@@ -2430,7 +2438,7 @@ static RPCHelpMan getbalances() {
                                              bal.m_mine_trusted -
                                              bal.m_mine_untrusted_pending);
                 }
-                balances.pushKV("mine", balances_mine);
+                balances.pushKV("mine", std::move(balances_mine));
             }
             auto spk_man = wallet.GetLegacyScriptPubKeyMan();
             if (spk_man && spk_man->HaveWatchOnly()) {
@@ -2439,7 +2447,7 @@ static RPCHelpMan getbalances() {
                 balances_watchonly.pushKV("untrusted_pending",
                                           bal.m_watchonly_untrusted_pending);
                 balances_watchonly.pushKV("immature", bal.m_watchonly_immature);
-                balances.pushKV("watchonly", balances_watchonly);
+                balances.pushKV("watchonly", std::move(balances_watchonly));
             }
             return balances;
         },
@@ -2568,9 +2576,10 @@ static RPCHelpMan getwalletinfo() {
                 !pwallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS));
             if (pwallet->IsScanning()) {
                 UniValue scanning(UniValue::VOBJ);
-                scanning.pushKV("duration", pwallet->ScanningDuration() / 1000);
+                scanning.pushKV("duration", Ticks<std::chrono::seconds>(
+                                                pwallet->ScanningDuration()));
                 scanning.pushKV("progress", pwallet->ScanningProgress());
-                obj.pushKV("scanning", scanning);
+                obj.pushKV("scanning", std::move(scanning));
             } else {
                 obj.pushKV("scanning", false);
             }
@@ -2617,7 +2626,7 @@ static RPCHelpMan listwalletdir() {
             }
 
             UniValue result(UniValue::VOBJ);
-            result.pushKV("wallets", wallets);
+            result.pushKV("wallets", std::move(wallets));
             return result;
         },
     };
@@ -3113,7 +3122,7 @@ static RPCHelpMan listunspent() {
 
             std::set<CTxDestination> destinations;
             if (!request.params[2].isNull()) {
-                UniValue inputs = request.params[2].get_array();
+                const UniValue &inputs = request.params[2].get_array();
                 for (size_t idx = 0; idx < inputs.size(); idx++) {
                     const UniValue &input = inputs[idx];
                     CTxDestination dest = DecodeDestination(
@@ -3258,7 +3267,7 @@ static RPCHelpMan listunspent() {
                     entry.pushKV("reused", reused);
                 }
                 entry.pushKV("safe", out.fSafe);
-                results.push_back(entry);
+                results.push_back(std::move(entry));
             }
 
             return results;
@@ -3836,9 +3845,9 @@ public:
             // Only when the script corresponds to an address.
             UniValue subobj(UniValue::VOBJ);
             UniValue detail = DescribeAddress(embedded);
-            subobj.pushKVs(detail);
+            subobj.pushKVs(std::move(detail));
             UniValue wallet_detail = std::visit(*this, embedded);
-            subobj.pushKVs(wallet_detail);
+            subobj.pushKVs(std::move(wallet_detail));
             subobj.pushKV("address", EncodeDestination(embedded, GetConfig()));
             subobj.pushKV("scriptPubKey", HexStr(subscript));
             // Always report the pubkey at the top level, so that
@@ -3900,7 +3909,7 @@ static UniValue DescribeWalletAddress(const CWallet *const pwallet,
     if (pwallet) {
         provider = pwallet->GetSolvingProvider(script);
     }
-    ret.pushKVs(detail);
+    ret.pushKVs(std::move(detail));
     ret.pushKVs(std::visit(DescribeWalletAddressVisitor(provider.get()), dest));
     return ret;
 }
@@ -4049,7 +4058,7 @@ RPCHelpMan getaddressinfo() {
             ret.pushKV("iswatchonly", bool(mine & ISMINE_WATCH_ONLY));
 
             UniValue detail = DescribeWalletAddress(pwallet, dest);
-            ret.pushKVs(detail);
+            ret.pushKVs(std::move(detail));
 
             ret.pushKV("ischange", ScriptIsChange(*pwallet, scriptPubKey));
 
@@ -4381,7 +4390,7 @@ static RPCHelpMan send() {
             }
             CWallet *const pwallet = wallet.get();
 
-            UniValue options = request.params[1];
+            const UniValue &options = request.params[1];
             if (options.exists("changeAddress")) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Use change_address");
             }
@@ -4442,7 +4451,7 @@ static RPCHelpMan send() {
 
             if (psbt_opt_in || !complete || !add_to_wallet) {
                 // Serialize the PSBT
-                CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+                DataStream ssTx{};
                 ssTx << psbtx;
                 result.pushKV("psbt", EncodeBase64(ssTx.str()));
             }
@@ -4637,7 +4646,7 @@ static RPCHelpMan walletprocesspsbt() {
             }
 
             UniValue result(UniValue::VOBJ);
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << psbtx;
             result.pushKV("psbt", EncodeBase64(ssTx.str()));
             result.pushKV("complete", complete);
@@ -4833,7 +4842,7 @@ static RPCHelpMan walletcreatefundedpsbt() {
             }
 
             // Serialize the PSBT
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << psbtx;
 
             UniValue result(UniValue::VOBJ);

@@ -5,6 +5,10 @@
 #ifndef BITCOIN_CHRONIK_CPP_CHRONIK_BRIDGE_H
 #define BITCOIN_CHRONIK_CPP_CHRONIK_BRIDGE_H
 
+#include <node/context.h>
+#include <threadsafety.h>
+#include <txmempool.h>
+
 #include <memory>
 #include <rust/cxx.h>
 #include <vector>
@@ -20,9 +24,6 @@ namespace Consensus {
 struct Params;
 } // namespace Consensus
 
-namespace node {
-struct NodeContext;
-} // namespace node
 class uint256;
 
 namespace chronik_bridge {
@@ -84,6 +85,10 @@ public:
 
     rust::Vec<uint8_t> load_raw_tx(uint32_t file_num, uint32_t data_pos) const;
 
+    bool is_avalanche_finalized_preconsensus(
+        const std::array<uint8_t, 32> &txid) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_node.mempool->cs);
+
     const CBlockIndex &find_fork(const CBlockIndex &index) const;
 
     void lookup_spent_coins(Tx &, rust::Vec<OutPoint> &not_found,
@@ -93,7 +98,7 @@ public:
     std::array<uint8_t, 32> broadcast_tx(rust::Slice<const uint8_t> raw_tx,
                                          int64_t max_fee) const;
 
-    void abort_node(const rust::Str msg, const rust::Str user_msg) const;
+    void fatal_error(const rust::Str msg, const rust::Str user_msg) const;
 
     bool shutdown_requested() const;
 
@@ -102,6 +107,11 @@ public:
     int64_t estimate_feerate_sats_per_kb() const;
 
     int64_t min_relay_feerate_sats_per_kb() const;
+
+    bool get_feerate_info(std::array<uint8_t, 32> mempool_txid,
+                          int64_t &modified_fee_rate_sats_per_kb,
+                          uint32_t &virtual_size_bytes) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_node.mempool->cs);
 };
 
 std::unique_ptr<ChronikBridge> make_bridge(const node::NodeContext &node);
@@ -128,6 +138,8 @@ int64_t default_max_raw_tx_fee_rate_per_kb();
 void sync_with_validation_interface_queue();
 
 bool init_error(const rust::Str msg);
+
+rust::String client_name();
 
 rust::String format_full_version();
 

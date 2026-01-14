@@ -17,6 +17,7 @@
 .env.development.local
 .env.test.local
 .env.production.local
+.env.android
 
 npm-debug.log*
 yarn-debug.log*
@@ -27,3 +28,7 @@ yarn-error.log*
 *.zip
 *.pem
 dist/
+
+# Android keystore files
+*.jks
+*.keystore

@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025 The Bitcoin developers -->
+<!-- Distributed under the MIT software license, see the accompanying -->
+<!-- file COPYING or http://www.opensource.org/licenses/mit-license.php. -->
 {% extends "base.html" %}
 {% import "components/input.html" as input %}
 {% import "components/output.html" as output %}
@@ -11,6 +14,16 @@
                     <h1 class="tx-header__title">{{ title }}</h1>
                     {% if tx.is_coinbase %}
                         <div class="tx-header__label ui green label">Coinbase</div>
+                    {% endif %}
+                    {% if tx.is_final %}
+                        <div class="finalized-indicator">
+                            Finalized
+                            <img class="final-icon"
+                                 src="/assets/checkmark.svg"
+                                 alt="Finalized by Avalanche" />
+                        </div>
+                    {% else %}
+                        <div class="finalizing-indicator">Finalizing...</div>
                     {% endif %}
                 </div>
                 <div class="six wide column">
@@ -110,21 +123,6 @@
                         <div>{{ timestamp|human_time }}</div>
                     </div>
                     <div class="tx-details-row">
-                        <div>Final</div>
-                        <div>
-                            {% match tx.block %}
-                                {% when Some with (block) %}
-                                {% if block.is_final %}
-                                    Yes
-                                {% else %}
-                                    No
-                                {% endif %}
-                                {% when None %}
-                                No
-                            {% endmatch %}
-                        </div>
-                    </div>
-                    <div class="tx-details-row">
                         <div>Block</div>
                         <div>
                             {% match tx.block %}
@@ -132,9 +130,9 @@
                                 <a href="/block/{{ block_meta.hash|to_le_hex }}">{{ block_meta.height|to_i128|render_integer|safe }}</a>
                                 ({{ confirmations|to_i128|render_integer|safe }}
                                 {% if confirmations|to_i128 > 1 %}
-                                    confirmations)
+                                    blocks ago)
                                 {% else %}
-                                    confirmation)
+                                    block ago)
                                 {% endif %}
                                 {% when None %}
                                 Not mined yet
@@ -266,7 +264,8 @@
             </div>
         </div>
     </div>
-    <script type="text/javascript" src="/code/timestamps.js?hash=80d7735"></script>
+    <script type="text/javascript"
+            src="/code/timestamps.js?hash={{ hashes.js_timestamps }}"></script>
     <script type="text/javascript">
         const toggleBtn = document.getElementById('toggle-advanced');
         let advancedMode = localStorage.getItem('advanced');

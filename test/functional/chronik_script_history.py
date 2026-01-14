@@ -168,12 +168,11 @@ class ChronikScriptHistoryTest(BitcoinTestFramework):
         # Create 1 block manually (with out-of-order block time)
         coinbase_tx = create_coinbase(101)
         coinbase_tx.vout[0].scriptPubKey = P2SH_OP_TRUE
-        coinbase_tx.rehash()
         block = create_block(int(blockhashes[-2], 16), coinbase_tx, mocktime + 1000)
         block.solve()
         peer.send_blocks_and_test([block], node)
         node.syncwithvalidationinterfacequeue()
-        blockhashes[-1] = block.hash
+        blockhashes[-1] = block.hash_hex
 
         # Blocks still ordered by block height
         blocktxs = [{"block": (i, blockhashes[i - 1])} for i in range(101, 0, -1)]
@@ -250,14 +249,12 @@ class ChronikScriptHistoryTest(BitcoinTestFramework):
         ]
         for idx, tx in enumerate(mempool_txs[:5]):
             tx.nLockTime = 12
-            tx.rehash()
             mine_txs.append(tx)
-            newblocktxs.append({"time_first_seen": 0, "txid": tx.hash})
+            newblocktxs.append({"time_first_seen": 0, "txid": tx.txid_hex})
 
         height = 1002
         coinbase_tx = create_coinbase(height)
         coinbase_tx.vout[0].scriptPubKey = P2SH_OP_TRUE
-        coinbase_tx.rehash()
         block = create_block(
             int(blockhashes[-1], 16),
             coinbase_tx,
@@ -269,12 +266,12 @@ class ChronikScriptHistoryTest(BitcoinTestFramework):
         peer.send_blocks_and_test([block], node)
 
         newblocktxs.append(
-            {"time_first_seen": 0, "txid": coinbase_tx.hash, "is_coinbase": True}
+            {"time_first_seen": 0, "txid": coinbase_tx.txid_hex, "is_coinbase": True}
         )
 
         newblocktxs.sort(key=tx_sort_key, reverse=True)
         for blocktx in newblocktxs:
-            blocktx["block"] = (height, block.hash)
+            blocktx["block"] = (height, block.hash_hex)
 
         node.syncwithvalidationinterfacequeue()
 

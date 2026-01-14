@@ -6,21 +6,9 @@ from copy import deepcopy
 from decimal import Decimal as PyDecimal
 
 from . import util
+from .constants import XEC
 from .printerror import PrintError, print_error
 from .util import get_user_dir, make_dir
-
-config = None
-
-
-def get_config():
-    global config
-    return config
-
-
-def set_config(c):
-    global config
-    config = c
-
 
 FINAL_CONFIG_VERSION = 2
 
@@ -45,7 +33,10 @@ class SimpleConfig(PrintError):
     max_slider_fee / slider_steps)"""
 
     def __init__(
-        self, options=None, read_user_config_function=None, read_user_dir_function=None
+        self,
+        options=None,
+        read_user_config_function=None,
+        read_user_dir_function=None,
     ):
         if options is None:
             options = {}
@@ -84,9 +75,6 @@ class SimpleConfig(PrintError):
         # config upgrade - user config
         if self.requires_upgrade():
             self.upgrade()
-
-        # Make a singleton instance of 'self'
-        set_config(self)
 
     def electrum_path(self):
         # Read electrum_cash_path from command line
@@ -328,6 +316,13 @@ class SimpleConfig(PrintError):
     def set_current_block_locktime_enabled(self, flag: bool):
         self.set_key("enable_current_block_locktime", flag, save=True)
 
+    def get_decimal_point(self) -> int:
+        return self.get("decimal_point", XEC.decimals)
+
+    def get_num_zeros(self) -> int:
+        # by default, we want to display the full precision down to sats
+        return self.get("num_zeros", XEC.decimals)
+
 
 def read_user_config(path: str) -> dict:
     """Parse the user config settings and return it as a dictionary.
@@ -347,7 +342,7 @@ def read_user_config(path: str) -> dict:
     except Exception:
         print_error("Warning: Cannot read config file.", config_path)
         return {}
-    if not type(result) is dict:
+    if not isinstance(result, dict):
         return {}
     return result
 

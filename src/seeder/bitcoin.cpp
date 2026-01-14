@@ -39,7 +39,7 @@ void CSeederNode::Send() {
 }
 
 PeerMessagingState CSeederNode::ProcessMessage(std::string strCommand,
-                                               CDataStream &recv) {
+                                               DataStream &recv) {
     // tfm::format(std::cout, "%s: RECV %s\n", ToString(you),
     // strCommand);
     if (strCommand == NetMsgType::VERSION) {
@@ -51,7 +51,7 @@ PeerMessagingState CSeederNode::ProcessMessage(std::string strCommand,
         yourServices = ServiceFlags(nServiceInt);
         // Ignore the addrMe service bits sent by the peer
         recv.ignore(8);
-        recv >> addrMe;
+        recv >> WithParams(CNetAddr::V1, addrMe);
 
         // The version message includes information about the sending node
         // which we don't use:
@@ -63,13 +63,11 @@ PeerMessagingState CSeederNode::ProcessMessage(std::string strCommand,
         recv >> strSubVer;
         recv >> nStartingHeight;
 
-        vSend.SetVersion(std::min(nVersion, PROTOCOL_VERSION));
         MessageWriter::WriteMessage(vSend, NetMsgType::VERACK);
         return PeerMessagingState::AwaitingMessages;
     }
 
     if (strCommand == NetMsgType::VERACK) {
-        vRecv.SetVersion(std::min(nVersion, PROTOCOL_VERSION));
         // tfm::format(std::cout, "\n%s: version %i\n", ToString(you),
         // nVersion);
         auto doneAfterDelta{1s};
@@ -97,7 +95,7 @@ PeerMessagingState CSeederNode::ProcessMessage(std::string strCommand,
     if (strCommand == NetMsgType::ADDR && vAddr) {
         needAddrReply = false;
         std::vector<CAddress> vAddrNew;
-        recv >> vAddrNew;
+        recv >> WithParams(CAddress::V1_NETWORK, vAddrNew);
         // tfm::format(std::cout, "%s: got %i addresses\n",
         // ToString(you),
         //        (int)vAddrNew.size());
@@ -192,10 +190,9 @@ bool CSeederNode::ProcessMessages() {
     const CMessageHeader::MessageMagic netMagic = Params().NetMagic();
 
     do {
-        CDataStream::iterator pstart = std::search(
+        DataStream::iterator pstart = std::search(
             vRecv.begin(), vRecv.end(), BEGIN(netMagic), END(netMagic));
-        uint32_t nHeaderSize =
-            GetSerializeSize(CMessageHeader(netMagic), vRecv.GetVersion());
+        uint32_t nHeaderSize = GetSerializeSize(CMessageHeader(netMagic));
         if (vRecv.end() - pstart < nHeaderSize) {
             if (vRecv.size() > nHeaderSize) {
                 vRecv.erase(vRecv.begin(), vRecv.end() - nHeaderSize);
@@ -213,7 +210,7 @@ bool CSeederNode::ProcessMessages() {
             ban = 100000;
             return true;
         }
-        std::string strCommand = hdr.GetCommand();
+        std::string strCommand = hdr.GetMessageType();
         unsigned int nMessageSize = hdr.nMessageSize;
         if (nMessageSize > MAX_SIZE) {
             // tfm::format(std::cout, "%s: BAD (message too large)\n",
@@ -225,16 +222,13 @@ bool CSeederNode::ProcessMessages() {
             vRecv.insert(vRecv.begin(), vHeaderSave.begin(), vHeaderSave.end());
             break;
         }
-        if (vRecv.GetVersion() >= 209) {
-            uint256 hash = Hash(Span{vRecv}.first(nMessageSize));
-            if (memcmp(hash.begin(), hdr.pchChecksum,
-                       CMessageHeader::CHECKSUM_SIZE) != 0) {
-                continue;
-            }
+        uint256 hash = Hash(Span{vRecv}.first(nMessageSize));
+        if (memcmp(hash.begin(), hdr.pchChecksum,
+                   CMessageHeader::CHECKSUM_SIZE) != 0) {
+            continue;
         }
         std::vector<std::byte> vec{vRecv.begin(), vRecv.begin() + nMessageSize};
-        CDataStream vMsg(MakeUCharSpan(vec), vRecv.GetType(),
-                         vRecv.GetVersion());
+        DataStream vMsg{MakeUCharSpan(vec)};
         vRecv.ignore(nMessageSize);
         if (ProcessMessage(strCommand, vMsg) == PeerMessagingState::Finished) {
             return true;
@@ -247,13 +241,7 @@ bool CSeederNode::ProcessMessages() {
 }
 
 CSeederNode::CSeederNode(const CService &ip, std::vector<CAddress> *vAddrIn)
-    : vSend(SER_NETWORK, 0), vRecv(SER_NETWORK, 0), vAddr(vAddrIn), you(ip),
-      checkpointVerified(!HasCheckpoint()) {
-    if (GetTime() > 1329696000) {
-        vSend.SetVersion(209);
-        vRecv.SetVersion(209);
-    }
-}
+    : vAddr(vAddrIn), you(ip), checkpointVerified(!HasCheckpoint()) {}
 
 bool CSeederNode::Run() {
     // FIXME: This logic is duplicated with CConnman::ConnectNode for no
@@ -305,10 +293,11 @@ bool CSeederNode::Run() {
     const std::string userAgent =
         FormatUserAgent(clientName, clientVersion, {"seeder"});
 
-    MessageWriter::WriteMessage(vSend, NetMsgType::VERSION, PROTOCOL_VERSION,
-                                nLocalServices, GetTime(), your_services, you,
-                                my_services, CService(), nLocalNonce, userAgent,
-                                GetRequireHeight(), fRelayTxs);
+    MessageWriter::WriteMessage(
+        vSend, NetMsgType::VERSION, PROTOCOL_VERSION, nLocalServices, GetTime(),
+        your_services, WithParams(CNetAddr::V1, you), my_services,
+        WithParams(CNetAddr::V1, CService{}), nLocalNonce, userAgent,
+        GetRequireHeight(), fRelayTxs);
     Send();
 
     bool res = true;

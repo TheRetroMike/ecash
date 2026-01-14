@@ -11,6 +11,7 @@
 #include <test/util/str.h>
 #include <uint256.h>
 #include <util/bitdeque.h>
+#include <util/byte_units.h>
 #include <util/chaintype.h>
 #include <util/check.h>
 #include <util/fs.h>
@@ -18,6 +19,7 @@
 #include <util/getuniquepath.h>
 #include <util/message.h> // For MessageSign(), MessageVerify(), MESSAGE_MAGIC
 #include <util/moneystr.h>
+#include <util/overflow.h>
 #include <util/spanparsing.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -52,7 +54,7 @@ static const std::string STRING_WITH_EMBEDDED_NULL_CHAR{"1"s
 
 /* defined in logging.cpp */
 namespace BCLog {
-std::string LogEscapeMessage(const std::string &str);
+std::string LogEscapeMessage(std::string_view str);
 }
 
 BOOST_FIXTURE_TEST_SUITE(util_tests, BasicTestingSetup)
@@ -576,41 +578,41 @@ BOOST_AUTO_TEST_CASE(util_ParseParameters) {
 BOOST_AUTO_TEST_CASE(util_ParseKeyValue) {
     {
         std::string key = "badarg";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(!ParseKeyValue(key, value));
     }
     {
         std::string key = "badarg=v";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(!ParseKeyValue(key, value));
     }
     {
         std::string key = "-a";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(ParseKeyValue(key, value));
         BOOST_CHECK_EQUAL(key, "-a");
-        BOOST_CHECK_EQUAL(value, "");
+        BOOST_CHECK(!value.has_value());
     }
     {
         std::string key = "-a=1";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(ParseKeyValue(key, value));
         BOOST_CHECK_EQUAL(key, "-a");
-        BOOST_CHECK_EQUAL(value, "1");
+        BOOST_CHECK_EQUAL(value.value(), "1");
     }
     {
         std::string key = "--b";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(ParseKeyValue(key, value));
         BOOST_CHECK_EQUAL(key, "-b");
-        BOOST_CHECK_EQUAL(value, "");
+        BOOST_CHECK(!value.has_value());
     }
     {
         std::string key = "--b=abc";
-        std::string value;
+        std::optional<std::string> value{std::nullopt};
         BOOST_CHECK(ParseKeyValue(key, value));
         BOOST_CHECK_EQUAL(key, "-b");
-        BOOST_CHECK_EQUAL(value, "abc");
+        BOOST_CHECK_EQUAL(value.value(), "abc");
     }
 }
 
@@ -1705,7 +1707,7 @@ BOOST_AUTO_TEST_CASE(util_IsHexNumber) {
 }
 
 BOOST_AUTO_TEST_CASE(util_seed_insecure_rand) {
-    SeedInsecureRand(SeedRand::ZEROS);
+    SeedRandomForTest(SeedRand::ZEROS);
     for (int mod = 2; mod < 11; mod++) {
         int mask = 1;
         // Really rough binomial confidence approximation.
@@ -1721,7 +1723,7 @@ BOOST_AUTO_TEST_CASE(util_seed_insecure_rand) {
         for (int i = 0; i < 10000; i++) {
             uint32_t rval;
             do {
-                rval = InsecureRand32() & mask;
+                rval = m_rng.rand32() & mask;
             } while (rval >= uint32_t(mod));
             count += rval == 0;
         }
@@ -1819,6 +1821,33 @@ BOOST_AUTO_TEST_CASE(test_IsDigit) {
     BOOST_CHECK_EQUAL(IsDigit(1), false);
     BOOST_CHECK_EQUAL(IsDigit(8), false);
     BOOST_CHECK_EQUAL(IsDigit(9), false);
+}
+
+/* Check for overflow */
+template <typename T> static void TestAddMatrixOverflow() {
+    constexpr T MAXI{std::numeric_limits<T>::max()};
+    BOOST_CHECK(!CheckedAdd(T{1}, MAXI));
+    BOOST_CHECK(!CheckedAdd(MAXI, MAXI));
+    BOOST_CHECK_EQUAL(0, CheckedAdd(T{0}, T{0}).value());
+    BOOST_CHECK_EQUAL(MAXI, CheckedAdd(T{0}, MAXI).value());
+    BOOST_CHECK_EQUAL(MAXI, CheckedAdd(T{1}, MAXI - 1).value());
+}
+
+/* Check for overflow or underflow */
+template <typename T> static void TestAddMatrix() {
+    TestAddMatrixOverflow<T>();
+    constexpr T MINI{std::numeric_limits<T>::min()};
+    constexpr T MAXI{std::numeric_limits<T>::max()};
+    BOOST_CHECK(!CheckedAdd(T{-1}, MINI));
+    BOOST_CHECK(!CheckedAdd(MINI, MINI));
+    BOOST_CHECK_EQUAL(MINI, CheckedAdd(T{0}, MINI).value());
+    BOOST_CHECK_EQUAL(MINI, CheckedAdd(T{-1}, MINI + 1).value());
+    BOOST_CHECK_EQUAL(-1, CheckedAdd(MINI, MAXI).value());
+}
+
+BOOST_AUTO_TEST_CASE(util_overflow) {
+    TestAddMatrixOverflow<unsigned>();
+    TestAddMatrix<signed>();
 }
 
 BOOST_AUTO_TEST_CASE(test_ParseInt32) {
@@ -1948,6 +1977,86 @@ BOOST_AUTO_TEST_CASE(test_ToIntegral) {
     BOOST_CHECK_EQUAL(ToIntegral<uint8_t>("0").value(), 0U);
     BOOST_CHECK_EQUAL(ToIntegral<uint8_t>("255").value(), 255U);
     BOOST_CHECK(!ToIntegral<uint8_t>("256"));
+}
+
+BOOST_AUTO_TEST_CASE(test_LocaleIndependentAtoi) {
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("1234"), 1'234);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("0"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("01234"), 1'234);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-1234"), -1'234);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(" 1"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("1 "), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("1a"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("1.1"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("1.9"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("+01.9"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-1"), -1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(" -1"), -1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-1 "), -1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(" -1 "), -1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("+1"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(" +1"), 1);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(" +1 "), 1);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("+-1"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-+1"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("++1"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("--1"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>(""), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("aap"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("0x1"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-32482348723847471234"),
+                      0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("32482348723847471234"),
+                      0);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int64_t>("-9223372036854775809"),
+                      0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int64_t>("-9223372036854775808"),
+                      -9'223'372'036'854'775'807LL - 1LL);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int64_t>("9223372036854775807"),
+                      9'223'372'036'854'775'807);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int64_t>("9223372036854775808"), 0);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint64_t>("-1"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint64_t>("0"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint64_t>("18446744073709551615"),
+                      18'446'744'073'709'551'615ULL);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint64_t>("18446744073709551616"),
+                      0U);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-2147483649"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("-2147483648"),
+                      -2'147'483'648LL);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("2147483647"),
+                      2'147'483'647);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int32_t>("2147483648"), 0);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint32_t>("-1"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint32_t>("0"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint32_t>("4294967295"),
+                      4'294'967'295U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint32_t>("4294967296"), 0U);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int16_t>("-32769"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int16_t>("-32768"), -32'768);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int16_t>("32767"), 32'767);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int16_t>("32768"), 0);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint16_t>("-1"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint16_t>("0"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint16_t>("65535"), 65'535U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint16_t>("65536"), 0U);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int8_t>("-129"), 0);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int8_t>("-128"), -128);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int8_t>("127"), 127);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<int8_t>("128"), 0);
+
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint8_t>("-1"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint8_t>("0"), 0U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint8_t>("255"), 255U);
+    BOOST_CHECK_EQUAL(LocaleIndependentAtoi<uint8_t>("256"), 0U);
 }
 
 BOOST_AUTO_TEST_CASE(test_ParseInt64) {
@@ -2720,9 +2829,9 @@ struct Tracker {
     const Tracker *origin;
     //! How many copies where involved between the original object and this one
     //! (moves are not counted)
-    int copies;
+    int copies{0};
 
-    Tracker() noexcept : origin(this), copies(0) {}
+    Tracker() noexcept : origin(this) {}
     Tracker(const Tracker &t) noexcept
         : origin(t.origin), copies(t.copies + 1) {}
     Tracker(Tracker &&t) noexcept : origin(t.origin), copies(t.copies) {}
@@ -2922,6 +3031,131 @@ BOOST_AUTO_TEST_CASE(remove_prefix) {
     BOOST_CHECK_EQUAL(RemovePrefix("f", "foo"), "f");
     BOOST_CHECK_EQUAL(RemovePrefixView("", "foo"), "");
     BOOST_CHECK_EQUAL(RemovePrefix("", ""), "");
+}
+
+BOOST_AUTO_TEST_CASE(clearshrink_test) {
+    {
+        std::vector<uint8_t> v = {1, 2, 3};
+        ClearShrink(v);
+        BOOST_CHECK_EQUAL(v.size(), 0);
+        BOOST_CHECK_EQUAL(v.capacity(), 0);
+    }
+
+    {
+        std::vector<bool> v = {false, true, false, false, true, true};
+        ClearShrink(v);
+        BOOST_CHECK_EQUAL(v.size(), 0);
+        BOOST_CHECK_EQUAL(v.capacity(), 0);
+    }
+
+    {
+        std::deque<int> v = {1, 3, 3, 7};
+        ClearShrink(v);
+        BOOST_CHECK_EQUAL(v.size(), 0);
+        // std::deque has no capacity() we can observe.
+    }
+}
+
+template <typename T> void TestCheckedLeftShift() {
+    constexpr auto MAX{std::numeric_limits<T>::max()};
+
+    // TODO: replace BOOST_CHECK(a == b) with BOOST_CHECK_EQUAL(a, b) once
+    //       the c++20 related TODO is done in overflow.h
+
+    // Basic operations
+    BOOST_CHECK(CheckedLeftShift<T>(0, 1) == 0);
+    BOOST_CHECK(CheckedLeftShift<T>(0, 127) == 0);
+    BOOST_CHECK(CheckedLeftShift<T>(1, 1) == 2);
+    BOOST_CHECK(CheckedLeftShift<T>(2, 2) == 8);
+    BOOST_CHECK(CheckedLeftShift<T>(MAX >> 1, 1) == MAX - 1);
+
+    // Max left shift
+    BOOST_CHECK(CheckedLeftShift<T>(1, std::numeric_limits<T>::digits - 1) ==
+                MAX / 2 + 1);
+
+    // Overflow cases
+    BOOST_CHECK(!CheckedLeftShift<T>((MAX >> 1) + 1, 1));
+    BOOST_CHECK(!CheckedLeftShift<T>(MAX, 1));
+    BOOST_CHECK(!CheckedLeftShift<T>(1, std::numeric_limits<T>::digits));
+    BOOST_CHECK(!CheckedLeftShift<T>(1, std::numeric_limits<T>::digits + 1));
+
+    if constexpr (std::is_signed_v<T>) {
+        constexpr auto MIN{std::numeric_limits<T>::min()};
+        // Negative input
+        BOOST_CHECK(CheckedLeftShift<T>(-1, 1) == -2);
+        BOOST_CHECK(CheckedLeftShift<T>((MIN >> 2), 1) == MIN / 2);
+        BOOST_CHECK(CheckedLeftShift<T>((MIN >> 1) + 1, 1) == MIN + 2);
+        BOOST_CHECK(CheckedLeftShift<T>(MIN >> 1, 1) == MIN);
+        // Overflow negative
+        BOOST_CHECK(!CheckedLeftShift<T>((MIN >> 1) - 1, 1));
+        BOOST_CHECK(!CheckedLeftShift<T>(MIN >> 1, 2));
+        BOOST_CHECK(!CheckedLeftShift<T>(-1, 100));
+    }
+}
+
+template <typename T> void TestSaturatingLeftShift() {
+    constexpr auto MAX{std::numeric_limits<T>::max()};
+
+    // TODO: replace BOOST_CHECK(a == b) with BOOST_CHECK_EQUAL(a, b) once
+    //       the c++20 related TODO is done in overflow.h
+
+    // Basic operations
+    BOOST_CHECK(SaturatingLeftShift<T>(0, 1) == 0);
+    BOOST_CHECK(SaturatingLeftShift<T>(0, 127) == 0);
+    BOOST_CHECK(SaturatingLeftShift<T>(1, 1) == 2);
+    BOOST_CHECK(SaturatingLeftShift<T>(2, 2) == 8);
+    BOOST_CHECK(SaturatingLeftShift<T>(MAX >> 1, 1) == MAX - 1);
+
+    // Max left shift
+    BOOST_CHECK(SaturatingLeftShift<T>(1, std::numeric_limits<T>::digits - 1) ==
+                MAX / 2 + 1);
+
+    // Saturation cases
+    BOOST_CHECK(SaturatingLeftShift<T>((MAX >> 1) + 1, 1) == MAX);
+    BOOST_CHECK(SaturatingLeftShift<T>(MAX, 1) == MAX);
+    BOOST_CHECK(SaturatingLeftShift<T>(1, std::numeric_limits<T>::digits) ==
+                MAX);
+    BOOST_CHECK(SaturatingLeftShift<T>(1, std::numeric_limits<T>::digits + 1) ==
+                MAX);
+
+    if constexpr (std::is_signed_v<T>) {
+        constexpr auto MIN{std::numeric_limits<T>::min()};
+        // Negative input
+        BOOST_CHECK(SaturatingLeftShift<T>(-1, 1) == -2);
+        BOOST_CHECK(SaturatingLeftShift<T>((MIN >> 2), 1) == MIN / 2);
+        BOOST_CHECK(SaturatingLeftShift<T>((MIN >> 1) + 1, 1) == MIN + 2);
+        BOOST_CHECK(SaturatingLeftShift<T>(MIN >> 1, 1) == MIN);
+        // Saturation negative
+        BOOST_CHECK(SaturatingLeftShift<T>((MIN >> 1) - 1, 1) == MIN);
+        BOOST_CHECK(SaturatingLeftShift<T>(MIN >> 1, 2) == MIN);
+        BOOST_CHECK(SaturatingLeftShift<T>(-1, 100) == MIN);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(checked_left_shift_test) {
+    TestCheckedLeftShift<uint8_t>();
+    TestCheckedLeftShift<int8_t>();
+    TestCheckedLeftShift<size_t>();
+    TestCheckedLeftShift<uint64_t>();
+    TestCheckedLeftShift<int64_t>();
+}
+
+BOOST_AUTO_TEST_CASE(saturating_left_shift_test) {
+    TestSaturatingLeftShift<uint8_t>();
+    TestSaturatingLeftShift<int8_t>();
+    TestSaturatingLeftShift<size_t>();
+    TestSaturatingLeftShift<uint64_t>();
+    TestSaturatingLeftShift<int64_t>();
+}
+
+BOOST_AUTO_TEST_CASE(mib_string_literal_test) {
+    BOOST_CHECK_EQUAL(0_MiB, 0);
+    BOOST_CHECK_EQUAL(1_MiB, 1024 * 1024);
+    const auto max_mib{std::numeric_limits<size_t>::max() >> 20};
+    BOOST_CHECK_EXCEPTION(
+        operator""_MiB(static_cast<unsigned long long>(max_mib) + 1),
+        std::overflow_error,
+        HasReason("MiB value too large for size_t byte conversion"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

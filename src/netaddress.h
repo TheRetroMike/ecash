@@ -26,13 +26,6 @@
 #include <vector>
 
 /**
- * A flag that is ORed into the protocol version to designate that addresses
- * should be serialized in (unserialized from) v2 format (BIP155).
- * Make sure that this does not collide with any of the values in `version.h`.
- */
-static constexpr int ADDRV2_FORMAT = 0x20000000;
-
-/**
  * A network type.
  * @note An address may belong to more than one network, for example `10.0.0.1`
  * belongs to both `NET_UNROUTABLE` and `NET_IPV4`.
@@ -251,11 +244,22 @@ public:
      */
     bool IsRelayable() const { return IsIPv4() || IsIPv6() || IsTor(); }
 
+    enum class Encoding {
+        V1,
+        //! BIP155 encoding
+        V2,
+    };
+    struct SerParams {
+        const Encoding enc;
+    };
+    static constexpr SerParams V1{Encoding::V1};
+    static constexpr SerParams V2{Encoding::V2};
+
     /**
      * Serialize to a stream.
      */
     template <typename Stream> void Serialize(Stream &s) const {
-        if (s.GetVersion() & ADDRV2_FORMAT) {
+        if (s.GetParams().enc == Encoding::V2) {
             SerializeV2Stream(s);
         } else {
             SerializeV1Stream(s);
@@ -266,7 +270,7 @@ public:
      * Unserialize from a stream.
      */
     template <typename Stream> void Unserialize(Stream &s) {
-        if (s.GetVersion() & ADDRV2_FORMAT) {
+        if (s.GetParams().enc == Encoding::V2) {
             UnserializeV2Stream(s);
         } else {
             UnserializeV1Stream(s);
@@ -504,11 +508,35 @@ protected:
     bool SanityCheck() const;
 
 public:
+    /**
+     * Construct an invalid subnet (empty, `Match()` always returns false).
+     */
     CSubNet();
+
+    /**
+     * Construct from a given network start and number of bits (CIDR mask).
+     * @param[in] addr Network start. Must be IPv4 or IPv6, otherwise an
+     *     invalid subnet is created.
+     * @param[in] mask CIDR mask, must be in [0, 32] for IPv4 addresses and in
+     *     [0, 128] for IPv6 addresses. Otherwise an invalid subnet is created.
+     */
     CSubNet(const CNetAddr &addr, uint8_t mask);
+
+    /**
+     * Construct from a given network start and mask.
+     * @param[in] addr Network start. Must be IPv4 or IPv6, otherwise an
+     *     invalid subnet is created.
+     * @param[in] mask Network mask, must be of the same type as `addr` and
+     *     not contain 0-bits followed by 1-bits. Otherwise an invalid subnet
+     *     is created.
+     */
     CSubNet(const CNetAddr &addr, const CNetAddr &mask);
 
-    // constructor for single ip subnet (<ipv4>/32 or <ipv6>/128)
+    /**
+     * Construct a single-host subnet.
+     * @param[in] addr The sole address to be contained in the subnet, can also
+     *     be non-IPv[46].
+     */
     explicit CSubNet(const CNetAddr &addr);
 
     bool Match(const CNetAddr &addr) const;
@@ -569,8 +597,8 @@ public:
     explicit CService(const struct sockaddr_in6 &addr);
 
     SERIALIZE_METHODS(CService, obj) {
-        READWRITEAS(CNetAddr, obj);
-        READWRITE(Using<BigEndianFormatter<2>>(obj.port));
+        READWRITE(AsBase<CNetAddr>(obj),
+                  Using<BigEndianFormatter<2>>(obj.port));
     }
 
     friend class CServiceHash;
@@ -579,7 +607,8 @@ public:
 class CServiceHash {
 public:
     CServiceHash()
-        : m_salt_k0{GetRand<uint64_t>()}, m_salt_k1{GetRand<uint64_t>()} {}
+        : m_salt_k0{FastRandomContext().rand64()},
+          m_salt_k1{FastRandomContext().rand64()} {}
 
     CServiceHash(uint64_t salt_k0, uint64_t salt_k1)
         : m_salt_k0{salt_k0}, m_salt_k1{salt_k1} {}
@@ -588,7 +617,7 @@ public:
         CSipHasher hasher(m_salt_k0, m_salt_k1);
         hasher.Write(a.m_net);
         hasher.Write(a.port);
-        hasher.Write(a.m_addr.data(), a.m_addr.size());
+        hasher.Write(a.m_addr);
         return static_cast<size_t>(hasher.Finalize());
     }
 

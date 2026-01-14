@@ -9,14 +9,21 @@ Usage:
     gen_base58_test_vectors.py valid 50 > ../../src/test/data/base58_keys_valid.json
     gen_base58_test_vectors.py invalid 50 > ../../src/test/data/base58_keys_invalid.json
 """
+
 # 2012 Wladimir J. van der Laan
 # Released under MIT License
 import os
 import random
+import sys
 from binascii import b2a_hex
 from itertools import islice
 
-from base58 import b58chars, b58decode_chk, b58encode_chk
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../test/functional"))
+from test_framework.address import (  # noqa: E402
+    b58chars,
+    base58_to_byte,
+    byte_to_base58,
+)
 
 # key types
 PUBKEY_ADDRESS = 0
@@ -44,8 +51,11 @@ templates = [
 
 def is_valid(v):
     """Check vector v for validity"""
-    result = b58decode_chk(v)
-    if result is None:
+    try:
+        payload, version = base58_to_byte(v)
+        result = bytes([version]) + payload
+    except AssertionError:
+        # thrown if checksum doesn't match
         return False
     for template in templates:
         prefix = bytearray(template[0])
@@ -63,7 +73,8 @@ def gen_valid_vectors():
             prefix = bytearray(template[0])
             payload = bytearray(os.urandom(template[1]))
             suffix = bytearray(template[2])
-            rv = b58encode_chk(prefix + payload + suffix)
+            assert len(prefix) == 1
+            rv = byte_to_base58(payload + suffix, prefix[0])
             assert is_valid(rv)
             metadata = {
                 x: y for x, y in zip(metadata_keys, template[3]) if y is not None
@@ -93,7 +104,8 @@ def gen_invalid_vector(
     else:
         suffix = bytearray(template[2])
 
-    return b58encode_chk(prefix + payload + suffix)
+    assert len(prefix) == 1
+    return byte_to_base58(payload + suffix, prefix[0])
 
 
 def randbool(p=0.5):
@@ -104,8 +116,8 @@ def randbool(p=0.5):
 def gen_invalid_vectors():
     """Generate invalid test vectors"""
     # start with some manual edge-cases
-    yield "",
-    yield "x",
+    yield ("",)
+    yield ("x",)
     while True:
         # kinds of invalid vectors:
         #   invalid prefix
@@ -123,12 +135,11 @@ def gen_invalid_vectors():
                     n = random.randint(0, len(val))
                     val = val[0:n] + random.choice(b58chars) + val[n + 1 :]
             if not is_valid(val):
-                yield val,
+                yield (val,)
 
 
 if __name__ == "__main__":
     import json
-    import sys
 
     iters = {"valid": gen_valid_vectors, "invalid": gen_invalid_vectors}
     try:

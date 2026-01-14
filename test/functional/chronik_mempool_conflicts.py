@@ -51,13 +51,12 @@ class ChronikMempoolConflicts(BitcoinTestFramework):
             CTxOut(10000, P2SH_OP_TRUE),
             CTxOut(coinvalue - 100000, P2SH_OP_TRUE),
         ]
-        tx1.rehash()
         node.sendrawtransaction(tx1.serialize().hex())
 
         tx2 = CTransaction()
         tx2.vin = [
             CTxIn(
-                COutPoint(int(tx1.hash, 16), 1),
+                COutPoint(tx1.txid_int, 1),
                 SCRIPTSIG_OP_TRUE,
             )
         ]
@@ -65,19 +64,17 @@ class ChronikMempoolConflicts(BitcoinTestFramework):
             CTxOut(546, P2SH_OP_TRUE),
             CTxOut(coinvalue - 200000, P2SH_OP_TRUE),
         ]
-        tx2.rehash()
         node.sendrawtransaction(tx2.serialize().hex())
 
         tx3 = CTransaction()
         tx3.vin = [
             CTxIn(
-                COutPoint(int(tx1.hash, 16), 0),
+                COutPoint(tx1.txid_int, 0),
                 SCRIPTSIG_OP_TRUE,
             ),
-            CTxIn(COutPoint(int(tx2.hash, 16), 0), SCRIPTSIG_OP_TRUE),
+            CTxIn(COutPoint(tx2.txid_int, 0), SCRIPTSIG_OP_TRUE),
         ]
         tx3.vout = [CTxOut(546, P2SH_OP_TRUE)]
-        tx3.rehash()
         node.sendrawtransaction(tx3.serialize().hex())
 
         # Kicking out all txs from the mempool by mining 1 conflict
@@ -94,9 +91,9 @@ class ChronikMempoolConflicts(BitcoinTestFramework):
         peer.send_blocks_and_test([block], node)
         node.syncwithvalidationinterfacequeue()
 
-        chronik.tx(tx1.hash).err(404)
-        chronik.tx(tx2.hash).err(404)
-        chronik.tx(tx3.hash).err(404)
+        chronik.tx(tx1.txid_hex).err(404)
+        chronik.tx(tx2.txid_hex).err(404)
+        chronik.tx(tx3.txid_hex).err(404)
 
 
 if __name__ == "__main__":

@@ -27,23 +27,6 @@
 
 #include <cstdint>
 
-namespace {
-struct CConnmanTest : public CConnman {
-    using CConnman::CConnman;
-    void AddNode(CNode &node) {
-        LOCK(m_nodes_mutex);
-        m_nodes.push_back(&node);
-    }
-    void ClearNodes() {
-        LOCK(m_nodes_mutex);
-        for (CNode *node : m_nodes) {
-            delete node;
-        }
-        m_nodes.clear();
-    }
-};
-} // namespace
-
 static CService ip(uint32_t i) {
     struct in_addr s;
     s.s_addr = i;
@@ -124,32 +107,34 @@ BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction) {
     peerman.FinalizeNode(config, dummyNode1);
 }
 
-static void AddRandomOutboundPeer(const Config &config,
-                                  std::vector<CNode *> &vNodes,
-                                  PeerManager &peerLogic,
-                                  CConnmanTest *connman) {
-    CAddress addr(ip(g_insecure_rand_ctx.randbits(32)), NODE_NONE);
-    vNodes.emplace_back(new CNode(id++, /*sock=*/nullptr, addr,
-                                  /* nKeyedNetGroupIn */ 0,
-                                  /* nLocalHostNonceIn */ 0,
-                                  /* nLocalExtraEntropyIn */ 0, CAddress(),
-                                  /* pszDest */ "",
-                                  ConnectionType::OUTBOUND_FULL_RELAY,
-                                  /* inbound_onion */ false));
-    CNode &node = *vNodes.back();
-    node.SetCommonVersion(PROTOCOL_VERSION);
+struct OutboundTest : TestingSetup {
+    void AddRandomOutboundPeer(const Config &config,
+                               std::vector<CNode *> &vNodes,
+                               PeerManager &peerLogic,
+                               ConnmanTestMsg *connman) {
+        CAddress addr(ip(m_rng.randbits(32)), NODE_NONE);
+        vNodes.emplace_back(new CNode(id++, /*sock=*/nullptr, addr,
+                                      /* nKeyedNetGroupIn */ 0,
+                                      /* nLocalHostNonceIn */ 0,
+                                      /* nLocalExtraEntropyIn */ 0, CAddress(),
+                                      /* pszDest */ "",
+                                      ConnectionType::OUTBOUND_FULL_RELAY,
+                                      /* inbound_onion */ false));
+        CNode &node = *vNodes.back();
+        node.SetCommonVersion(PROTOCOL_VERSION);
 
-    peerLogic.InitializeNode(config, node, ServiceFlags(NODE_NETWORK));
-    node.fSuccessfullyConnected = true;
+        peerLogic.InitializeNode(config, node, ServiceFlags(NODE_NETWORK));
+        node.fSuccessfullyConnected = true;
 
-    connman->AddNode(node);
-}
+        connman->AddTestNode(node);
+    }
+}; // struct OutboundTest
 
-BOOST_AUTO_TEST_CASE(stale_tip_peer_management) {
+BOOST_FIXTURE_TEST_CASE(stale_tip_peer_management, OutboundTest) {
     const Config &config = m_node.chainman->GetConfig();
 
-    auto connman =
-        std::make_unique<CConnmanTest>(config, 0x1337, 0x1337, *m_node.addrman);
+    auto connman = std::make_unique<ConnmanTestMsg>(config, 0x1337, 0x1337,
+                                                    *m_node.addrman);
     auto peerLogic =
         PeerManager::make(*connman, *m_node.addrman, nullptr, *m_node.chainman,
                           *m_node.mempool, /*avalanche=*/nullptr, {});
@@ -225,7 +210,7 @@ BOOST_AUTO_TEST_CASE(stale_tip_peer_management) {
         peerLogic->FinalizeNode(config, *node);
     }
 
-    connman->ClearNodes();
+    connman->ClearTestNodes();
 }
 
 BOOST_AUTO_TEST_CASE(peer_discouragement) {
@@ -233,9 +218,9 @@ BOOST_AUTO_TEST_CASE(peer_discouragement) {
 
     const Config &config = m_node.chainman->GetConfig();
 
-    auto banman = std::make_unique<BanMan>(
-        m_args.GetDataDirBase() / "banlist.dat", config.GetChainParams(),
-        nullptr, DEFAULT_MISBEHAVING_BANTIME);
+    auto banman = std::make_unique<BanMan>(m_args.GetDataDirBase() / "banlist",
+                                           config.GetChainParams(), nullptr,
+                                           DEFAULT_MISBEHAVING_BANTIME);
     auto connman =
         std::make_unique<CConnman>(config, 0x1337, 0x1337, *m_node.addrman);
     auto peerLogic = PeerManager::make(*connman, *m_node.addrman, banman.get(),
@@ -287,9 +272,9 @@ BOOST_AUTO_TEST_CASE(DoS_bantime) {
 
     const Config &config = m_node.chainman->GetConfig();
 
-    auto banman = std::make_unique<BanMan>(
-        m_args.GetDataDirBase() / "banlist.dat", config.GetChainParams(),
-        nullptr, DEFAULT_MISBEHAVING_BANTIME);
+    auto banman = std::make_unique<BanMan>(m_args.GetDataDirBase() / "banlist",
+                                           config.GetChainParams(), nullptr,
+                                           DEFAULT_MISBEHAVING_BANTIME);
     auto connman =
         std::make_unique<CConnman>(config, 0x1337, 0x1337, *m_node.addrman);
     auto peerLogic = PeerManager::make(*connman, *m_node.addrman, banman.get(),

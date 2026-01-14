@@ -4,14 +4,15 @@
 
 #include <policy/block/preconsensus.h>
 
-#include <avalanche/avalanche.h>
+#include <avalanche/processor.h>
 #include <blockindex.h>
 #include <common/args.h>
 
 bool PreConsensusPolicy::operator()(BlockPolicyValidationState &state) {
-    if (!m_mempool || !m_blockIndex.pprev ||
-        !gArgs.GetBoolArg("-avalanchepreconsensus",
-                          DEFAULT_AVALANCHE_PRECONSENSUS)) {
+    if (!m_mempool || !m_blockIndex.pprev) {
+        return true;
+    }
+    if (!m_avalanche.isPreconsensusActivated(m_blockIndex.pprev)) {
         return true;
     }
 
@@ -25,7 +26,8 @@ bool PreConsensusPolicy::operator()(BlockPolicyValidationState &state) {
 
             // Only allow for the exact txid for each coin spent
             if (ptxConflicting && ptxConflicting->GetId() != tx->GetId() &&
-                m_mempool->isAvalancheFinalized(ptxConflicting->GetId())) {
+                m_mempool->isAvalancheFinalizedPreConsensus(
+                    ptxConflicting->GetId())) {
                 return state.Invalid(
                     BlockPolicyValidationResult::POLICY_VIOLATION,
                     "finalized-tx-conflict",

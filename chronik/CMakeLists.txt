@@ -1,42 +1,13 @@
 # Copyright (c) 2022 The Bitcoin developers
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include(FetchContent)
-FetchContent_Declare(
-    Corrosion
-    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.1
-)
-FetchContent_MakeAvailable(Corrosion)
-
-set(REQUIRED_RUST_VERSION "1.87.0")
-if(Rust_VERSION VERSION_LESS REQUIRED_RUST_VERSION)
-    message(FATAL_ERROR "Minimum required Rust version is "
-            "${REQUIRED_RUST_VERSION}, but found ${Rust_VERSION}. "
-            "Use `rustup update stable` to update.")
-endif()
-
-set(CARGO_BUILD_DIR "${CMAKE_BINARY_DIR}/cargo/build")
-set_property(DIRECTORY "${CMAKE_SOURCE_DIR}"
-    APPEND PROPERTY
-    ADDITIONAL_CLEAN_FILES "${CARGO_BUILD_DIR}"
-)
-
-get_property(
-    RUSTC_EXECUTABLE
-    TARGET Rust::Rustc PROPERTY IMPORTED_LOCATION
-)
-get_filename_component(RUST_BIN_DIR ${RUSTC_EXECUTABLE} DIRECTORY)
-include(DoOrFail)
-find_program_or_fail(RUSTDOC_EXECUTABLE rustdoc
-    PATHS "${RUST_BIN_DIR}"
-)
+include(RustHelper)
 
 set(CHRONIK_CARGO_FLAGS --locked)
 
-if(BUILD_BITCOIN_CHRONIK_PLUGINS)
+if(BUILD_CHRONIK_PLUGINS)
     set(CHRONIK_FEATURE_FLAGS --features plugins)
 endif()
 
@@ -97,7 +68,7 @@ add_crate_test_single_target(bitcoinsuite-core)
 add_crate_test_single_target(bitcoinsuite-slp)
 add_crate_test_targets(chronik)
 
-if(BUILD_BITCOIN_CHRONIK_PLUGINS)
+if(BUILD_CHRONIK_PLUGINS)
     add_cargo_custom_target(chronik-db-plugins-test
         test
         --package chronik-db
@@ -132,16 +103,6 @@ if (CMAKE_CROSSCOMPILING AND ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         CXXFLAGS=${CORROSION_CXXFLAGS}
     )
 endif()
-
-set(Rust_TRIPLE
-    "${Rust_CARGO_TARGET_ARCH}"
-    "${Rust_CARGO_TARGET_VENDOR}"
-    "${Rust_CARGO_TARGET_OS}"
-)
-if (Rust_CARGO_TARGET_ENV)
-    list(APPEND Rust_TRIPLE "${Rust_CARGO_TARGET_ENV}")
-endif()
-list(JOIN Rust_TRIPLE "-" Rust_CARGO_TARGET)
 
 # cxx crate generates some source files at this location
 set(CXXBRIDGE_GENERATED_FOLDER
@@ -193,7 +154,7 @@ target_link_libraries(chronik
 )
 
 # Plugins require us to link against libpython
-if(BUILD_BITCOIN_CHRONIK_PLUGINS)
+if(BUILD_CHRONIK_PLUGINS)
     # Plugins require us to link against libpython, but we need the right lib
     # when cross compiling, i.e. not the host one nor the depends native one,
     # but the depends sysrooted one. The easiest way to tell cmake to look at

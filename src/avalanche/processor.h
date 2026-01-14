@@ -264,10 +264,11 @@ class Processor final : public NetEventsInterface {
               uint32_t staleVoteFactorIn, Amount stakeUtxoDustThresholdIn,
               bool preConsensus, bool stakingPreConsensus);
 
-public:
     const bool m_preConsensus{false};
-    const bool m_stakingPreConsensus{false};
+    // Not const for testing purpose
+    std::atomic_bool m_stakingPreConsensus{false};
 
+public:
     ~Processor();
 
     static std::unique_ptr<Processor>
@@ -287,6 +288,7 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!cs_peerManager, !cs_finalizedItems);
     bool isAccepted(const AnyVoteItem &item) const;
     int getConfidence(const AnyVoteItem &item) const;
+    bool isPolled(const AnyVoteItem &item) const;
 
     bool isRecentlyFinalized(const uint256 &itemId) const
         EXCLUSIVE_LOCKS_REQUIRED(!cs_finalizedItems);
@@ -322,7 +324,8 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!cs_delayedAvahelloNodeIds);
 
     ProofRef getLocalProof() const;
-    ProofRegistrationState getLocalProofRegistrationState() const;
+    ProofRegistrationState getLocalProofRegistrationState() const
+        EXCLUSIVE_LOCKS_REQUIRED(!cs_peerManager);
 
     /*
      * Return whether the avalanche service flag should be set.
@@ -400,6 +403,9 @@ public:
     void promoteAndPollStakeContenders(const CBlockIndex *pprev)
         EXCLUSIVE_LOCKS_REQUIRED(!cs_stakingRewards, !cs_peerManager,
                                  !cs_finalizedItems);
+
+    bool isPreconsensusActivated(const CBlockIndex *pprev) const;
+    bool isStakingPreconsensusActivated(const CBlockIndex *pprev) const;
 
 private:
     void updatedBlockTip()

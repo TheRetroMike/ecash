@@ -71,7 +71,6 @@ class BIP65Test(BitcoinTestFramework):
         self.noban_tx_relay = True
         self.extra_args = [
             [
-                "-par=1",  # Use only one script thread to get the exact reject reason for testing
                 "-acceptnonstdtxn=1",  # cltv_invalidate is nonstandard
             ]
         ]
@@ -107,16 +106,16 @@ class BIP65Test(BitcoinTestFramework):
 
         peer.send_and_ping(msg_block(block))
         # This block is valid
-        assert_equal(self.nodes[0].getbestblockhash(), block.hash)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
         self.log.info("Test that blocks must now be at least version 4")
-        tip = block.sha256
+        tip = block.hash_int
         block_time += 1
         block = create_block(tip, create_coinbase(CLTV_HEIGHT), block_time, version=3)
         block.solve()
 
         with self.nodes[0].assert_debug_log(
-            expected_msgs=[f"{block.hash}, bad-version(0x00000003)"]
+            expected_msgs=[f"{block.hash_hex}, bad-version(0x00000003)"]
         ):
             peer.send_and_ping(msg_block(block))
             assert_equal(int(self.nodes[0].getbestblockhash(), 16), tip)
@@ -133,7 +132,7 @@ class BIP65Test(BitcoinTestFramework):
         # The funding tx only has unexecuted bad CLTV, in scriptpubkey; this is
         # valid.
         peer.send_and_ping(msg_tx(fundtx))
-        assert fundtx.hash in self.nodes[0].getrawmempool()
+        assert fundtx.txid_hex in self.nodes[0].getrawmempool()
 
         # Mine a block containing the funding transaction
         block.vtx.append(fundtx)
@@ -142,17 +141,22 @@ class BIP65Test(BitcoinTestFramework):
 
         peer.send_and_ping(msg_block(block))
         # This block is valid
-        assert_equal(self.nodes[0].getbestblockhash(), block.hash)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
         # We show that this tx is invalid due to CLTV by getting it
         # rejected from the mempool for exactly that reason.
+        expected_cltv_reject_reason = (
+            "non-mandatory-script-verify-flag (Negative locktime)"
+        )
         assert_equal(
             [
                 {
-                    "txid": spendtx.hash,
+                    "txid": spendtx.txid_hex,
                     "allowed": False,
-                    "reject-reason": (
-                        "non-mandatory-script-verify-flag (Negative locktime)"
+                    "reject-reason": expected_cltv_reject_reason,
+                    "reject-details": (
+                        expected_cltv_reject_reason
+                        + f", input 0 of {spendtx.txid_hex}, spending {fundtx.txid_hex}:0"
                     ),
                 }
             ],
@@ -161,10 +165,10 @@ class BIP65Test(BitcoinTestFramework):
             ),
         )
 
-        tip = block.hash
+        tip = block.hash_hex
         block_time += 1
         block = create_block(
-            block.sha256,
+            block.hash_int,
             create_coinbase(CLTV_HEIGHT + 1),
             block_time,
             version=4,
@@ -173,7 +177,10 @@ class BIP65Test(BitcoinTestFramework):
         block.solve()
 
         with self.nodes[0].assert_debug_log(
-            expected_msgs=[f"ConnectBlock {block.hash} failed, blk-bad-inputs"]
+            expected_msgs=[
+                f"BlockChecked: block hash={block.hash_hex} "
+                f"state=mandatory-script-verify-flag-failed (Negative locktime)"
+            ]
         ):
             peer.send_and_ping(msg_block(block))
             assert_equal(self.nodes[0].getbestblockhash(), tip)
@@ -206,7 +213,7 @@ class BIP65Test(BitcoinTestFramework):
 
         peer.send_and_ping(msg_block(block))
         # This block is now valid
-        assert_equal(self.nodes[0].getbestblockhash(), block.hash)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
 
 if __name__ == "__main__":

@@ -3,13 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 import BigNumber from 'bignumber.js';
-import {
-    toXec,
-    toSatoshis,
-    xecToNanoSatoshis,
-    LegacyCashtabWallet,
-    SlpDecimals,
-} from 'wallet';
+import { toXec, toSatoshis, xecToNanoSatoshis, SlpDecimals } from 'wallet';
 import { isValidCashAddress } from 'ecashaddrjs';
 import * as bip39 from 'bip39';
 import CashtabSettings, {
@@ -19,8 +13,8 @@ import CashtabSettings, {
 import tokenBlacklist from 'config/tokenBlacklist';
 import appConfig from 'config/app';
 import { opReturn } from 'config/opreturn';
-import { getStackArray } from 'ecash-script';
-import { CashtabWallet, fiatToSatoshis } from 'wallet';
+import { getStackArray } from 'ecash-lib';
+import { fiatToSatoshis, StoredCashtabWallet } from 'wallet';
 import CashtabCache, { UNKNOWN_TOKEN_ID } from 'config/CashtabCache';
 import { STRINGIFIED_DECIMALIZED_REGEX } from 'wallet';
 import { getMaxDecimalizedQty } from 'token-protocols';
@@ -121,7 +115,7 @@ export const isValidXecSendAmount = (
         : toSatoshis(Number(sendAmount));
 
     if (sendAmountSatoshis <= 0) {
-        return 'Amount must be greater than 0';
+        return 'Amount must be > 0';
     }
     if (sendAmountSatoshis < appConfig.dustSats) {
         return `Send amount must be at least ${toXec(appConfig.dustSats)} ${
@@ -217,15 +211,39 @@ export const isValidCashtabSettings = (settings: CashtabSettings): boolean => {
     try {
         let isValidSettingParams = true;
         for (const param in cashtabDefaultConfig) {
+            let isValidParam = false;
+
             if (
                 !Object.prototype.hasOwnProperty.call(
                     settings,
                     param as keyof CashtabSettings,
-                ) ||
-                !(cashtabSettingsValidation as CashtabSettingsValidation)[
-                    param as keyof CashtabSettingsValidation
-                ].some(val => val === settings[param as keyof CashtabSettings])
+                )
             ) {
+                isValidParam = false;
+            } else if (param === 'satsPerKb') {
+                // Special validation for satsPerKb
+                const settingValue = settings[
+                    param as keyof CashtabSettings
+                ] as number;
+                const satsPerKbValidation = (
+                    cashtabSettingsValidation as CashtabSettingsValidation
+                )[param] as { min: number; max: number };
+                isValidParam =
+                    typeof settingValue === 'number' &&
+                    settingValue >= satsPerKbValidation.min &&
+                    settingValue <= satsPerKbValidation.max;
+            } else {
+                // Standard validation for other fields
+                const validationArray = (
+                    cashtabSettingsValidation as CashtabSettingsValidation
+                )[param as keyof CashtabSettingsValidation] as any[];
+                isValidParam = validationArray.some(
+                    (val: any) =>
+                        val === settings[param as keyof CashtabSettings],
+                );
+            }
+
+            if (!isValidParam) {
                 isValidSettingParams = false;
                 break;
             }
@@ -257,7 +275,15 @@ export const migrateLegacyCashtabSettings = (
                 cashtabDefaultConfig[param as keyof CashtabSettings] as unknown;
         }
     }
-    return settings;
+    // Return the serialized version to ensure consistent format
+    return new CashtabSettings(
+        settings.fiatCurrency,
+        settings.sendModal,
+        settings.autoCameraOn,
+        settings.hideMessagesFromUnknownSenders,
+        settings.balanceVisible,
+        settings.satsPerKb,
+    );
 };
 
 /**
@@ -363,7 +389,7 @@ export const isValidTokenId = (tokenId: string | undefined | null): boolean => {
  */
 export const getWalletNameError = (
     name: string,
-    wallets: CashtabWallet[],
+    wallets: StoredCashtabWallet[],
 ): false | string => {
     if (name === '') {
         return 'Wallet name cannot be a blank string';
@@ -576,7 +602,7 @@ export const nodeWillAcceptOpReturnRaw = (opReturnRaw: string): boolean => {
             return false;
         }
 
-        // Use validation from ecash-script library
+        // Use validation from ecash-lib method
         // Apply .toLowerCase() to support uppercase, lowercase, or mixed case input
         getStackArray(
             `${opReturn.opReturnPrefixHex}${opReturnRaw.toLowerCase()}`,
@@ -736,71 +762,65 @@ export function parseAddressInput(
         if (addrParams.has('token_id')) {
             // Parse bip21 for token send tx
             const tokenParams = [...addrParams.keys()].length;
-            if (addrParams.has('token_decimalized_qty')) {
-                // A bip21 string with token_id must have token_decimalized_qty to be valid
-                if (tokenParams === 2 || tokenParams === 3) {
-                    // A bip21 string with token_id must also include
-                    // token_decimalized_qty and may (optionally) include
-                    // firma
+            const hasTokenDecimalizedQty = addrParams.has(
+                'token_decimalized_qty',
+            );
+            const hasFirma = addrParams.has('firma');
 
-                    if (tokenParams === 3) {
-                        // If we have 3 token params, then we MUST have firma
-                        const passedFirma = addrParams.get('firma');
-                        if (passedFirma === null) {
-                            // This is an invalid bip21 token tx
-                            // Set a query string error
-                            parsedAddressInput.queryString.error = `Invalid bip21 token tx: bip21 token txs may only include the params token_id, token_decimalized_qty, and (optionally) firma`;
-                            // Stop parsing
-                            return parsedAddressInput;
-                        } else {
-                            const firmaError = getFirmaPushError(passedFirma);
+            // Validate that only allowed params are present
+            const allowedParams = ['token_id'];
+            if (hasTokenDecimalizedQty) {
+                allowedParams.push('token_decimalized_qty');
+            }
+            if (hasFirma) {
+                allowedParams.push('firma');
+            }
 
-                            parsedAddressInput.firma = {
-                                value: passedFirma,
-                                error: firmaError,
-                            };
-                        }
-                    }
-
-                    // So this is a (possibly) valid bip21 token send string
-                    const passedTokenId = addrParams.get('token_id');
-                    parsedAddressInput.token_id = {
-                        value: passedTokenId,
-                        error: isValidTokenId(passedTokenId)
-                            ? false
-                            : 'token_id is not a valid tokenId',
-                    };
-                    const passedTokenDecimalizedQty = addrParams.get(
-                        'token_decimalized_qty',
-                    );
-                    const isValidTokenDecimalizedQty =
-                        typeof passedTokenDecimalizedQty === 'string'
-                            ? STRINGIFIED_DECIMALIZED_REGEX.test(
-                                  passedTokenDecimalizedQty,
-                              )
-                            : false;
-                    // Note, because we do not know token decimals, validation of token_decimalized_qty
-                    // must wait for the the token send screen. We only check if it's a stringified
-                    // number
-                    parsedAddressInput.token_decimalized_qty = {
-                        value: passedTokenDecimalizedQty,
-                        error: isValidTokenDecimalizedQty
-                            ? false
-                            : 'Invalid token_decimalized_qty',
-                    };
-                } else {
-                    // This is an invalid bip21 token tx
-                    // Set a query string error
-                    parsedAddressInput.queryString.error = `Invalid bip21 token tx: bip21 token txs may only include the params token_id, token_decimalized_qty, and (optionally) firma`;
-                    // Stop parsing
-                    return parsedAddressInput;
-                }
-            } else {
-                // This is an invalid bip21 token tx
-                // Set a query string error
-                parsedAddressInput.queryString.error = `Invalid bip21 token tx: token_decimalized_qty must be specified if token_id is specified`;
-                // Stop parsing
+            if (tokenParams > allowedParams.length) {
+                // Invalid params present
+                parsedAddressInput.queryString.error = `Invalid bip21 token tx: bip21 token txs may only include the params token_id, token_decimalized_qty (optional), and firma (optional)`;
                 return parsedAddressInput;
+            }
+
+            // Parse token_id
+            const passedTokenId = addrParams.get('token_id');
+            parsedAddressInput.token_id = {
+                value: passedTokenId,
+                error: isValidTokenId(passedTokenId)
+                    ? false
+                    : 'token_id is not a valid tokenId',
+            };
+
+            // Parse token_decimalized_qty if present
+            if (hasTokenDecimalizedQty) {
+                const passedTokenDecimalizedQty = addrParams.get(
+                    'token_decimalized_qty',
+                );
+                const isValidTokenDecimalizedQty =
+                    typeof passedTokenDecimalizedQty === 'string'
+                        ? STRINGIFIED_DECIMALIZED_REGEX.test(
+                              passedTokenDecimalizedQty,
+                          )
+                        : false;
+                // Note, because we do not know token decimals, validation of token_decimalized_qty
+                // must wait for the the token send screen. We only check if it's a stringified
+                // number
+                parsedAddressInput.token_decimalized_qty = {
+                    value: passedTokenDecimalizedQty,
+                    error: isValidTokenDecimalizedQty
+                        ? false
+                        : 'Invalid token_decimalized_qty',
+                };
+            }
+
+            // Parse firma if present
+            if (hasFirma) {
+                const passedFirma = addrParams.get('firma');
+                const firmaError = getFirmaPushError(passedFirma);
+                parsedAddressInput.firma = {
+                    value: passedFirma,
+                    error: firmaError,
+                };
             }
         } else if (addrParams.has('token_decimalized_qty')) {
             // This is an invalid bip21 token tx
@@ -969,11 +989,12 @@ export function parseAddressInput(
 }
 
 /**
- * Determine if a given object is a valid Cashtab wallet
+ * Determine if a given object is a valid StoredCashtabWallet
+ * We use this function to determine if we need to migrate storage
  * @param wallet Cashtab wallet object
  */
-export const isValidCashtabWallet = (
-    wallet: CashtabWallet | LegacyCashtabWallet | false,
+export const isValidStoredCashtabWallet = (
+    wallet: StoredCashtabWallet | false,
 ): boolean => {
     if (wallet === false) {
         // Unset cashtab wallet
@@ -983,65 +1004,16 @@ export const isValidCashtabWallet = (
         // Wallet must be an object
         return false;
     }
-    if (!('paths' in wallet)) {
-        return false;
-    }
-    if (Array.isArray(wallet.paths)) {
-        // wallet.paths should be a map
-        return false;
-    }
-    if (wallet.paths.size < 1) {
-        // Wallet must have at least one path info object
-        return false;
-    }
-    // Validate each path
-    // We use pathsValid as a flag as `return false` from a forEach does not do what you think it does
-    let pathsValid = true;
-    // Return false if we do not have Path1899
-    // This also handles the case of a JSON-activated pre-2.9.0 wallet
 
-    if (typeof wallet.paths.get(1899) === 'undefined') {
-        return false;
-    }
-    wallet.paths.forEach((value, key) => {
-        if (typeof key !== 'number') {
-            // Wallet is invalid if key is not a number
-            pathsValid = false;
-        }
-        if (
-            !('hash' in value) ||
-            !('address' in value) ||
-            !('wif' in value) ||
-            !('sk' in value) ||
-            !(value.sk instanceof Uint8Array) ||
-            !('pk' in value) ||
-            !(value.pk instanceof Uint8Array)
-        ) {
-            // If any given path does not have all of these keys, the wallet is invalid
-            pathsValid = false;
-        }
-    });
-    if (!pathsValid) {
-        // Invalid path
-        return false;
-    }
+    // NB we are only really validating storedWallets here as this function is only used in tests, for now
+    // When we have another migration, will need to update this
     return (
-        typeof wallet === 'object' &&
-        'state' in wallet &&
-        'mnemonic' in wallet &&
-        'name' in wallet &&
-        !('Path145' in wallet) &&
-        !('Path245' in wallet) &&
-        !('Path1899' in wallet) &&
-        typeof wallet.state === 'object' &&
-        'balanceSats' in wallet.state &&
-        typeof wallet.state.balanceSats === 'number' &&
-        !('balances' in wallet.state) &&
-        'slpUtxos' in wallet.state &&
-        'nonSlpUtxos' in wallet.state &&
-        'tokens' in wallet.state &&
-        !('hydratedUtxoDetails' in wallet.state) &&
-        !('slpBalancesAndUtxos' in wallet.state)
+        typeof wallet.sk === 'string' &&
+        typeof wallet.pk === 'string' &&
+        typeof wallet.address === 'string' &&
+        typeof wallet.hash === 'string' &&
+        typeof wallet.mnemonic === 'string' &&
+        typeof wallet.name === 'string'
     );
 };
 
@@ -1065,10 +1037,10 @@ export const isValidTokenSendOrBurnAmount = (
         return 'Amount is required';
     }
     if (amount === '0') {
-        return `Amount must be greater than 0`;
+        return `Amount must be > 0`;
     }
     if (!STRINGIFIED_DECIMALIZED_REGEX.test(amount) || amount.length === 0) {
-        return `Amount must be a non-empty string containing only decimal numbers and optionally one decimal point "."`;
+        return `Invalid amount format`;
     }
     // Note: we do not validate decimals, as this is coming from token cache, which is coming from chronik
     // The user is not inputting decimals
@@ -1091,9 +1063,7 @@ export const isValidTokenSendOrBurnAmount = (
             if (decimals === 0) {
                 return `This token does not support decimal places`;
             }
-            return `This token supports no more than ${decimals} decimal place${
-                decimals === 1 ? '' : 's'
-            }`;
+            return `Max ${decimals} decimal place${decimals === 1 ? '' : 's'}`;
         }
     }
     return true;
@@ -1117,10 +1087,10 @@ export const isValidTokenMintAmount = (
         return 'Amount is required';
     }
     if (amount === '0') {
-        return `Amount must be greater than 0`;
+        return `Amount must be > 0`;
     }
     if (!STRINGIFIED_DECIMALIZED_REGEX.test(amount) || amount.length === 0) {
-        return `Amount must be a non-empty string containing only decimal numbers and optionally one decimal point "."`;
+        return `Invalid amount format`;
     }
     // Note: we do not validate decimals, as this is coming from token cache, which is coming from chronik
     // The user is not inputting decimals
@@ -1130,9 +1100,7 @@ export const isValidTokenMintAmount = (
             if (decimals === 0) {
                 return `This token does not support decimal places`;
             }
-            return `This token supports no more than ${decimals} decimal place${
-                decimals === 1 ? '' : 's'
-            }`;
+            return `Max ${decimals} decimal place${decimals === 1 ? '' : 's'}`;
         }
     }
     // Amount must be <= 0xffffffffffffffff in token satoshis for this token decimals
@@ -1270,7 +1238,9 @@ export const getAgoraPartialListPriceError = (
     // this is the unit agora takes, 1 nanosat per 1 tokens at is the min
     const priceNanoSatsPerDecimalizedToken = xecToNanoSatoshis(priceXec);
 
-    if (priceNanoSatsPerDecimalizedToken < Math.pow(10, tokenDecimals)) {
+    if (
+        priceNanoSatsPerDecimalizedToken < BigInt(Math.pow(10, tokenDecimals))
+    ) {
         return 'Price cannot be lower than 1 nanosatoshi per 1 token satoshi';
     }
 
@@ -1379,7 +1349,7 @@ export const getAgoraPartialAcceptTokenQtyError = (
         !STRINGIFIED_DECIMALIZED_REGEX.test(takeTokenDecimalizedQty) ||
         takeTokenDecimalizedQty.length === 0
     ) {
-        return `Amount must be a non-empty string containing only decimal numbers and optionally one decimal point "."`;
+        return `Invalid amount format`;
     }
     if (takeTokenDecimalizedQty.includes('.')) {
         if (
@@ -1388,9 +1358,7 @@ export const getAgoraPartialAcceptTokenQtyError = (
             if (decimals === 0) {
                 return `This token does not support decimal places`;
             }
-            return `This token supports no more than ${decimals} decimal place${
-                decimals === 1 ? '' : 's'
-            }`;
+            return `Max ${decimals} decimal place${decimals === 1 ? '' : 's'}`;
         }
     }
 
@@ -1449,39 +1417,35 @@ export const getReceiveAmountError = (
     if (typeof amount !== 'string') {
         return 'Amount must be a string';
     }
+    // Allow empty amounts for tokens (not XEC) - user can input amount on send screen
+    // Per bip21, token_decimalized_qty is optional in the query string
     if (amount === '' && !isXec) {
-        // Per bip21, we only need an amount for a bip21 token query string
-        // If we have just the address, cashtab will allow user input of an amount
-        // We may update this later to allow arbitrary user-entered token amounts,
-        // but the send screen needs to be upgraded for arbitrary token sends
-        return 'Amount is required for bip21 token sends';
+        return false;
     }
     if (amount === '0') {
-        return `Amount must be greater than 0`;
+        return `Amount must be > 0`;
     }
     if (
         (!STRINGIFIED_DECIMALIZED_REGEX.test(amount) || amount.length === 0) &&
         amount !== ''
     ) {
-        return `Amount must be a non-empty string containing only decimal numbers and optionally one decimal point "."`;
+        return `Invalid amount format`;
     }
 
     if (amount.includes('.')) {
         if (amount.toString().split('.')[1].length > decimals) {
             if (isXec) {
-                return `XEC supports up to ${decimals} decimal places`;
+                return `Max ${decimals} decimal places`;
             }
             if (decimals === 0) {
                 return `This token does not support decimal places`;
             }
-            return `This token supports no more than ${decimals} decimal place${
-                decimals === 1 ? '' : 's'
-            }`;
+            return `Max ${decimals} decimal place${decimals === 1 ? '' : 's'}`;
         }
     }
 
     if (isXec && parseFloat(amount) < Number(DEFAULT_DUST_SATS) / 100) {
-        return `XEC send amounts cannot be less than dust (5.46 XEC)`;
+        return `Minimum 5.46 XEC`;
     }
     return false;
 };

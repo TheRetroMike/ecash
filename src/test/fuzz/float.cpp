@@ -5,7 +5,6 @@
 #include <memusage.h>
 #include <serialize.h>
 #include <streams.h>
-#include <version.h>
 
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
@@ -21,7 +20,7 @@ FUZZ_TARGET(float) {
         (void)memusage::DynamicUsage(d);
         assert(ser_uint64_to_double(ser_double_to_uint64(d)) == d);
 
-        CDataStream stream(SER_NETWORK, INIT_PROTO_VERSION);
+        DataStream stream{};
         stream << d;
         double d_deserialized;
         stream >> d_deserialized;
@@ -33,7 +32,7 @@ FUZZ_TARGET(float) {
         (void)memusage::DynamicUsage(f);
         assert(ser_uint32_to_float(ser_float_to_uint32(f)) == f);
 
-        CDataStream stream(SER_NETWORK, INIT_PROTO_VERSION);
+        DataStream stream{};
         stream << f;
         float f_deserialized;
         stream >> f_deserialized;

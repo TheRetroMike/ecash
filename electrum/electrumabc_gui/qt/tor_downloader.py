@@ -31,8 +31,8 @@ import sys
 from typing import TYPE_CHECKING
 
 import requests
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QTimer
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, QTimer
 
 from electrumabc.i18n import _
 from electrumabc.util import get_user_dir
@@ -185,7 +185,7 @@ class DownloadTorDialog(QtWidgets.QDialog):
             error = "<b>Error:</b> "
             if msg.startswith(FAILED_TO_SAVE_MSG):
                 error += "Failed to save file<br><br>"
-                error += f"{msg[len(FAILED_TO_SAVE_MSG) + 1:]}"
+                error += f"{msg[len(FAILED_TO_SAVE_MSG) + 1 :]}"
                 self.on_error(error)
             if msg.startswith(WRONG_CHECKSUM_MSG):
                 expected, actual = msg[len(WRONG_CHECKSUM_MSG) + 1 :].split()

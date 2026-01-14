@@ -39,29 +39,27 @@ class ChronikShutdown(BitcoinTestFramework):
         for i in range(1, 200):
             coinbase_tx = create_coinbase(i)
             coinbase_tx.vout[0].scriptPubKey = CScript([OP_TRUE])
-            coinbase_tx.rehash()
             coinbase_txs.append(coinbase_tx)
             txs = []
             if i > 101:
-                txid = coinbase_txs[i - 101].sha256
+                txid = coinbase_txs[i - 101].txid_int
                 fan_tx = CTransaction()
                 fan_tx.vin = [CTxIn(COutPoint(txid, 0))]
                 fan_tx.vout = [CTxOut(1000, CScript([OP_TRUE]))] * 8000
-                fan_tx.rehash()
+                fan_txid_int = fan_tx.txid_int
                 txs.append(fan_tx)
                 for j in range(0, 7997, 3):
                     tx = CTransaction()
                     tx.vin = [
-                        CTxIn(COutPoint(fan_tx.sha256, k)) for k in range(j, j + 3)
+                        CTxIn(COutPoint(fan_txid_int, k)) for k in range(j, j + 3)
                     ]
                     tx.vout = [CTxOut(1000, CScript([OP_TRUE]))]
-                    tx.rehash()
                     txs.append(tx)
             block = create_block(
                 int(last_block_hash, 16), coinbase_tx, mocktime + i, txlist=txs
             )
             block.solve()
-            last_block_hash = block.hash
+            last_block_hash = block.hash_hex
             peer.send_message(msg_block(block))
 
         self.stop_nodes()

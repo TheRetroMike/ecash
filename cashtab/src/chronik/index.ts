@@ -4,7 +4,8 @@
 
 import { opReturn as opreturnConfig } from 'config/opreturn';
 import { chronik as chronikConfig } from 'config/chronik';
-import { getStackArray } from 'ecash-script';
+import { previewAddress } from 'helpers';
+import { getStackArray } from 'ecash-lib';
 import {
     getTypeAndHashFromOutputScript,
     encodeOutputScript,
@@ -12,11 +13,8 @@ import {
     decodeCashAddress,
 } from 'ecashaddrjs';
 import {
-    getHashes,
     decimalizeTokenAmount,
     undecimalizeTokenAmount,
-    CashtabUtxo,
-    CashtabWallet,
     TokenUtxo,
     NonTokenUtxo,
     SlpDecimals,
@@ -25,10 +23,8 @@ import {
 } from 'wallet';
 import {
     ChronikClient,
-    TxHistoryPage,
     ScriptUtxo,
     Tx,
-    BlockMetadata,
     TokenTxType,
     GenesisInfo,
 } from 'chronik-client';
@@ -42,47 +38,6 @@ import { getEmppAppActions } from 'opreturn';
 import { decimalizedTokenQtyToLocaleFormat } from 'formatting';
 
 const CHRONIK_MAX_PAGE_SIZE = 200;
-
-export const getTxHistoryPage = async (
-    chronik: ChronikClient,
-    hash160: string,
-    page = 0,
-): Promise<void | TxHistoryPage> => {
-    let txHistoryPage;
-    try {
-        txHistoryPage = await chronik
-            .script('p2pkh', hash160)
-            // Get the 25 most recent transactions
-            .history(page, chronikConfig.txHistoryPageSize);
-        return txHistoryPage;
-    } catch (err) {
-        console.error(`Error in getTxHistoryPage(${hash160})`, err);
-    }
-};
-
-export const returnGetTxHistoryPagePromise = (
-    chronik: ChronikClient,
-    hash160: string,
-    page = 0,
-): Promise<TxHistoryPage> => {
-    /* 
-    Unlike getTxHistoryPage, this function will reject and 
-    fail Promise.all() if there is an error in the chronik call
-    */
-    return new Promise((resolve, reject) => {
-        chronik
-            .script('p2pkh', hash160)
-            .history(page, chronikConfig.txHistoryPageSize)
-            .then(
-                result => {
-                    resolve(result);
-                },
-                err => {
-                    reject(err);
-                },
-            );
-    });
-};
 
 interface Alias {
     alias: string;
@@ -103,64 +58,6 @@ export const isAliasRegistered = (
     return false;
 };
 
-/**
- * Return a promise to fetch all utxos at an address (and add a 'path' key to them)
- * We need the path key so that we know which wif to sign this utxo with
- * If we add HD wallet support, we will need to add an address key, and change the structure of wallet.paths
- * @param chronik
- * @paramaddress
- * @param path
- */
-export const returnGetPathedUtxosPromise = (
-    chronik: ChronikClient,
-    address: string,
-    path: number,
-): Promise<CashtabUtxo[]> => {
-    return new Promise((resolve, reject) => {
-        chronik
-            .address(address)
-            .utxos()
-            .then(
-                result => {
-                    const cashtabUtxos: CashtabUtxo[] = result.utxos.map(
-                        (utxo: ScriptUtxo) => ({
-                            ...utxo,
-                            path: path,
-                        }),
-                    );
-                    resolve(cashtabUtxos);
-                },
-                err => {
-                    reject(err);
-                },
-            );
-    });
-};
-
-/**
- * Get all utxos for a given wallet
- * @param chronik
- * @param wallet a cashtab wallet
- * @returns
- */
-export const getUtxos = async (
-    chronik: ChronikClient,
-    wallet: CashtabWallet,
-): Promise<CashtabUtxo[]> => {
-    const chronikUtxoPromises: Promise<CashtabUtxo[]>[] = [];
-    wallet.paths.forEach((pathInfo, path) => {
-        const thisPromise = returnGetPathedUtxosPromise(
-            chronik,
-            pathInfo.address,
-            path,
-        );
-        chronikUtxoPromises.push(thisPromise);
-    });
-    const utxoResponsesByPath = await Promise.all(chronikUtxoPromises);
-    const flatUtxos = utxoResponsesByPath.flat();
-    return flatUtxos;
-};
-
 interface OrganizedUtxos {
     slpUtxos: TokenUtxo[];
     nonSlpUtxos: NonTokenUtxo[];
@@ -171,7 +68,7 @@ interface OrganizedUtxos {
  * @param chronikUtxos
  */
 export const organizeUtxosByType = (
-    chronikUtxos: CashtabUtxo[],
+    chronikUtxos: ScriptUtxo[],
 ): OrganizedUtxos => {
     const nonSlpUtxos = [];
     const slpUtxos = [];
@@ -185,72 +82,6 @@ export const organizeUtxosByType = (
     }
 
     return { slpUtxos, nonSlpUtxos };
-};
-
-/**
- * Get just the tx objects from chronik history() responses
- * @param txHistoryOfAllAddresses
- * @returns
- */
-export const flattenChronikTxHistory = (
-    txHistoryOfAllAddresses: TxHistoryPage[],
-) => {
-    let flatTxHistoryArray: Tx[] = [];
-    for (const txHistoryThisAddress of txHistoryOfAllAddresses) {
-        flatTxHistoryArray = flatTxHistoryArray.concat(
-            txHistoryThisAddress.txs,
-        );
-    }
-    return flatTxHistoryArray;
-};
-
-interface ConfirmedTx extends Omit<Tx, 'block'> {
-    block: BlockMetadata;
-}
-
-/**
- * Sort an array of chronik txs chronologically and return the first renderedCount of them
- * @param txs
- * @param renderedCount how many txs to return
- * @returns
- */
-export const sortAndTrimChronikTxHistory = (
-    txs: Tx[],
-    renderedCount: number,
-): Tx[] => {
-    const unconfirmedTxs = [];
-    const confirmedTxs: ConfirmedTx[] = [];
-    for (const tx of txs) {
-        if (typeof tx.block === 'undefined') {
-            unconfirmedTxs.push(tx);
-        } else {
-            confirmedTxs.push(tx as ConfirmedTx);
-        }
-    }
-
-    // Sort confirmed txs by blockheight, and then timeFirstSeen
-    const sortedConfirmedTxHistoryArray = confirmedTxs.sort(
-        (a, b) =>
-            // We want more recent blocks i.e. higher blockheights to have earlier array indices
-            b.block.height - a.block.height ||
-            // For blocks with the same height, we want more recent timeFirstSeen i.e. higher timeFirstSeen to have earlier array indices
-            b.timeFirstSeen - a.timeFirstSeen,
-    );
-
-    // Sort unconfirmed txs by timeFirstSeen
-    const sortedUnconfirmedTxHistoryArray = unconfirmedTxs.sort(
-        (a, b) => b.timeFirstSeen - a.timeFirstSeen,
-    );
-
-    // The unconfirmed txs are more recent, so they should be inserted into an array before the confirmed txs
-    const sortedChronikTxHistoryArray = sortedUnconfirmedTxHistoryArray.concat(
-        sortedConfirmedTxHistoryArray,
-    );
-
-    const trimmedAndSortedChronikTxHistoryArray =
-        sortedChronikTxHistoryArray.splice(0, renderedCount);
-
-    return trimmedAndSortedChronikTxHistoryArray;
 };
 
 export enum XecTxType {
@@ -277,6 +108,10 @@ interface AirdropAction {
     msg?: string;
 }
 interface PaybuttonAction {
+    data: string;
+    nonce: string;
+}
+interface NftoaAction {
     data: string;
     nonce: string;
 }
@@ -314,6 +149,7 @@ export interface AppAction {
         | AliasAction
         | AirdropAction
         | PaybuttonAction
+        | NftoaAction
         | EcashChatAction
         | PaywallAction
         | EcashChatArticleReply
@@ -382,7 +218,7 @@ export const parseTx = (tx: Tx, hashes: string[]): ParsedTx => {
 
     // Assign defaults
     let incoming = true;
-    let stackArray = [];
+    let stackArray: string[] = [];
 
     const destinationAddresses: Set<string> = new Set();
 
@@ -644,6 +480,35 @@ export const parseTx = (tx: Tx, hashes: string[]): ParsedTx => {
                 }
                 break;
             }
+            case opReturn.appPrefixesHex.nftoa: {
+                // NFToa tx
+                // https://github.com/Bitcoin-ABC/bitcoin-abc/blob/master/doc/standards/nftoa.md
+                const app = 'NFToa';
+                if (typeof stackArray[1] !== 'undefined') {
+                    // Valid NFToaTx
+                    appActions.push({
+                        lokadId,
+                        app,
+                        isValid: true,
+                        action: {
+                            data: Buffer.from(stackArray[1], 'hex').toString(
+                                'utf8',
+                            ),
+                            nonce:
+                                typeof stackArray[2] !== 'undefined'
+                                    ? stackArray[2]
+                                    : '',
+                        },
+                    });
+                } else {
+                    appActions.push({
+                        app,
+                        lokadId,
+                        isValid: false,
+                    });
+                }
+                break;
+            }
             case opReturn.appPrefixesHex.eCashChat: {
                 const app = 'eCashChat';
                 if (typeof stackArray[1] !== 'undefined') {
@@ -784,10 +649,10 @@ export const parseTx = (tx: Tx, hashes: string[]): ParsedTx => {
     const satoshisSent = selfSendTx
         ? outputSatoshis
         : isCoinbase
-        ? change
-        : incoming
-        ? receivedSatoshis
-        : outputSatoshis - change;
+          ? change
+          : incoming
+            ? receivedSatoshis
+            : outputSatoshis - change;
 
     // Parse for an SLP 1 agora ad setup tx
     // These are SLP1 SEND txs where
@@ -1093,7 +958,7 @@ export const getTxNotificationMsg = (
     const renderedToOrFromAddress =
         toOrFromAddress === 'self' || toOrFromAddress === 'unknown'
             ? toOrFromAddress
-            : `${toOrFromAddress.slice(6, 11)}...${toOrFromAddress.slice(-5)}`;
+            : previewAddress(toOrFromAddress);
 
     if (parsedTokenEntries.length === 0) {
         // If this is not a token tx
@@ -1146,6 +1011,14 @@ export const getTxNotificationMsg = (
                         return `${app}: ${xecTxType} ${renderedAmount}${
                             data !== '' ? ` | ${data}` : ''
                         }`;
+                    }
+                    return `${xecTxType} ${renderedAmount} | Invalid ${app}`;
+                }
+                case opReturn.appPrefixesHex.nftoa: {
+                    if (isValid) {
+                        const { data } = action as NftoaAction;
+                        // We do not include nonce in notification
+                        return `${app} | ${xecTxType} ${renderedAmount} | ${data}`;
                     }
                     return `${xecTxType} ${renderedAmount} | Invalid ${app}`;
                 }
@@ -1284,40 +1157,35 @@ export const getTxNotificationMsg = (
 };
 
 /**
- * Get tx history of cashtab wallet
- * - Get tx history of each path in wallet
- * - sort by timeFirstSeen + block
- * - Trim to number of txs Cashtab renders
+ * Get transaction history with pagination
  * - Parse txs for rendering in Cashtab
  * - Update cachedTokens with any new tokenIds
  * @param chronik chronik-client instance
- * @param wallet cashtab wallet
+ * @param address the address to get history for
  * @param cachedTokens the map stored at cashtabCache.tokens
- * @returns Tx[], each tx also has a 'parsed' key with other rendering info
+ * @param page page number (0-based), defaults to 0
+ * @param pageSize number of transactions per page, defaults to chronikConfig.txHistoryPageSize
+ * @returns object with txs array and totalPages info
  */
-export const getHistory = async (
+export const getTransactionHistory = async (
     chronik: ChronikClient,
-    wallet: CashtabWallet,
+    address: string,
     cachedTokens: Map<string, CashtabCachedTokenInfo>,
-): Promise<CashtabTx[]> => {
-    const txHistoryPromises: Promise<TxHistoryPage>[] = [];
-    wallet.paths.forEach(pathInfo => {
-        txHistoryPromises.push(chronik.address(pathInfo.address).history());
-    });
+    page: number = 0,
+    pageSize: number = chronikConfig.txHistoryPageSize,
+): Promise<{ txs: CashtabTx[]; numPages: number; numTxs: number }> => {
+    // Get hash from address for parseTx
+    const { hash } = decodeCashAddress(address);
 
-    // Just throw an error if you get a chronik error
-    // This will be handled in the update loop
-    const txHistoryOfAllAddresses = await Promise.all(txHistoryPromises);
+    // Get transaction history from chronik
+    const pageResponse = await chronik.address(address).history(page, pageSize);
 
-    const flatTxHistoryArray = flattenChronikTxHistory(txHistoryOfAllAddresses);
-    const renderedTxs = sortAndTrimChronikTxHistory(
-        flatTxHistoryArray,
-        chronikConfig.txHistoryCount,
-    );
+    // For non-paginated requests, limit to pageSize
+    const txsToProcess = pageResponse.txs;
 
     // Parse txs
     const history: CashtabTx[] = [];
-    for (const tx of renderedTxs) {
+    for (const tx of txsToProcess) {
         const { tokenEntries } = tx;
 
         // Get all tokenIds associated with this tx
@@ -1349,12 +1217,18 @@ export const getHistory = async (
             }
         }
 
-        (tx as CashtabTx).parsed = parseTx(tx, getHashes(wallet));
+        (tx as CashtabTx).parsed = parseTx(tx, [hash]);
 
         history.push(tx as CashtabTx);
     }
 
-    return history;
+    const result = {
+        txs: history,
+        numTxs: pageResponse.numTxs,
+        numPages: pageResponse.numPages,
+    };
+
+    return result;
 };
 
 /**
@@ -1489,6 +1363,7 @@ export const getTokenBalances = async (
         let cachedTokenInfo = tokenCache.get(tokenId);
         if (typeof cachedTokenInfo === 'undefined') {
             // If we have not cached this token before, cache it
+            // NB we do not handle chronik errors here; expectation is that callsite will handle chronik errors
             cachedTokenInfo = await getTokenGenesisInfo(chronik, tokenId);
             tokenCache.set(tokenId, cachedTokenInfo);
         }

@@ -9,8 +9,10 @@ import inspect
 import json
 import logging
 import os
+import pathlib
 import re
 import socket
+import sys
 import time
 import unittest
 from base64 import b64encode
@@ -210,6 +212,25 @@ def assert_array_result(object_array, to_match, expected, should_not_find=False)
         raise AssertionError(f"No objects matched {to_match}")
     if num_matched > 0 and should_not_find:
         raise AssertionError(f"Objects were found {to_match}")
+
+
+def assert_recv_all_any_order(ws, expected_msgs):
+    actual_msgs = []
+    for _ in expected_msgs:
+        try:
+            actual_msgs.append(ws.recv())
+        except TimeoutError as ex:
+            raise TimeoutError(
+                f"Expected {len(expected_msgs)} messages, but only got {len(actual_msgs)}. {ex}"
+            )
+
+    def k(s):
+        return s.SerializeToString()
+
+    if sorted(actual_msgs, key=k) != sorted(expected_msgs, key=k):
+        raise AssertionError(
+            f"Expected {expected_msgs} to be received, but got {actual_msgs}"
+        )
 
 
 # Utility functions
@@ -526,11 +547,31 @@ def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=
         f.write("shrinkdebugfile=0\n")
         if disable_autoconnect:
             f.write("connect=0\n")
+        # Most tests rely on the legacy non preconsensus mining algo, so disable
+        # the feature by default. This also makes it easy to add txs to blocks
+        # without worrying about avalanche finality.
+        f.write("avalanchepreconsensusmining=0\n")
         f.write(extra_config)
 
 
 def get_datadir_path(dirname, n):
     return os.path.join(dirname, f"node{n}")
+
+
+def get_temp_default_datadir(temp_dir: pathlib.Path) -> tuple[dict, pathlib.Path]:
+    """Return os-specific environment variables that can be set to make the
+    GetDefaultDataDir() function return a datadir path under the provided
+    temp_dir, as well as the complete path it would return."""
+    if sys.platform == "win32":
+        env = {"APPDATA": str(temp_dir)}
+        datadir = temp_dir / "Bitcoin"
+    else:
+        env = {"HOME": str(temp_dir)}
+        if sys.platform == "darwin":
+            datadir = temp_dir / "Library/Application Support/Bitcoin"
+        else:
+            datadir = temp_dir / ".bitcoin"
+    return env, datadir
 
 
 def append_config(datadir, options):
@@ -753,6 +794,20 @@ def chronik_sub_to_blocks(ws, node, *, is_unsub=False) -> None:
         ws.sub_to_blocks(is_unsub=is_unsub)
 
 
+def chronik_sub_to_txs(ws, node, *, is_unsub=False) -> None:
+    """Subscribe to all tx events and make sure the subscription is active before returning"""
+    subscribe_log = "unsubscribe from" if is_unsub else "subscribe to"
+    with node.assert_debug_log([f"WS {subscribe_log} all txs"]):
+        ws.sub_to_txs(is_unsub=is_unsub)
+
+
+def chronik_sub_txid(ws, node, txid: str, *, is_unsub=False) -> None:
+    """Subscribe to txid events and make sure the subscription is active before returning"""
+    subscribe_log = "unsubscribe from" if is_unsub else "subscribe to"
+    with node.assert_debug_log([f"WS {subscribe_log} txid {txid}"]):
+        ws.sub_txid(txid, is_unsub=is_unsub)
+
+
 def chronik_sub_script(
     ws, node, script_type: str, payload: bytes, *, is_unsub=False
 ) -> None:
@@ -799,3 +854,10 @@ class TestFrameworkUtil(unittest.TestCase):
 
         for a, n in test_vectors:
             self.assertEqual(modinv(a, n), pow(a, n - 2, n))
+
+
+def sync_txindex(test_framework, node):
+    test_framework.log.debug("Waiting for node txindex to sync")
+    sync_start = int(time.time())
+    test_framework.wait_until(lambda: node.getindexinfo("txindex")["txindex"]["synced"])
+    test_framework.log.debug(f"Synced in {time.time() - sync_start} seconds")

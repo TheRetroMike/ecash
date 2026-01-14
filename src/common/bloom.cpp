@@ -64,7 +64,7 @@ void CBloomFilter::insert(Span<const uint8_t> vKey) {
 }
 
 void CBloomFilter::insert(const COutPoint &outpoint) {
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << outpoint;
     insert(MakeUCharSpan(stream));
 }
@@ -85,7 +85,7 @@ bool CBloomFilter::contains(Span<const uint8_t> vKey) const {
 }
 
 bool CBloomFilter::contains(const COutPoint &outpoint) const {
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << outpoint;
     return contains(MakeUCharSpan(stream));
 }
@@ -261,7 +261,7 @@ bool CRollingBloomFilter::contains(Span<const uint8_t> vKey) const {
 }
 
 void CRollingBloomFilter::reset() {
-    nTweak = GetRand<unsigned int>();
+    nTweak = FastRandomContext().rand<unsigned int>();
     nEntriesThisGeneration = 0;
     nGeneration = 1;
     std::fill(data.begin(), data.end(), 0);

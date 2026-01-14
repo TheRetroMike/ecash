@@ -23,7 +23,6 @@
 #include <txmempool.h>
 #include <util/any.h>
 #include <validation.h>
-#include <version.h>
 
 #include <univalue.h>
 
@@ -53,10 +52,10 @@ static const struct {
 };
 
 struct CCoin {
-    uint32_t nHeight;
+    uint32_t nHeight{0};
     CTxOut out;
 
-    CCoin() : nHeight(0) {}
+    CCoin() = default;
     explicit CCoin(Coin in)
         : nHeight(in.GetHeight()), out(std::move(in.GetTxOut())) {}
 
@@ -234,7 +233,7 @@ static bool rest_headers(Config &config, const std::any &context,
 
     switch (rf) {
         case RetFormat::BINARY: {
-            CDataStream ssHeader(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssHeader{};
             for (const CBlockIndex *pindex : headers) {
                 ssHeader << pindex->GetBlockHeader();
             }
@@ -246,7 +245,7 @@ static bool rest_headers(Config &config, const std::any &context,
         }
 
         case RetFormat::HEX: {
-            CDataStream ssHeader(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssHeader{};
             for (const CBlockIndex *pindex : headers) {
                 ssHeader << pindex->GetBlockHeader();
             }
@@ -259,7 +258,7 @@ static bool rest_headers(Config &config, const std::any &context,
         case RetFormat::JSON: {
             UniValue jsonHeaders(UniValue::VARR);
             for (const CBlockIndex *pindex : headers) {
-                jsonHeaders.push_back(blockheaderToJSON(tip, pindex));
+                jsonHeaders.push_back(blockheaderToJSON(*tip, *pindex));
             }
             std::string strJSON = jsonHeaders.write() + "\n";
             req->WriteHeader("Content-Type", "application/json");
@@ -276,7 +275,7 @@ static bool rest_headers(Config &config, const std::any &context,
 
 static bool rest_block(const Config &config, const std::any &context,
                        HTTPRequest *req, const std::string &strURIPart,
-                       bool showTxDetails) {
+                       TxVerbosity tx_verbosity) {
     if (!CheckWarmup(req)) {
         return false;
     }
@@ -306,20 +305,18 @@ static bool rest_block(const Config &config, const std::any &context,
         if (!pblockindex) {
             return RESTERR(req, HTTP_NOT_FOUND, hashStr + " not found");
         }
-
-        if (chainman.m_blockman.IsBlockPruned(pblockindex)) {
+        if (chainman.m_blockman.IsBlockPruned(*pblockindex)) {
             return RESTERR(req, HTTP_NOT_FOUND,
                            hashStr + " not available (pruned data)");
         }
     }
-    if (!chainman.m_blockman.ReadBlockFromDisk(block, *pblockindex)) {
+    if (!chainman.m_blockman.ReadBlock(block, *pblockindex)) {
         return RESTERR(req, HTTP_NOT_FOUND, hashStr + " not found");
     }
 
     switch (rf) {
         case RetFormat::BINARY: {
-            CDataStream ssBlock(SER_NETWORK,
-                                PROTOCOL_VERSION | RPCSerializationFlags());
+            DataStream ssBlock{};
             ssBlock << block;
             std::string binaryBlock = ssBlock.str();
             req->WriteHeader("Content-Type", "application/octet-stream");
@@ -328,8 +325,7 @@ static bool rest_block(const Config &config, const std::any &context,
         }
 
         case RetFormat::HEX: {
-            CDataStream ssBlock(SER_NETWORK,
-                                PROTOCOL_VERSION | RPCSerializationFlags());
+            DataStream ssBlock{};
             ssBlock << block;
             std::string strHex = HexStr(ssBlock) + "\n";
             req->WriteHeader("Content-Type", "text/plain");
@@ -338,8 +334,8 @@ static bool rest_block(const Config &config, const std::any &context,
         }
 
         case RetFormat::JSON: {
-            UniValue objBlock = blockToJSON(chainman.m_blockman, block, tip,
-                                            pblockindex, showTxDetails);
+            UniValue objBlock = blockToJSON(chainman.m_blockman, block, *tip,
+                                            *pblockindex, tx_verbosity);
             std::string strJSON = objBlock.write() + "\n";
             req->WriteHeader("Content-Type", "application/json");
             req->WriteReply(HTTP_OK, strJSON);
@@ -357,13 +353,14 @@ static bool rest_block(const Config &config, const std::any &context,
 static bool rest_block_extended(Config &config, const std::any &context,
                                 HTTPRequest *req,
                                 const std::string &strURIPart) {
-    return rest_block(config, context, req, strURIPart, true);
+    return rest_block(config, context, req, strURIPart,
+                      TxVerbosity::SHOW_DETAILS_AND_PREVOUT);
 }
 
 static bool rest_block_notxdetails(Config &config, const std::any &context,
                                    HTTPRequest *req,
                                    const std::string &strURIPart) {
-    return rest_block(config, context, req, strURIPart, false);
+    return rest_block(config, context, req, strURIPart, TxVerbosity::SHOW_TXID);
 }
 
 static bool rest_chaininfo(Config &config, const std::any &context,
@@ -489,8 +486,7 @@ static bool rest_tx(Config &config, const std::any &context, HTTPRequest *req,
 
     switch (rf) {
         case RetFormat::BINARY: {
-            CDataStream ssTx(SER_NETWORK,
-                             PROTOCOL_VERSION | RPCSerializationFlags());
+            DataStream ssTx{};
             ssTx << tx;
 
             std::string binaryTx = ssTx.str();
@@ -500,8 +496,7 @@ static bool rest_tx(Config &config, const std::any &context, HTTPRequest *req,
         }
 
         case RetFormat::HEX: {
-            CDataStream ssTx(SER_NETWORK,
-                             PROTOCOL_VERSION | RPCSerializationFlags());
+            DataStream ssTx{};
             ssTx << tx;
 
             std::string strHex = HexStr(ssTx) + "\n";
@@ -603,7 +598,7 @@ static bool rest_getutxos(Config &config, const std::any &context,
                                        "raw post data is not allowed");
                     }
 
-                    CDataStream oss(SER_NETWORK, PROTOCOL_VERSION);
+                    DataStream oss{};
                     oss << strRequestMutable;
                     oss >> fCheckMemPool;
                     oss >> vOutPoints;
@@ -699,7 +694,7 @@ static bool rest_getutxos(Config &config, const std::any &context,
         case RetFormat::BINARY: {
             // serialize data
             // use exact same output as mentioned in Bip64
-            CDataStream ssGetUTXOResponse(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssGetUTXOResponse{};
             ssGetUTXOResponse << active_height << active_hash << bitmap << outs;
             std::string ssGetUTXOResponseString = ssGetUTXOResponse.str();
 
@@ -709,7 +704,7 @@ static bool rest_getutxos(Config &config, const std::any &context,
         }
 
         case RetFormat::HEX: {
-            CDataStream ssGetUTXOResponse(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssGetUTXOResponse{};
             ssGetUTXOResponse << active_height << active_hash << bitmap << outs;
             std::string strHex = HexStr(ssGetUTXOResponse) + "\n";
 
@@ -736,10 +731,10 @@ static bool rest_getutxos(Config &config, const std::any &context,
                 // include the script in a json output
                 UniValue o(UniValue::VOBJ);
                 ScriptPubKeyToUniv(coin.out.scriptPubKey, o, true);
-                utxo.pushKV("scriptPubKey", o);
-                utxos.push_back(utxo);
+                utxo.pushKV("scriptPubKey", std::move(o));
+                utxos.push_back(std::move(utxo));
             }
-            objGetUTXOResponse.pushKV("utxos", utxos);
+            objGetUTXOResponse.pushKV("utxos", std::move(utxos));
 
             // return json string
             std::string strJSON = objGetUTXOResponse.write() + "\n";
@@ -786,7 +781,7 @@ static bool rest_blockhash_by_height(Config &config, const std::any &context,
     }
     switch (rf) {
         case RetFormat::BINARY: {
-            CDataStream ss_blockhash(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ss_blockhash{};
             ss_blockhash << pblockindex->GetBlockHash();
             req->WriteHeader("Content-Type", "application/octet-stream");
             req->WriteReply(HTTP_OK, ss_blockhash.str());

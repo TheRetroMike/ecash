@@ -22,6 +22,7 @@ Interesting starting states could be loading a snapshot when the current chain t
 - TODO: A descendant of the snapshot block
 
 """
+
 import os
 import time
 from dataclasses import dataclass
@@ -239,7 +240,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             ],
             # Amount exceeds MAX_MONEY
             [
-                b"\xCA\xD2\x8F\x5A",
+                b"\xca\xd2\x8f\x5a",
                 36,
                 None,
                 "[snapshot] bad snapshot data after deserializing 0 coins - bad tx out value",
@@ -342,7 +343,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         )
         fork_block1.solve()
         fork_block2 = create_block(
-            fork_block1.sha256,
+            fork_block1.hash_int,
             create_coinbase(SNAPSHOT_BASE_HEIGHT + 1),
             block_time + 1,
         )
@@ -670,8 +671,8 @@ class AssumeutxoTest(BitcoinTestFramework):
             """Check nTx and nChainTx intermediate values right after loading
             the snapshot, and final values after the snapshot is validated."""
             for height, block in blocks.items():
-                tx = n1.getblockheader(block.hash)["nTx"]
-                stats = n1.getchaintxstats(nblocks=1, blockhash=block.hash)
+                tx = n1.getblockheader(block.hash_hex)["nTx"]
+                stats = n1.getchaintxstats(nblocks=1, blockhash=block.hash_hex)
                 chain_tx = stats.get("txcount", None)
                 window_tx_count = stats.get("window_tx_count", None)
                 tx_rate = stats.get("txrate", None)
@@ -747,7 +748,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             [prevout], {getnewdestination()[2]: 24_990_000}
         )
         signed_tx = n1.signrawtransactionwithkey(raw_tx, [privkey], [prevout])["hex"]
-        signed_txid = FromHex(CTransaction(), signed_tx).rehash()
+        signed_txid = FromHex(CTransaction(), signed_tx).txid_hex
 
         assert n1.gettxout(prev_tx["txid"], 0) is not None
         n1.sendrawtransaction(signed_tx)
@@ -949,7 +950,7 @@ class AssumeutxoTest(BitcoinTestFramework):
 
 @dataclass
 class Block:
-    hash: str
+    hash_hex: str
     tx: int
     chain_tx: int
 

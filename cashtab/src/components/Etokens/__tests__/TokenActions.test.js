@@ -15,6 +15,7 @@ import CashtabTestWrapper from 'components/App/fixtures/CashtabTestWrapper';
 import appConfig from 'config/app';
 import 'fake-indexeddb/auto';
 import localforage from 'localforage';
+import { FEE_SATS_PER_KB_CASHTAB_LEGACY } from 'constants/transactions';
 import {
     tokenTestWallet,
     supportedTokens,
@@ -32,7 +33,6 @@ import {
     heismanNftOneCache,
     heismanCollectionCacheMocks,
     tokenMockXecx,
-    mockFirmaOffer,
 } from 'components/Agora/fixtures/mocks';
 import CashtabCache from 'config/CashtabCache';
 import { cashtabCacheToJSON } from 'helpers';
@@ -63,6 +63,16 @@ describe('<Token /> available actions rendered', () => {
             tokenTestWallet,
             localforage,
         );
+
+        // Mock settings to use higher fee rate (2010) for this test
+        await localforage.setItem('settings', {
+            fiatCurrency: 'usd',
+            sendModal: false,
+            autoCameraOn: false,
+            hideMessagesFromUnknownSenders: false,
+            balanceVisible: true,
+            satsPerKb: FEE_SATS_PER_KB_CASHTAB_LEGACY, // Use legacy fee rate for this test
+        });
 
         // Build chronik mocks that Cashtab would use to add token info to cache
         for (const tokenMock of supportedTokens) {
@@ -223,16 +233,16 @@ describe('<Token /> available actions rendered', () => {
 
         // SLP1 ad prep
         const adPrepHex =
-            '0200000002666de5d5852807a13612b6ea0373643266d435822daeb39c29e5d4b67e893cda0100000064414feb64ffdf50b0eb40a6fe0c34da65e94e0cbbbc2e58f2b290f3b2bf31480b34a57c4862ee177129dc8a1ce645573cd240e5e83d336d19ff22c3a7675bc903564121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064410f0461f0e843cc5b78196e3fdb3b89d64948629645f3b44ea960c2a5ac8f5835189697165a01cc259a0f4eff931c83e110019ee5c7721a43e0dde11ba04e068d4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f80800000019d80000000800000000001d9600060500000000000017a914e49e695e2f466e34447cb253567b8b277b60e3908722020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac2c2e0f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441c8af21dd92d03eafdbb1e3aff93e297f373b5f3dbc9b9bf0b8281aeb1bd679bae2d8f9d8eb6655b6b6754cc0683a0fa9234d6242c2f3a4503bf682aa30af2ec64121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff666de5d5852807a13612b6ea0373643266d435822daeb39c29e5d4b67e893cda010000006441774b63b6872e525ffd110f95fe72f9766b0d1a348f995ed25cc2dd82118ad552b438aee61520ec4637901c6a40e1362ff349ad65bd545e6de7762eb49d21cab94121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f80800000019d81d9600060500000000000017a91472065f43eb5358b84763ecf40440d0fc9914e6c887a4300f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const adPrepTxid =
-            '280b6fda5a11a94145f3b4203fb4f199d875d3621c8e4cc9d63501e73b9649bc';
+            'e3fcedd78c4a8e1aafc0f894f4c3d1d61ec671f5bccd6d46ad96d125066c817e';
         mockedChronik.setBroadcastTx(adPrepHex, adPrepTxid);
 
         // SLP1 ad list
         const adListHex =
-            '0200000001bc49963be70135d6c94c8e1c62d375d899f1b43f20b4f34541a9115ada6f0b2801000000dd0441475230075041525449414c41b11b013fb8140dcce13f93ee99584b1c6b547ee076ed63f9ec0a6c0068ad84c5420ecd608af68134366576bae4196a83f6a8f521c50dea4acc75dda6215c7fec414c8c4c766a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f80800000000000000000300dbf30400000000003dc7010000000000d226af0c000000002099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d01557f77ad075041525449414c88044147523087ffffffff020000000000000000376a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f80800000019d8000000220200000000000017a91472df09389a835adb0e13e32bf1c91144ed107eef8700000000';
+            '02000000017e816c0625d196ad466dcdbcf571c61ed6d1c3f494f8c0af1a8e4a8cd7edfce301000000dd0441475230075041525449414c413a19634f23c4e0e4dfab63f1e625dd4a1cc4548999b441a0f836c647ce611d5165c1764043e2d08b560fe7fe55fe6e63ef68ed65272aad7da116baec014ffb81414c8c4c766a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f8080000000000000000000024d6f304000000006fb0ad0e3cc701000078e4b2601aaf0c2099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d01557f77ad075041525449414c88044147523087ffffffff020000000000000000376a04534c500001010453454e442020a0b9337a78603c6681ed2bc541593375535dcd9979196620ce71f233f2f6f80800000019d81d9600220200000000000017a91483a664c10582186f7dd3607b068770eb972b441b8700000000';
         const adListTxid =
-            '823f652e22d154fc7bdd77ee9d9fa37c77e9649235f1430958bef68b7428b9ae';
+            '6cc8ade95d202959fa2c461c1ff13f5bdca6fdf684b30a46a5e85126fbad1db0';
         mockedChronik.setBroadcastTx(adListHex, adListTxid);
 
         // Mock response for agora select params check
@@ -241,7 +251,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '72df09389a835adb0e13e32bf1c91144ed107eef';
+        const EXPECTED_OFFER_P2SH = '83a664c10582186f7dd3607b068770eb972b441b';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -395,13 +405,13 @@ describe('<Token /> available actions rendered', () => {
             screen.getByText('Create the following sell offer?'),
         ).toBeInTheDocument();
         // Offered qty (actual, calculated from AgoraOffer)
-        const actualOfferedQty = '110.998061056';
+        const actualOfferedQty = '111.000000000';
         expect(screen.getByText(actualOfferedQty)).toBeInTheDocument();
         // Min by (actual, calculated from AgoraOffer)
-        expect(screen.getByText('11.005853696')).toBeInTheDocument();
+        expect(screen.getByText('11.000000000')).toBeInTheDocument();
         const userInputPricePerToken = '1.6667 XEC';
         // Actual price calculated from AgoraOffer
-        const actualPricePerToken = '1.6600 XEC';
+        const actualPricePerToken = '1.6609 XEC';
         expect(screen.getByText(userInputPricePerToken)).toBeInTheDocument();
         // User input price
         expect(screen.getByText(actualPricePerToken)).toBeInTheDocument();
@@ -433,12 +443,18 @@ describe('<Token /> available actions rendered', () => {
             ),
         ).toBeInTheDocument();
     });
-    it('We can correctly render an SLP1 NFT Parent token with no NFT Mint inputs, then create some NFT Mint inputs', async () => {
-        const hex =
-            '0200000002cc04a35686950a66845ebf8e37677fffcc5ee0e2b63e3f05822838273149660c010000006441878aa7e698097a4961646a2da44f701d8895cb065113fcf1d2e9f073afbc37025a5587e121bd0311a24a7af60445abfc4de7e3675a3a9f51cffddc875d88fca24121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064412f509f90f23f4b85b27452e0f25d33cef07ad8fef898e2d308c43fb0dfd6f7e00f7201336be4089171ddc094a24688882b518ec0c6958c904df12d0239a7342f4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff150000000000000000d96a04534c500001810453454e44200c66493127382882053f3eb6e2e05eccff7f67378ebf5e84660a958656a304cc08000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000000108000000000000005222020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac0d070f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
-        const txid =
-            'cdc6afbf1ddd796388692ec9106816be1f9229ece11e545c1cbe6854ccf087ec';
-        mockedChronik.setBroadcastTx(hex, txid);
+    it('We can correctly render an SLP1 NFT Parent token with no ready NFT Mint inputs, then mint an NFT as ecash-wallet will automatically prepare them', async () => {
+        // We expect two txids; a fan-out to prep the qty-1 input, and the nft mint itself
+        const inputPrepTxHex =
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064410fab6ef8735fb6b1cfa3378f4a366b691e76f90ab94bce16a5166e27c2a6bcc28764c4b4292fea1fd1da9488b12d9b1a41085ed10b52ed6f77143e0700c818d54121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffcc04a35686950a66845ebf8e37677fffcc5ee0e2b63e3f05822838273149660c010000006441a9ce59a39fd5098bf9220cc9d618723d1b3a5c78f3963dd5c6dfc8811392243cf859b7f148fb1ef523ae927b41f75cee4e3a3373a7f350eef8d61f3ba91fd06a4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001810453454e44200c66493127382882053f3eb6e2e05eccff7f67378ebf5e84660a958656a304cc08000000000000000108000000000000006322020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ace4320f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
+        const inputPrepTxTxid =
+            '0c14ee8ab4b87c194d08acd3dd35cf18fba16cfbed8ca12a20310303dce15d5d';
+        const mintTxHex =
+            '02000000025d5de1dc030331202aa18cedfb6ca1fb18cf35ddd3ac084d197cb8b48aee140c0100000064419ea499208393534e59f9e4a822aa1d65be2bd072911e5e52a15c78cab14f3eac337e54dec29e1e64c94471ee93e91438501436c5c6e2fc5418c1fe2a5de15c034121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff5d5de1dc030331202aa18cedfb6ca1fb18cf35ddd3ac084d197cb8b48aee140c030000006441200390360da6321753362bfdfee4300aa3640f09d3512a91e235c4e4f8f72a43d3ea87eab57657d32234ab7dc3742cab2b86efe727f47ef385cd4a8166c6bc2a4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff0300000000000000003c6a04534c500001410747454e4553495304414243310b426974636f696e204142430b636173687461622e636f6d4c0001004c0008000000000000000122020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac852f0f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
+        const mintTxid =
+            '72eabc5266341dc296c91d29236056f1281cb0bfd223c004530ec35bfcd7bb12';
+        mockedChronik.setBroadcastTx(inputPrepTxHex, inputPrepTxTxid);
+        mockedChronik.setBroadcastTx(mintTxHex, mintTxid);
         render(
             <CashtabTestWrapper
                 chronik={mockedChronik}
@@ -484,28 +500,11 @@ describe('<Token /> available actions rendered', () => {
         // Token actions are available
         expect(screen.getByTitle('Token Actions')).toBeInTheDocument();
 
-        // The fan-out action is available
-        expect(
-            screen.getByTitle('Toggle NFT Parent Fan-out'),
-        ).toBeInTheDocument();
-
-        // This action is checked by default if the user has no fanInputs
-        expect(screen.getByTitle('Toggle NFT Parent Fan-out')).toHaveProperty(
-            'checked',
-            true,
-        );
-
         // The mint NFT option is available
         expect(screen.getByTitle('Toggle Mint NFT')).toBeInTheDocument();
 
-        // The mint NFT option is disabled if there are no mint inputs
-        expect(screen.getByTitle('Toggle Mint NFT')).toHaveProperty(
-            'disabled',
-            true,
-        );
-
-        // The mint NFT switch label explains why it is disabled
-        expect(screen.getByText('(no NFT mint inputs)')).toBeInTheDocument();
+        // The mint NFT option is enabled even if there are no qty-1 utxos aka mint inputs
+        expect(screen.getByTitle('Toggle Mint NFT')).toBeEnabled();
 
         // The Airdrop action is available
         expect(screen.getByTitle('Toggle Airdrop')).toBeInTheDocument();
@@ -513,15 +512,38 @@ describe('<Token /> available actions rendered', () => {
         // The Burn action is NOT available
         expect(screen.queryByTitle('Toggle Burn')).not.toBeInTheDocument();
 
-        // We can create NFT mint inputs by executing a fan-out tx
-        await userEvent.click(
-            screen.getByRole('button', { name: /Create NFT Mint Inputs/ }),
+        // We can mint an NFT if we give it a name and a ticker
+        await userEvent.type(
+            await screen.findByPlaceholderText('Enter a name for your NFT'),
+            'Bitcoin ABC',
         );
 
-        // We see expected toast notification
+        // The mint button is disabled as the user has not entered a ticker
+        expect(screen.getByRole('button', { name: /Mint NFT/ })).toHaveProperty(
+            'disabled',
+            true,
+        );
+
         expect(
-            await screen.findByText('NFT Mint inputs created'),
+            screen.getByText('NFT must have a name and a ticker'),
         ).toBeInTheDocument();
+
+        // We give the NFT a ticker
+        await userEvent.type(
+            await screen.findByPlaceholderText('Enter a ticker for your NFT'),
+            'ABC1',
+        );
+
+        // The mint button is no longer disabled
+        expect(screen.getByRole('button', { name: /Mint NFT/ })).toBeEnabled();
+
+        await userEvent.click(screen.getByRole('button', { name: /Mint NFT/ }));
+
+        // We see a preview modal, click OK
+        await userEvent.click(screen.getByText('OK'));
+
+        // We see expected toast notification
+        expect(await screen.findByText('NFT Minted!')).toBeInTheDocument();
     });
     it('We can correctly render an SLP1 NFT Parent token with NFT Mint inputs, then mint an NFT', async () => {
         // We need to use a unique mockedChronik for this test, with at least one nft mint input utxo
@@ -553,7 +575,6 @@ describe('<Token /> available actions rendered', () => {
                                 atoms: 1n,
                                 isMintBaton: false,
                             },
-                            path: 1899,
                         },
                     ],
                 },
@@ -574,9 +595,9 @@ describe('<Token /> available actions rendered', () => {
         }
 
         const hex =
-            '020000000233333333333333333333333333333333333333333333333333333333333333330100000064412564b7504e0ec0a094aae832fee07ce86f21de56153a71c99bcc50a20d4f79ba264cccd4fc39d4840af59e0f013cb535b07ae31795197db0fcda47b8ef91973b4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064418758fd9e1a9eec69b262ba29227a1cbb0990dca35f7deadb91145af82e922cabe1efcb688c4a498fefbc903d6d4b5cdb8facdf624e7cbde95065b7ad014a54864121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff0300000000000000003c6a04534c500001410747454e4553495304414243310b426974636f696e204142430b636173687461622e636f6d4c0001004c0008000000000000000122020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac7a330f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002333333333333333333333333333333333333333333333333333333333333333301000000644104a08779920c87d1609a7f6288b92fb7cd35a9733929f3c4340269cb0ef597287441228ca8d07cde105ad18567543564e70389894e5e75cc843f53ec0c8e52294121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441f93b66b4fd23fb34139d1862574a62ccb9fa8ef43e8b38a1e3dd73d88ca10d2d3a45165ee2d2df870e6e6c2d0527c052919b4cbe3f4f32b48ededc8048d7a4014121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff0300000000000000003c6a04534c500001410747454e4553495304414243310b426974636f696e204142430b636173687461622e636f6d4c0001004c0008000000000000000122020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac7a330f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            'd215995b67194576b66ef9c593a66d9255a3ec21e424ecfbb6046643b8e0dbe6';
+            'c251be21a0f158ea097512a818f455ee941822515fa0240e781ee56d27b5d4d4';
 
         mintNftMockedChronik.setBroadcastTx(hex, txid);
         render(
@@ -624,33 +645,16 @@ describe('<Token /> available actions rendered', () => {
         // Token actions are available
         expect(screen.getByTitle('Token Actions')).toBeInTheDocument();
 
-        // The fan-out action is available
-        expect(
-            screen.getByTitle('Toggle NFT Parent Fan-out'),
-        ).toBeInTheDocument();
-
-        // The fan-out action is NOT checked by default because we have a single fan input
-        expect(screen.getByTitle('Toggle NFT Parent Fan-out')).toHaveProperty(
-            'checked',
-            false,
-        );
-
         // The mint NFT option is available
         expect(screen.getByTitle('Toggle Mint NFT')).toBeInTheDocument();
 
         // The mint NFT option is NOT disabled as we have a single mint input
-        expect(screen.getByTitle('Toggle Mint NFT')).toHaveProperty(
-            'disabled',
-            false,
-        );
+        expect(screen.getByTitle('Toggle Mint NFT')).toBeEnabled();
 
         // The mint NFT switch label does not include the disabled explanation
         expect(
             screen.queryByText('(no NFT mint inputs)'),
         ).not.toBeInTheDocument();
-
-        // The mint NFT switch label shows available NFT mint inputs
-        expect(screen.getByText('(1 input available)')).toBeInTheDocument();
 
         // The Airdrop action is available
         expect(screen.getByTitle('Toggle Airdrop')).toBeInTheDocument();
@@ -788,17 +792,6 @@ describe('<Token /> available actions rendered', () => {
         // Token actions are available
         expect(screen.getByTitle('Token Actions')).toBeInTheDocument();
 
-        // The fan-out action is available
-        expect(
-            screen.getByTitle('Toggle NFT Parent Fan-out'),
-        ).toBeInTheDocument();
-
-        // The fan-out action is NOT checked by default because we have a single fan input
-        expect(screen.getByTitle('Toggle NFT Parent Fan-out')).toHaveProperty(
-            'checked',
-            false,
-        );
-
         // The mint NFT option is available
         expect(screen.getByTitle('Toggle Mint NFT')).toBeInTheDocument();
 
@@ -812,9 +805,6 @@ describe('<Token /> available actions rendered', () => {
         expect(
             screen.queryByText('(no NFT mint inputs)'),
         ).not.toBeInTheDocument();
-
-        // The mint NFT switch label shows available NFT mint inputs
-        expect(screen.getByText('(1 input available)')).toBeInTheDocument();
 
         // The Airdrop action is available
         expect(screen.getByTitle('Toggle Airdrop')).toBeInTheDocument();
@@ -843,25 +833,22 @@ describe('<Token /> available actions rendered', () => {
 
         // activeOffersByPubKey
         // The test wallet is selling the Saturn V NFT
-        mockedAgora.setActiveOffersByPubKey(
-            tokenTestWallet.paths.get(appConfig.derivationPath).pk,
-            [],
-        );
+        mockedAgora.setActiveOffersByPubKey(tokenTestWallet.pk, []);
 
         // activeOffersByGroupTokenId does not need to be mocked since there are no offers here
 
         // NFT ad prep
         const adPrepHex =
-            '0200000002268322a2a8e67fe9efdaf15c9eb7397fb640ae32d8a245c2933f9eb967ff9b5d010000006441e4365d350b1dfee55e60cc2600ba094ed0e05c1d6a297bd3fe3f0721b88d9ec09b7d114cf0aab08a3b264153858f1a48f839f3639a8a8f9b11214038080cb9e34121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064411e9913b28017832fa38944675eb8815411fd210f9dfc8f0aa806bed055f52b6592488fdd1f9be942c19dcb98d7ddd7c55bc8b1233a64ad3dfa1c65eebbd48f254121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a22283260800000000000000019a0400000000000017a91407d2b0e6ec7b96cbfbe4a7d54e28d28fbcf65e408710310f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441626bc693181ac5b7b8950f444d58ae88ed4571fd32dff39934610797c4f2957459a4c67e4830c9548579dfccd913e2679fbef2485e2a2c44d12ab0160d280f584121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff268322a2a8e67fe9efdaf15c9eb7397fb640ae32d8a245c2933f9eb967ff9b5d01000000644141e7b2d5f1bed5d4f4a0cf28281356a6fd0d92cdeb03968cc74341c55007bf77c137bf1b41f9cd405d5c0174605f7bcca7797e9dbb552daef59da2d268239c664121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a22283260800000000000000019a0400000000000017a914015ae7701f0136acdba7575bd99ddc49a3cbb86f8710310f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const adPrepTxid =
-            '7b4f2b1cf9716ead03f91910bd0c08956c381987e1cb3cd9f9b4d555a7b9ba25';
+            'e9e02ee5be01ffc73a843d467fcdb0961f793934a94fb930023187332f78042d';
         mockedChronik.setBroadcastTx(adPrepHex, adPrepTxid);
 
         // NFT ad list
         const adListHex =
-            '020000000125bab9a755d5b4f9d93ccbe18719386c95080cbd1019f903ad6e71f91c2b4f7b01000000a70441475230074f4e4553484f544106bd7c3cc4f6aca45a7f97644b8cb5e745dee224246f38605171e8f9e0d6e036af3ea4853b08e1baa92e091bd0ceabf83d4a246e07e6b0b008a3e091b111f22a414c56222b50fe00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac7521031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dad074f4e4553484f5488044147523087ffffffff020000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a2228326080000000000000001220200000000000017a914729833ae294590bbcf28bfbb9ad54c01b6cdb6288700000000';
+            '02000000012d04782f3387310230b94fa93439791f96b0cd7f463d843ac7ff01bee52ee0e901000000a70441475230074f4e4553484f5441e139a801749043aba4a7fa83bc0f2d7a986be7a71c280de9dcb7979cc43d846f663b95f695a3595e6f4325329551f1a6c810d73f4b05b68bbd71bacad31d31e1414c56222b50fe00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac7521031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dad074f4e4553484f5488044147523087ffffffff020000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a2228326080000000000000001220200000000000017a91439efc3f04274f0c42057c67ac1b14d8305ed5ec18700000000';
         const adListTxid =
-            '97cf0fed5062419ad456f22457cfeb3b15909f1de2350be48c53b24944e0de89';
+            'b09f1397102faf20f0495eea6f9d3fef9c84b41568e5403c04d31f4d18024e05';
         mockedChronik.setBroadcastTx(adListHex, adListTxid);
 
         // NFT send
@@ -1011,9 +998,9 @@ describe('<Token /> available actions rendered', () => {
 
         // NFT send
         const hex =
-            '0200000002268322a2a8e67fe9efdaf15c9eb7397fb640ae32d8a245c2933f9eb967ff9b5d010000006441fff60607ba0fb6eda064075b321abc3980c249efcc0e91d4d95e464500a654476e59b76dd19bdd66f5d207a0d731550c93ce724a09e00a3bff3fcfbc08c970844121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441fe754300443dfb293619693087016c9d9a8437489d48cb7c0c3fcb6b5af6277833ff7156355aeb557145c4075b7917d90d79239ba7bf776a38fef935d8da2f7c4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a222832608000000000000000122020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac84330f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441fe33e6612eb70a5071694ea98e4beb96047624852ce0bb430b6c79d5a03328f6f61d2af55e62310ed4d84402e6fc911170d979f28da258af20c526703c4307a14121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff268322a2a8e67fe9efdaf15c9eb7397fb640ae32d8a245c2933f9eb967ff9b5d0100000064411c49ae23798d7cc3d7efd6bc1ad645d147a0964c104f72d6b0c9f9cfe0e551faeb1a4ab4591c871972d9e9881eb7aa7875c9de29cefd34e907e3ae38209152b54121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001410453454e44205d9bff67b99e3f93c245a2d832ae40b67f39b79e5cf1daefe97fe6a8a222832608000000000000000122020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac84330f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            'daa5872d1ef95a05bd3ee59fc532aa7921a54b783a5af68c5aa9146f61d2e134';
+            'ed3f4387746c06139952133f447dd49208e892ec1c69efc02b03d553fd1f0498';
         mockedChronik.setBroadcastTx(hex, txid);
         render(
             <CashtabTestWrapper
@@ -1033,7 +1020,7 @@ describe('<Token /> available actions rendered', () => {
 
         // On load, default action for NFT is to list it
         const sellActionSwitch = screen.getByTitle('Toggle Sell NFT');
-        expect(sellActionSwitch).toBeChecked();
+        await waitFor(() => expect(sellActionSwitch).toBeChecked());
 
         // Sending is disabled
         const sendActionSwitch = screen.getByTitle('Toggle Send');
@@ -1348,9 +1335,9 @@ describe('<Token /> available actions rendered', () => {
 
         // ALP send
         const hex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441999a894cafbab21d590da6ce07e572935144c480bce48c4df3efb74e9ee2fd3a4de61a40f93c28775c7b135a6a9ccba7d880bd5776d289b6c8ae5752afee24b34121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441f6e2b2a66d8676854e281f5af375bc56d4f359cb4be1e178d330720384da79a5216bd7a132bfd44654835c95a8d81b099b03e953d4a720187255ef1c9a1b646e4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff0400000000000000003a6a5037534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c02102700000000301b0f00000022020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac18310f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064414699e8f1772d29a83fd575d2e9de0db228e6cfa9b5ddc47ab63f76c653d995c6fedad8fe529bb0bf0f9a787904ea772d235145730e100620fb8ce846afe2da0f4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441de3e281095d82b58eca96ca9491c02bbc96e3e46f895521366059786ad19630030f16162e29f607af2a5bbda0918aa3d3cb03a44f2055448b6174b97c25ed6ab4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff0400000000000000003a6a5037534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c02102700000000301b0f00000022020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac18310f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            '33313eaf3365d9bf440645c5fffa8ed91681d1e1464afe598a564cdc76855c04';
+            '8e0ec6625fcef4af4255c6aed6177833cfcb1ef8364a51fbf2b62e9f46975015';
         mockedChronik.setBroadcastTx(hex, txid);
 
         // Mock NOT blacklisted
@@ -1424,9 +1411,8 @@ describe('<Token /> available actions rendered', () => {
         // We can send an ALP token
         await userEvent.click(sendButton);
 
-        const sendTokenSuccessNotification = await screen.findByText(
-            'eToken sent',
-        );
+        const sendTokenSuccessNotification =
+            await screen.findByText('eToken sent');
         expect(sendTokenSuccessNotification).toHaveAttribute(
             'href',
             `${explorer.blockExplorerUrl}/tx/${txid}`,
@@ -1442,9 +1428,9 @@ describe('<Token /> available actions rendered', () => {
 
         // ALP burn
         const hex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c250100000064416f667f359f04e273d524eac5fdaede0bfaf483daaf74f2ab5ba849c3a126b36b059003ef22b647d5265b74938e50c40505c1ad56474d0af2930192994011b9c84121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441ed0c24a83ec9137bc2cc367f674b1932de280f3bc2fbfd9cd70b840e61ccf5fa272e714ba06d3060574df97bc135acae2367d00fdd67ce2bbf347193a871348c4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000656a5030534c503200044255524e49884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c10270000000031534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c01301b0f00000022020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac28330f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441c0e932e98692f1996fed9ed7927aa2935a80f1a05833b509effd4f028a57ff38e21fc2debb708d72ef2f7f02b63b013d8d51c63000437b3f47f3947d8d55af0f4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441e5f9666927dd91d351dee5e5f12aeb4ae1319f918e50ac985b1bc3c6366c0beba7204005ddee8397214d7c503718a9ce734c06f48cafc8b76b9ef85982e523654121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000656a5030534c503200044255524e49884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c10270000000031534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c01301b0f00000022020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac28330f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            'f71293a94bd444c0b82ce6a6a8a1d2ae182f6a848cd2382bb6ca496955184fdf';
+            '239ad6cadc7115ef3e5ff5ebb3b4367767d1dee587b2ed430e8f1238ed8022cc';
         mockedChronik.setBroadcastTx(hex, txid);
 
         // Mock NOT blacklisted
@@ -1503,9 +1489,8 @@ describe('<Token /> available actions rendered', () => {
         // Click the Confirm button
         await userEvent.click(screen.getByRole('button', { name: /OK/ }));
 
-        const burnTokenSuccessNotification = await screen.findByText(
-            '🔥 Burn successful',
-        );
+        const burnTokenSuccessNotification =
+            await screen.findByText('🔥 Burn successful');
         await waitFor(() =>
             expect(burnTokenSuccessNotification).toHaveAttribute(
                 'href',
@@ -1523,9 +1508,9 @@ describe('<Token /> available actions rendered', () => {
 
         // ALP burn all
         const hex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c250100000064413919d2894e681586f285af178ef2c8d86b2f008e31519b1592c76cae7bee17eb4bb1558db35b225a15a2ba1c1f3d86564e12adfa0d5c012427f096398cdff20e4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf79261803000000644126a0f23966db5ba3212e4d5c545a186d407af4d110335e521c867e63549ade8d25da8a911343d9bf9275bbb58255cd445a1b3fc14ae35a89b8964cfbe47299aa4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000336a5030534c503200044255524e49884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c40420f00000022020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac8c330f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '020000000188bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441088e3fd03897d61fc518539ef16bdb588b1642d9833dce601ae2e56573c50500e98f6688453c095a1b121bf5bb28b5d9d91d0fed3130e0ea64f570f0ff4315f04121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff010000000000000000336a5030534c503200044255524e49884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c40420f00000000000000';
         const txid =
-            'f413a14acc391c2541f0dea477cf7ee07cf6256bc3b201d6b276272f2fdda407';
+            'd286a936a9303aaaaa44d8311f9792f517fe572ea1b6076862874fed31040f71';
         mockedChronik.setBroadcastTx(hex, txid);
 
         // Mock NOT blacklisted
@@ -1591,9 +1576,8 @@ describe('<Token /> available actions rendered', () => {
         // Click the Confirm button
         await userEvent.click(screen.getByRole('button', { name: /OK/ }));
 
-        const burnTokenSuccessNotification = await screen.findByText(
-            '🔥 Burn successful',
-        );
+        const burnTokenSuccessNotification =
+            await screen.findByText('🔥 Burn successful');
         await waitFor(() =>
             expect(burnTokenSuccessNotification).toHaveAttribute(
                 'href',
@@ -1636,7 +1620,6 @@ describe('<Token /> available actions rendered', () => {
                             atoms: 0n,
                             isMintBaton: true,
                         },
-                        path: 1899,
                     },
                 ],
             },
@@ -1658,9 +1641,9 @@ describe('<Token /> available actions rendered', () => {
 
         // ALP mint
         const hex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25020000006441acdadb019c561b7bfa761695503eb1250d3ae1f34e66eeb3c4c8fb561b4ec95291bde678871451316a8f0472922d25936dd341eb90eb6bb3ccde98b00a2138da4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441fc7a554a708c3e6a2fc72e7c96871521678d0a36e336a599b39eac6a36f4ecedcfd2a728c8e639b5946fde677f1afa9e31468531476dd66fce1adfc760e7e2ff4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000356a5032534c503200044d494e5449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c01ffffffffffff0122020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac22310f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441f53918597a4599cea5768c8701083d9b24ca6035918deec541e8015121efdd1fa2e04f0e13a90549cfe75e0148c809b3a92b4c89be743b05e8b24ff393a2f80f4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25020000006441ad04cf7ab4c166f1d7cdda8de6805c3e6384b4edf4833dfbdc0f6f1bcf5d0e7a01eedcf0f55e7d2072c779c7cdb6445c09a0f009f5445499aed92ddbe64ae80b4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000356a5032534c503200044d494e5449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c01ffffffffffff0122020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac22310f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            '28c733455a50be334948600bcdf0817610b0321ceba3da52c7c7ffec995320f0';
+            '7fd6bb7637487767a6bbc999ed6b395e8a0354b064428a6b1beef15270ef7434';
         mintAlpMockedChronik.setBroadcastTx(hex, txid);
 
         // Mock NOT blacklisted
@@ -1732,9 +1715,9 @@ describe('<Token /> available actions rendered', () => {
 
         // ALP offer tx
         const offerHex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441d32ae72fa880a40975a475147443a3a7fe10308178ad38d80e6a2428921732b0699849443d8e24124a8ee5b75f1e9f74628fdb8cd0c9704d8cd0c70df65828e94121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064415fc18bb026bc3122776e708b8cdba9225494c704c1feca7aefb36b592abed96568cd57cb3504769bc4019ec0f36990c28c57012cefe805e4d3b046cc308bc86b4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000866a504b41475230075041525449414c01009b630800000000005532000000000000d6b24701000000002099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d37534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c0200420f000000400000000000220200000000000017a91450eb4978c85ec89b63e37e6b87409c9f5815c7058722020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac83300f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064416c62d7bac78b198003608e4aae58c9ec0c10f85192f0cd53c4f29b439c00bd410719503b7d5c57614635a0eed7f547e10e84979976f026b1572610af593b21a24121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441f83e8cd21adc559b6a6c624566f7028676022a327f0cdaa71c0f7252bf9f90de5b47d3f465270aac63188c747457d08d670c90433955a4fe37e4f467989710c84121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000806a504b41475230075041525449414c00002eee837863080000c3f51ad354320000e0e487a193ad47012099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d31534c5032000453454e4449884c726ebb974b9b8345ee12b44cc48445562b970f776e307d16547ccdd77c0140420f000000220200000000000017a9141803a62d179c74adb3568dccfd71712690f6ebd287f6320f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const offerTxid =
-            'e00be7011ee5d585cbd54049570ea0754ab0d5c05acf6cb01c25afa3aa61663d';
+            'd0afc76c61582ea19db3100958c1e583b8d0a98fb4046af3fb44a85e76c26c21';
         mockedChronik.setBroadcastTx(offerHex, offerTxid);
 
         // Mock response for agora select params check
@@ -1743,7 +1726,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '50eb4978c85ec89b63e37e6b87409c9f5815c705';
+        const EXPECTED_OFFER_P2SH = '1803a62d179c74adb3568dccfd71712690f6ebd2';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -1780,7 +1763,7 @@ describe('<Token /> available actions rendered', () => {
         expect(screen.getByTitle('Toggle Sell Token')).toBeEnabled();
 
         // The list button is disabled on load
-        const listButton = screen.getByRole('button', {
+        const listButton = await screen.findByRole('button', {
             name: /List Test CRD/,
         });
         expect(listButton).toBeDisabled();
@@ -1896,15 +1879,15 @@ describe('<Token /> available actions rendered', () => {
         await userEvent.click(listButton);
 
         // We see expected confirmation modal to list the Token
-        expect(screen.getByText('List tCRD?')).toBeInTheDocument();
+        expect(await screen.findByText('List tCRD?')).toBeInTheDocument();
         expect(
             screen.getByText('Create the following sell offer?'),
         ).toBeInTheDocument();
         // Offered qty (actual, calculated from AgoraOffer)
-        const actualOfferedQty = '99.9936';
-        expect(screen.getByText(actualOfferedQty)).toBeInTheDocument();
+        const actualOfferedQty = '100.0000';
+        expect(screen.getAllByText(actualOfferedQty)).toHaveLength(2);
         // Min buy (actual, calculated from AgoraOffer)
-        expect(screen.getByText('1.0240')).toBeInTheDocument();
+        expect(screen.getByText('1.0000')).toBeInTheDocument();
         // Actual price calculated from AgoraOffer
         const actualPricePerTokenForMinBuy = '16.67 XEC';
         expect(
@@ -1938,9 +1921,9 @@ describe('<Token /> available actions rendered', () => {
 
         // XECX offer tx
         const offerHex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441c664c7bc3a13726a17771588813eb43276b297b91f5475435c70d08f5653646d979911c752445ebbd8f973ac218978d3bbf814952b9aae5c6d0630dbd2b74dd04121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441dfaa9df0a82c895fe97837d7622d16cf9cfda9f3f21fae7294556b235effd2fc01b33d3b59c0d813bf586bc100a661d45ef2f13de50560f1d8240c3c4390eaff4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000806a504b41475230075041525449414c000063080000000000006308000000000000c09ef87f000000002099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d31534c5032000453454e44d44ecf795494b063aa10be876868880df8ef822577c1a546fb1cd9b6c2f57bc60140420f000000220200000000000017a9149c3889f324767ca4462614f85835776ab68990a987f6320f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441338c58600f2e17d0d960855cd4c7c53064d0f7013605b1f5e1d051275f8c76aad64f9745fe3c19d947ac79726620ba8ec18fe7eebd12e3e86bd93d17f30d7fe24121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441031c4dcb7fea6c8f947e2534c24ea9f60e55879cd2a403355797681ee3c6944c8535e3576aeefb99c365033be5132bbcc731b1a9368623b074a930fa9e2fc69e4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000806a504b41475230075041525449414c00002a9e437b630800002a9e437b63080000805e24849cf7ff7f2099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d31534c5032000453454e44d44ecf795494b063aa10be876868880df8ef822577c1a546fb1cd9b6c2f57bc60140420f000000220200000000000017a9146bb29d3d6088183f80fceb07bd5e203f166d954687f6320f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const offerTxid =
-            'b32c2b51155cc4ffe9260d81aa7ce2d9c370f5a5b555ca44bfda578e3604aa85';
+            '781fde086adc3894b783698e7732e662bef9aec345facbd57422e1b3e9f13201';
         mockedChronik.setBroadcastTx(offerHex, offerTxid);
 
         // Mock response for agora select params check
@@ -1949,7 +1932,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '9c3889f324767ca4462614f85835776ab68990a9';
+        const EXPECTED_OFFER_P2SH = '6bb29d3d6088183f80fceb07bd5e203f166d9546';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -1983,10 +1966,10 @@ describe('<Token /> available actions rendered', () => {
         expect(screen.getByTitle('Token Actions')).toBeInTheDocument();
 
         // On load, default action for XECX is to redeem it
-        expect(screen.getByTitle('Toggle Redeem XECX')).toBeEnabled();
+        expect(await screen.findByTitle('Toggle Redeem XECX')).toBeEnabled();
 
         // The redeem button is disabled on load
-        const redeemButton = screen.getByRole('button', {
+        const redeemButton = await screen.findByRole('button', {
             name: /Redeem XECX for XEC/,
         });
 
@@ -2037,7 +2020,9 @@ describe('<Token /> available actions rendered', () => {
         await userEvent.click(redeemButton);
 
         // We see expected confirmation modal to list the Token
-        expect(screen.getByText('Redeem 10,000.00 XECX?')).toBeInTheDocument();
+        expect(
+            await screen.findByText('Redeem 10,000.00 XECX?'),
+        ).toBeInTheDocument();
         expect(screen.getByText('You receive:')).toBeInTheDocument();
         expect(screen.getByText('10,000.00 XEC')).toBeInTheDocument();
 
@@ -2079,7 +2064,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '9c3889f324767ca4462614f85835776ab68990a9';
+        const EXPECTED_OFFER_P2SH = '6bb29d3d6088183f80fceb07bd5e203f166d9546';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -2116,7 +2101,7 @@ describe('<Token /> available actions rendered', () => {
         expect(screen.getByTitle('Toggle Redeem XECX')).toBeEnabled();
 
         // The redeem button is disabled on load
-        const redeemButton = screen.getByRole('button', {
+        const redeemButton = await screen.findByRole('button', {
             name: /Redeem XECX for XEC/,
         });
 
@@ -2142,7 +2127,9 @@ describe('<Token /> available actions rendered', () => {
         await userEvent.click(redeemButton);
 
         // We see expected confirmation modal to list the Token
-        expect(screen.getByText('Redeem 10,000.00 XECX?')).toBeInTheDocument();
+        expect(
+            await screen.findByText('Redeem 10,000.00 XECX?'),
+        ).toBeInTheDocument();
         expect(screen.getByText('You receive:')).toBeInTheDocument();
         expect(screen.getByText('10,000.00 XEC')).toBeInTheDocument();
 
@@ -2169,7 +2156,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '9c3889f324767ca4462614f85835776ab68990a9';
+        const EXPECTED_OFFER_P2SH = '6bb29d3d6088183f80fceb07bd5e203f166d9546';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -2206,7 +2193,7 @@ describe('<Token /> available actions rendered', () => {
         expect(screen.getByTitle('Toggle Redeem XECX')).toBeEnabled();
 
         // The redeem button is disabled on load
-        const redeemButton = screen.getByRole('button', {
+        const redeemButton = await screen.findByRole('button', {
             name: /Redeem XECX for XEC/,
         });
 
@@ -2232,7 +2219,9 @@ describe('<Token /> available actions rendered', () => {
         await userEvent.click(redeemButton);
 
         // We see expected confirmation modal to list the Token
-        expect(screen.getByText('Redeem 10,000.00 XECX?')).toBeInTheDocument();
+        expect(
+            await screen.findByText('Redeem 10,000.00 XECX?'),
+        ).toBeInTheDocument();
         expect(screen.getByText('You receive:')).toBeInTheDocument();
         expect(screen.getByText('10,000.00 XEC')).toBeInTheDocument();
 
@@ -2249,7 +2238,7 @@ describe('<Token /> available actions rendered', () => {
 
         // Mock a bid price
         when(fetch)
-            .calledWith(`https://firma.cash/api/bid`)
+            .calledWith(`https://firmaprotocol.com/api/bid`)
             .mockResolvedValue({
                 json: () => Promise.resolve({ bid: 40000.0 }),
             });
@@ -2261,9 +2250,9 @@ describe('<Token /> available actions rendered', () => {
 
         // FIRMA offer tx
         const offerHex =
-            '020000000288bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441243d709268b45b7917eb446ed0cb447fa71eec05977b7b558cb2d7cbae3b1b8bc190810e03b84ceb037b7295bca76e76ad83d48a8f8d9f891de93995adca244d4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441c9656b6789947fe5fe369072e95fb3f39a1b21f37b6a1602ee609840ce5b77c55d0b5d1e455020629d28c4791fa705b535e0dd0a4563e130bdcbb5129b5a57ef4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000866a504b41475230075041525449414c0000e253000000000000360000000000000040b9fe7f000000002099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d37534c5032000453454e44f0cb08302c4bbc665b6241592b19fd37ec5d632f323e9ab14fdb75d57f94870302a08601000000a0bb0d000000220200000000000017a914d269ef0be66e9b689bee7a071d08cc0a7151b32a8722020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac83300f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441073b92e8a0e327b928b1624d876c3a697cc1c77c27457c8d2c3591b3b0a9d4587401b8dc64f3ebacd3b75598a18cdc36fd82b1e3b3b11b7340db76e66713c6a04121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff88bb5c0d60e11b4038b00af152f9792fa954571ffdd2413a85f1c26bfd930c25010000006441acecbcb82f72ad54a09e166deb28a22ca22edff2317d388ef7bcefe8a4e11827fc1d57e34f23fa5b5f2b22accc0185a01619b933d8821bdd184e8c6179a4de664121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000866a504b41475230075041525449414c0000705e00d6e2530000f41ee5af3500000000a61950caffff7f2099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d37534c5032000453454e44f0cb08302c4bbc665b6241592b19fd37ec5d632f323e9ab14fdb75d57f94870302a08601000000a0bb0d000000220200000000000017a91412b672fccd4a0202fe588746b3c0aba2b77cfb2e8722020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac83300f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const offerTxid =
-            '322da86c0fd6b008298bc21f6a344647d225f3ed20ff597860d7e9ab9f5428f7';
+            '038fb0787b3deeff0b8785430ac4d63fdb263eaa4869b6082a0eb10901a37005';
         mockedChronik.setBroadcastTx(offerHex, offerTxid);
 
         // Make sure it's cached
@@ -2276,13 +2265,10 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '28967de39bdb1af326e5cb2ffecf1f320dedfb04';
-        // Note we have to create a second partial to get an acceptable price
-        const EXPECTED_SECOND_P2SH = 'd269ef0be66e9b689bee7a071d08cc0a7151b32a';
+        const EXPECTED_OFFER_P2SH = '12b672fccd4a0202fe588746b3c0aba2b77cfb2e';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
-        mockedChronik.setUtxosByScript('p2sh', EXPECTED_SECOND_P2SH, []);
 
         // Note that we cannot use mockedAgora to avoid agoraQueryErrors, as we need a proper
         // agora object to build the partial
@@ -2372,7 +2358,7 @@ describe('<Token /> available actions rendered', () => {
             screen.getByText(`${actualOfferedQty} $FIRMA`),
         ).toBeInTheDocument();
         // Actual price calculated from AgoraOffer
-        const actualPricePerTokenForMinBuy = '39,766.67 XEC';
+        const actualPricePerTokenForMinBuy = '40,000.00 XEC';
         // We see the price once; it is not previewed as we need to calculate it before we
         // show the modal
         expect(
@@ -2380,7 +2366,7 @@ describe('<Token /> available actions rendered', () => {
         ).toBeInTheDocument();
         // We see the full receive XEC amount
         expect(screen.getByText('You receive:')).toBeInTheDocument();
-        expect(screen.getByText('397,666.67 XEC')).toBeInTheDocument();
+        expect(screen.getByText('400,000.01 XEC')).toBeInTheDocument();
 
         // We can cancel and not create this listing
         await userEvent.click(screen.getByText('Cancel'));
@@ -2411,7 +2397,7 @@ describe('<Token /> available actions rendered', () => {
 
         // Mock a bid price
         when(fetch)
-            .calledWith(`https://firma.cash/api/bid`)
+            .calledWith(`https://firmaprotocol.com/api/bid`)
             .mockResolvedValue({
                 json: () => Promise.resolve({ bid: 40000.0 }),
             });
@@ -2431,13 +2417,10 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '28967de39bdb1af326e5cb2ffecf1f320dedfb04';
-        // Note we have to create a second partial to get an acceptable price
-        const EXPECTED_SECOND_P2SH = 'd269ef0be66e9b689bee7a071d08cc0a7151b32a';
+        const EXPECTED_OFFER_P2SH = '12b672fccd4a0202fe588746b3c0aba2b77cfb2e';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
-        mockedChronik.setUtxosByScript('p2sh', EXPECTED_SECOND_P2SH, []);
 
         // Note that we cannot use mockedAgora to avoid agoraQueryErrors, as we need a proper
         // agora object to build the partial
@@ -2509,7 +2492,7 @@ describe('<Token /> available actions rendered', () => {
             screen.getByText(`${actualOfferedQty} $FIRMA`),
         ).toBeInTheDocument();
         // Actual price calculated from AgoraOffer
-        const actualPricePerTokenForMinBuy = '39,766.67 XEC';
+        const actualPricePerTokenForMinBuy = '40,000.00 XEC';
         // We see the price once; it is not previewed as we need to calculate it before we
         // show the modal
         expect(
@@ -2517,7 +2500,7 @@ describe('<Token /> available actions rendered', () => {
         ).toBeInTheDocument();
         // We see the full receive XEC amount
         expect(screen.getByText('You receive:')).toBeInTheDocument();
-        expect(screen.getByText('397,666.67 XEC')).toBeInTheDocument();
+        expect(screen.getByText('400,000.01 XEC')).toBeInTheDocument();
 
         // We see an alert as the hot wallet cannot cover this redemption
         expect(
@@ -2538,7 +2521,7 @@ describe('<Token /> available actions rendered', () => {
 
         // Mock a bid price
         when(fetch)
-            .calledWith(`https://firma.cash/api/bid`)
+            .calledWith(`https://firmaprotocol.com/api/bid`)
             .mockResolvedValue(new Error('error getting firma bid price'));
 
         // Make sure FIRMA is cached
@@ -2629,35 +2612,6 @@ describe('<Token /> available actions rendered', () => {
             screen.queryByText('Create the following sell offer?'),
         ).not.toBeInTheDocument();
     });
-    it('The FIRMA OrderBook loads with price in USD', async () => {
-        // Make sure FIRMA is cached
-        mockedChronik.setTx(FIRMA.tx.txid, FIRMA.tx);
-        mockedChronik.setToken(FIRMA.tokenId, FIRMA.token);
-        const mockedAgora = new MockAgora();
-        mockedAgora.setActiveOffersByTokenId(FIRMA.tokenId, [mockFirmaOffer]);
-        render(
-            <CashtabTestWrapper
-                chronik={mockedChronik}
-                ecc={ecc}
-                agora={mockedAgora}
-                route={`/send-token/${FIRMA.tokenId}`}
-            />,
-        );
-
-        const { tokenName } = FIRMA.token.genesisInfo;
-
-        // Wait for element to get token info and load
-        expect(await screen.findAllByText(new RegExp(tokenName))).toHaveLength(
-            4,
-        );
-
-        const priceSwitch = await screen.findByTitle(
-            `Toggle price for ${FIRMA.tokenId}`,
-        );
-
-        // FIRMA orderbook loads with fiat price by default
-        expect(priceSwitch).toBeChecked();
-    });
     it('We can SEND or BURN an SLP MINT VAULT token', async () => {
         const mockedAgora = new MockAgora();
 
@@ -2668,17 +2622,23 @@ describe('<Token /> available actions rendered', () => {
 
         // MINT VAULT send
         const hex =
-            '0200000002e227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f01000000644149cb2fe7f9043b8071807ed49eefb923df27bc6884577491294dc5b58200d55e8cfe98e32b8de404761aa90a801c3dfd49ae5f37104fb89f9cfbe50d6508f9174121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf79261803000000644120d97a60e4d2f7fff034ff23b798d88cec03ad9101397acfa985c0ce11732d2d5aff6c984b47c6db159e8b54f509e20725e8b29b4a8cb6a7012c8d5fa1b4a8e64121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000000108000000000001869f22020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac0c310f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf792618030000006441bd412de68ed26d6e038e04ac4974000106c916c122d5a6c4aa6458317100d43a1d3184906286d3286b9dd74c712b868e3668966c6edf9719c1fc844b7ea2a9634121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffe227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f01000000644105d8ab490001c5822f7afdd59f6051a2b2ea6100bf7e38e936c1724970e413c265e10b0b4fabdc66ccc1da89709e46020f008ccb4007c653cd888437e27bf8514121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000000108000000000001869f22020000000000001976a91495e79f51d4260bc0dc3ba7fb77c7be92d0fbdd1d88ac22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac0c310f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const txid =
-            'e2c0ccca81ee9879a6d084457dfb5a8342f07683fe18b26af71f869ea56b85c8';
+            '183cda9bc36776610c3a304365b0e4fe76116e0f97bf99197df4de179e779ca6';
         mockedChronik.setBroadcastTx(hex, txid);
 
         // MINT VAULT burn
-        const burnHex =
-            '0200000002e227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f01000000644130fda25f9cdca0a091d18abb0fe56bb693c6d168424c92e688a4a237389bf8e02409e2c339616e7506aa289b371f1cd35685a8c35f7076f7cf793841ceab7dbe4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf79261803000000644134ea64b465369fb89dc561cf8e2076fce1156caaafa9e0d11ec16caf040cf5b703bceab7c5c4f221890de6bb85cba010b29796ce62d3944633783e29f019e43f4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff030000000000000000376a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000001869f22020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac84330f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
-        const burnTxid =
-            '4988233995f88af52086f7a5775591159ee3d808b47260c4f5b1ffa9ab25f352';
-        mockedChronik.setBroadcastTx(burnHex, burnTxid);
+        const burnPrepHex =
+            '0200000002e227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f0100000064413c32f0ee85ed4cb443a208f912d4a89f8144bd181b711eb6c1dd027dd5aef763015d7c679d68515e5f84dfeaf0db0f3908f8e291ff542a090b1f2c909d484d774121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffa69c779e17def47d1999bf970f6e1176fee4b06543303a0c617667c39bda3c180300000064415c93463a7209c0657c40540827006a004157440eeb1dc85f6dea8414328e41e6048b46d7bde463b0e08438ffc183a002aab5a3e6dcb22eb7a5cb4d16bf4279b24121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000000108000000000001869f22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac22020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac172d0f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
+        const burnPrepTxid =
+            'd1c3eea6b7e8fb4ca0aa2f4924339a0c7aa2a78a44893f58a80cb8e9c77965fe';
+        mockedChronik.setBroadcastTx(burnPrepHex, burnPrepTxid);
+
+        const burnTxHex =
+            '0200000001fe6579c7e9b80ca8583f89448aa7a27a0c9a3324492faaa04cfbe8b7a6eec3d1010000006441757af17354e6c5d71b467985fe81eca9a81f79aae8feeb9eddbd838e76f097965d8c5eb311ed047111c52a63890cc1d2fd7325c727b6f5d123d0246bd8a07d1b4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff010000000000000000376a04534c50000102044255524e208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000000100000000';
+        const burnTxTxid =
+            '3014c90880d76da7e780bf791693dced0e1f0c8130d5bf50782adcca20ed349c';
+        mockedChronik.setBroadcastTx(burnTxHex, burnTxTxid);
 
         // Mock NOT blacklisted
         when(fetch)
@@ -2753,9 +2713,8 @@ describe('<Token /> available actions rendered', () => {
         // We can send an SLP MINT VAULT token
         await userEvent.click(sendButton);
 
-        const sendTokenSuccessNotification = await screen.findByText(
-            'eToken sent',
-        );
+        const sendTokenSuccessNotification =
+            await screen.findByText('eToken sent');
         expect(sendTokenSuccessNotification).toHaveAttribute(
             'href',
             `${explorer.blockExplorerUrl}/tx/${txid}`,
@@ -2783,13 +2742,12 @@ describe('<Token /> available actions rendered', () => {
         // Click the Confirm button
         await userEvent.click(screen.getByRole('button', { name: /OK/ }));
 
-        const burnTokenSuccessNotification = await screen.findByText(
-            '🔥 Burn successful',
-        );
+        const burnTokenSuccessNotification =
+            await screen.findByText('🔥 Burn successful');
         await waitFor(() =>
             expect(burnTokenSuccessNotification).toHaveAttribute(
                 'href',
-                `${explorer.blockExplorerUrl}/tx/${burnTxid}`,
+                `${explorer.blockExplorerUrl}/tx/${burnTxTxid}`,
             ),
         );
     });
@@ -2800,15 +2758,15 @@ describe('<Token /> available actions rendered', () => {
         // MINT VAULT offer tx
         // NB SLP listings require 2 txs
         const adPrepHex =
-            '0200000002e227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f01000000644174065d671f0e08e90fb978b679a069cd3e49d842a5254dd6c0533008827da5a4c48f0cb1af8dcd68729a27f1e5c3a775f15b8e74dc0c88ff58db18b5f8e41efd4121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064417a064abf440e3286975e8bf3d9be65e362a223d5d41610a041c899b1ed7e360a4cf88aee6a3f23c23a33326d9ee47f3a36f12421a76cba3085f3f129c0bc7bc04121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000006408000000000001863c060500000000000017a914b3d9292d4facf172a31ba4a75b73fd56a58d50ad8722020000000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac2c2e0f00000000001976a91400549451e5c22b18686cacdf34dce649e5ec3be288ac00000000';
+            '0200000002ef76d01776229a95c45696cf68f2f98c8332d0c53e3f24e73fd9c6deaf7926180300000064412cba633e85b28e60aa68cdf2572afee64ef1af48a39514fd75499ee37425839bcd2c6a5469ce90a92dc978b021c6c4dba92cc6aa52ef8d91aad3cd1c9c6ee1214121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffffe227ad0b23242a4678fc79104cdf1c80914862a3c808066aebc65ef35b52b56f010000006441ef76f29a9027b50013800853c17b2e5a8d3b25f86447f3e908b8d174c019a47009a0c7b480540423195e52bf9358a0c757d9193c16fc10969ce9f94ccecefad14121031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02dffffffff040000000000000000406a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba325108000000000000006408000000000001863c060500000000000017a9143372e00e99d216de6ef5d3f5b6e527537bac02fc8722020000000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac2c2e0f00000000001976a9143a5fb236934ec078b4507c303d3afd82067f8fc188ac00000000';
         const adPrepTxid =
-            '53fcd26eb28a1cd5cf5be80ba5d6c950d838bc6592b496ab61faf0e03c55562f';
+            '09b59e131e260ecbfbc4616ab098de4b8c1373f02b153b27a7e45bd20c14bb94';
         mockedChronik.setBroadcastTx(adPrepHex, adPrepTxid);
 
         const offerHex =
-            '02000000012f56553ce0f0fa61ab96b49265bc38d850c9d6a50be85bcfd51c8ab26ed2fc5301000000dd0441475230075041525449414c410e110dc50dbd3c468db5a244e43386b92fdeadc53817d2ba90c23378ffa9e10a9285834144f71861940694e8d356f64833b2a84d396e3b16a4347a4a198e54c0414c8c4c766a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba32510800000000000000000000b1a5470100000000c64603000000000026e2ad07000000002099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d01557f77ad075041525449414c88044147523087ffffffff020000000000000000376a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba3251080000000000000064220200000000000017a9142c4d4e40520269461cfac4764915ffb1d1de71628700000000';
+            '020000000194bb140cd25be4a7273b152bf073138c4bde98b06a61c4fbcb0e261e139eb50901000000dd0441475230075041525449414c4164b0f2daedb9049574d6d1b6de1b61ae2a5bd9b45eb5c547a7abed87b6f7360239f0cb3775f1f0fec98b380b18bdeebde206e118648bdd60479787b7ed170538414c8c4c766a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba32510800000000000000000000b7ec10ffb0a5470135a6d4e3c64603004a8c65fa25e2ad072099c53f031d4603bdc23aca9432f903e3cf5975a3f655cc3fa5057c61d00dfc1ca5dfd02d01557f77ad075041525449414c88044147523087ffffffff020000000000000000376a04534c500001020453454e44208ecb9c25978f429472f3e9f9c048222f6ac9977e7d1313781f0e9ac1bdba3251080000000000000064220200000000000017a914e219eaeb3198314f300f2e168d86a20ff2b90dd18700000000';
         const offerTxid =
-            'ad34ebf9e04be21e447b08d04e5578e57a6e41db84913d53b9d853ff5ea845e5';
+            'e1add1c489698da8aab34a95db8d481c96ee72ba46da0b8635c858d30b459b8b';
         mockedChronik.setBroadcastTx(offerHex, offerTxid);
 
         // Mock response for agora select params check
@@ -2817,7 +2775,7 @@ describe('<Token /> available actions rendered', () => {
         // console.log(toHex(shaRmd160(agoraScript.bytecode)));
         // to ecash-agora lib and running this test
         // Note that Date() and Math.random() must be mocked to keep this deterministic
-        const EXPECTED_OFFER_P2SH = '2c4d4e40520269461cfac4764915ffb1d1de7162';
+        const EXPECTED_OFFER_P2SH = 'e219eaeb3198314f300f2e168d86a20ff2b90dd1';
 
         // We mock no existing utxos
         mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
@@ -2854,7 +2812,7 @@ describe('<Token /> available actions rendered', () => {
         expect(screen.getByTitle('Toggle Sell Token')).toBeEnabled();
 
         // The list button is disabled on load
-        const listButton = screen.getByRole('button', {
+        const listButton = await screen.findByRole('button', {
             name: /List Mint Vault Test Token Beta/,
         });
         expect(listButton).toBeDisabled();
@@ -2886,7 +2844,7 @@ describe('<Token /> available actions rendered', () => {
         await userEvent.click(listButton);
 
         // We see expected confirmation modal to list the Token
-        expect(screen.getByText('List MVTT β?')).toBeInTheDocument();
+        expect(await screen.findByText('List MVTT β?')).toBeInTheDocument();
         expect(
             screen.getByText('Create the following sell offer?'),
         ).toBeInTheDocument();
@@ -2910,5 +2868,104 @@ describe('<Token /> available actions rendered', () => {
                 `${actualOfferedQty} Mint Vault Test Token Beta listed for ${actualPricePerTokenForMinBuy} per token`,
             ),
         ).toBeInTheDocument();
+    });
+    it('We do not allow users to list FIRMA below the bid price', async () => {
+        // Mock Math.random()
+        jest.spyOn(global.Math, 'random').mockReturnValue(0.5); // set a fixed value
+
+        // Mock a bid price
+        when(fetch)
+            .calledWith(`https://firmaprotocol.com/api/bid`)
+            .mockResolvedValue({
+                json: () => Promise.resolve({ bid: 40000.0 }),
+            });
+
+        // Mock a hot wallet balance for FIRMA_REDEEM_WALLET
+        mockedChronik.setUtxosByAddress(FIRMA_REDEEM_ADDRESS, [
+            { sats: 1_000_000_00n },
+        ]);
+
+        // Make sure it's cached
+        mockedChronik.setTx(FIRMA.tx.txid, FIRMA.tx);
+        mockedChronik.setToken(FIRMA.tokenId, FIRMA.token);
+
+        // Mock response for agora select params check
+        // Note
+        // We obtain EXPECTED_OFFER_P2SH by adding
+        // console.log(toHex(shaRmd160(agoraScript.bytecode)));
+        // to ecash-agora lib and running this test
+        // Note that Date() and Math.random() must be mocked to keep this deterministic
+        const EXPECTED_OFFER_P2SH = '840d485a7de0117b289606cfb68cf1b8407c763b';
+
+        // We mock no existing utxos
+        mockedChronik.setUtxosByScript('p2sh', EXPECTED_OFFER_P2SH, []);
+
+        // Note that we cannot use mockedAgora to avoid agoraQueryErrors, as we need a proper
+        // agora object to build the partial
+        // This means we cannot mock firma offers in the OrderBook for this test
+        const agora = new Agora(mockedChronik);
+
+        render(
+            <CashtabTestWrapper
+                chronik={mockedChronik}
+                ecc={ecc}
+                agora={agora}
+                route={`/send-token/${FIRMA.tokenId}`}
+            />,
+        );
+
+        const { tokenName } = FIRMA.token.genesisInfo;
+
+        // Wait for element to get token info and load
+        expect(
+            (await screen.findAllByText(new RegExp(tokenName)))[0],
+        ).toBeInTheDocument();
+
+        // Firma token icon is rendered
+        expect(
+            await screen.findByAltText(`icon for ${FIRMA.tokenId}`),
+        ).toBeInTheDocument();
+
+        // Token actions are available
+        expect(screen.getByTitle('Token Actions')).toBeInTheDocument();
+
+        // On load, default action for FIRMA is to redeem it
+        expect(screen.getByTitle('Toggle Redeem FIRMA')).toBeEnabled();
+
+        // We can though manually click to list it
+        await userEvent.click(screen.getByTitle('Toggle Sell Token'));
+
+        // We can try to list for less than $1
+        await userEvent.type(screen.getByPlaceholderText('Offered qty'), '1');
+        // List for 1,000 XEC
+        await userEvent.type(
+            screen.getByPlaceholderText('Enter list price (per token)'),
+            '1000',
+        );
+
+        // Make sure the min buy is correct
+        await userEvent.clear(screen.getByPlaceholderText('Min qty'));
+        await userEvent.type(screen.getByPlaceholderText('Min qty'), '1');
+
+        // The redeem button is disabled on load
+        const listButton = await screen.findByRole('button', {
+            name: /List Firma/,
+        });
+
+        // try to list
+        await userEvent.click(listButton);
+
+        // Async as we must wait for multiple partials
+        expect(await screen.findByText('List FIRMA?')).toBeInTheDocument();
+
+        // We see a warning msg about the poorly selected price
+        expect(
+            await screen.findByText(
+                `⚠️ Warning: You are listing FIRMA for 1,000 XEC per token, which is below FIRMA's current buy price of 40,000 XEC per token. You should redeem FIRMA instead to get the best price.`,
+            ),
+        ).toBeInTheDocument();
+
+        // The "OK" button is disabled
+        expect(screen.getByText('OK')).toBeDisabled();
     });
 });

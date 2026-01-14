@@ -101,13 +101,15 @@ def filter_protocol(hostmap, protocol="s"):
     return eligible
 
 
-def get_eligible_servers(hostmap=None, protocol="s", exclude_set=set()):
+def get_eligible_servers(hostmap=None, protocol="s", exclude_set: Optional[set] = None):
     if hostmap is None:
         hostmap = networks.net.DEFAULT_SERVERS
+    exclude_set = exclude_set or set()
     return list(set(filter_protocol(hostmap, protocol)) - exclude_set)
 
 
-def pick_random_server(hostmap=None, protocol="s", exclude_set=set()):
+def pick_random_server(hostmap=None, protocol="s", exclude_set: Optional[set] = None):
+    exclude_set = exclude_set or set()
     eligible = get_eligible_servers(hostmap, protocol, exclude_set)
     return random.choice(eligible) if eligible else None
 
@@ -203,7 +205,7 @@ def deserialize_server(server_str):
 
 
 def serialize_server(host, port, protocol):
-    return str(":".join([host, port, protocol]))
+    return str(f"{host}:{port}:{protocol}")
 
 
 bypass_proxy_filters = [check_proxy_bypass_tor_control]
@@ -253,9 +255,9 @@ class Network(util.DaemonThread):
 
     tor_controller: TorController = None
 
-    def __init__(self, config: Optional[SimpleConfig] = None):
+    def __init__(self, config: SimpleConfig):
         util.DaemonThread.__init__(self)
-        self.config = config or SimpleConfig()
+        self.config = config
         self.num_server = 10 if not self.config.get("oneserver") else 0
         self.blockchains = blockchain.read_blockchains(self.config)
         """Dict of blockchains (main chain and forks) indexed by base heights."""
@@ -529,9 +531,9 @@ class Network(util.DaemonThread):
                 # an interface in the future
                 return message_id
         # Now, if no interface, we will raise AssertionError
-        assert isinstance(
-            interface, Interface
-        ), f"queue_request: No interface! (request={method} params={params})"
+        assert isinstance(interface, Interface), (
+            f"queue_request: No interface! (request={method} params={params})"
+        )
         if self.debug:
             self.print_error(interface.host, "-->", method, params, message_id)
         interface.queue_request(method, params, message_id)

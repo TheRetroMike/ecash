@@ -12,13 +12,13 @@
             ],
             "include": "(^(src|chronik)/.*\\.(h|c|cpp|mm)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
-        "black": {
-            "type": "black",
-            "version": ">=24.0.0",
+        "ruff-format": {
+            "type": "ruff-format",
+            "version": ">=0.14.0",
             "include": [
                 "(\\.py$)",
                 "(^electrum/electrum-abc$)"
@@ -26,12 +26,13 @@
             "exclude": [
                 "(^contrib/apple-sdk-tools/)",
                 "(^electrum/electrumabc_gui/qt/icons.py)",
-                "(\\_pb2.py$)"
+                "(\\_pb2.py$)",
+                "(^src/crc32c/)"
             ]
         },
-        "flake8": {
-            "type": "flake8",
-            "version": ">=5.0",
+        "ruff-check": {
+            "type": "ruff-check",
+            "version": ">=0.14.0",
             "include": [
                 "(\\.py$)",
                 "(^electrum/electrum-abc$)"
@@ -40,17 +41,13 @@
                 "(^contrib/apple-sdk-tools/)",
                 "(^electrum/electrumabc_gui/qt/icons.py)",
                 "(\\_pb2.py$)"
-            ],
-            "flags": [
-                "--ignore=A003,E203,E303,E305,E501,E704,W503,W504",
-                "--require-plugins=flake8-comprehensions,flake8-builtins"
             ]
         },
         "lint-format-strings": {
             "type": "lint-format-strings",
             "include": "(^(src|chronik)/.*\\.(h|c|cpp)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)",
                 "(^src/test/fuzz/strprintf.cpp$)"
             ]
@@ -75,7 +72,7 @@
             "type": "lint-locale-dependence",
             "include": "(^(src|chronik)/.*\\.(h|cpp)$)",
             "exclude": [
-                "(^src/(crypto/ctaes/|leveldb/|secp256k1/|tinyformat.h))",
+                "(^src/(crc32c|crypto/ctaes/|leveldb/|secp256k1/|tinyformat.h))",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -83,7 +80,7 @@
             "type": "lint-cheader",
             "include": "(^(src|chronik)/.*\\.(h|cpp)$)",
             "exclude": [
-                "(^src/(crypto/ctaes|secp256k1|leveldb)/)",
+                "(^src/(crc32c|crypto/ctaes|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -93,10 +90,10 @@
                 "(^build-aux/m4/)",
                 "(^depends/)",
                 "(^doc/release-notes/)",
-                "(^src/(qt/locale|secp256k1|leveldb)/)",
+                "(^src/(crc32c|qt/locale|secp256k1|leveldb)/)",
                 "(^test/lint/dictionary/)",
                 "(^web/e.cash/public/animations/)",
-                "(package-lock.json)",
+                "(pnpm-lock.yaml)",
                 "(^electrum/electrumabc/wordlist/)",
                 "(^doc/standards/)"
             ],
@@ -108,7 +105,7 @@
             "type": "lint-assert-with-side-effects",
             "include": "(^(src|chronik)/.*\\.(h|cpp)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -116,7 +113,7 @@
             "type": "lint-include-quotes",
             "include": "(^(src|chronik)/.*\\.(h|cpp)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -124,7 +121,7 @@
             "type": "lint-include-guard",
             "include": "(^(src|chronik)/.*\\.h$)",
             "exclude": [
-                "(^src/(crypto/ctaes|secp256k1|leveldb)/)",
+                "(^src/(crc32c|crypto/ctaes|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)",
                 "(^src/tinyformat.h$)"
             ]
@@ -133,7 +130,7 @@
             "type": "lint-include-source",
             "include": "(^(src|chronik)/.*\\.(h|c|cpp)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -145,7 +142,7 @@
             "type": "lint-stdint",
             "include": "(^(src|chronik)/.*\\.(h|c|cpp)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)",
                 "(^src/compat/assumptions.h$)"
             ]
@@ -161,7 +158,8 @@
             "type": "lint-python-encoding",
             "include": "(\\.py$)",
             "exclude": [
-                "(^contrib/apple-sdk-tools/)"
+                "(^contrib/apple-sdk-tools/)",
+                "(^src/crc32c/)"
             ]
         },
         "shellcheck": {
@@ -189,7 +187,7 @@
             "type": "lint-cpp-void-parameters",
             "include": "(^(src|chronik)/.*\\.(h|cpp)$)",
             "exclude": [
-                "(^src/(crypto/ctaes|secp256k1|leveldb)/)",
+                "(^src/(crc32c|crypto/ctaes|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -208,7 +206,7 @@
             "type": "lint-doxygen",
             "include": "(^(src|chronik)/.*\\.(h|c|cpp)$)",
             "exclude": [
-                "(^src/(crypto/ctaes|secp256k1|leveldb)/)",
+                "(^src/(crc32c|crypto/ctaes|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)"
             ]
         },
@@ -216,7 +214,7 @@
             "type": "lint-whitespace",
             "include": "(\\.(ac|am|cmake|conf|in|include|json|m4|md|openrc|php|pl|rs|sh|txt|yml)$)",
             "exclude": [
-                "(^src/(secp256k1|leveldb)/)",
+                "(^src/(crc32c|secp256k1|leveldb)/)",
                 "(^src/bench/nanobench.h$)",
                 "(^doc/standards/)"
             ]
@@ -224,7 +222,7 @@
         "yamllint": {
             "type": "yamllint",
             "include": "(\\.(yml|yaml)$)",
-            "exclude": "(^src/(secp256k1|leveldb)/)"
+            "exclude": "(^src/(crc32c|secp256k1|leveldb)/)"
         },
         "lint-check-nonfatal": {
             "type": "lint-check-nonfatal",
@@ -259,13 +257,6 @@
                 "--non-interactive"
             ]
         },
-        "lint-python-mutable-default": {
-            "type": "lint-python-mutable-default",
-            "include": "(\\.py$)",
-            "exclude": [
-                "(^contrib/apple-sdk-tools/)"
-            ]
-        },
         "prettier": {
             "type": "prettier",
             "version": ">=2.6.0",
@@ -280,19 +271,6 @@
                 "(^web/.*/translations/.*\\.json$)",
                 "(^web/e.cash/public/animations/)",
                 "(^web/explorer/explorer-server/templates/)"
-            ]
-        },
-        "lint-python-isort": {
-            "type": "lint-python-isort",
-            "version": ">=5.6.4",
-            "include": [
-                "(\\.py$)",
-                "(^electrum/electrum-abc$)"
-            ],
-            "exclude": [
-                "(^contrib/apple-sdk-tools/)",
-                "(^electrum/electrumabc_gui/qt/icons.py)",
-                "(\\_pb2.py$)"
             ]
         },
         "rustfmt": {
@@ -313,16 +291,8 @@
             ],
             "exclude": [
                 "(^web/explorer/)",
-                "(^src/)"
-            ]
-        },
-        "lint-python-flynt": {
-            "type": "lint-python-flynt",
-            "version": ">=0.78",
-            "include": "(\\.py$)",
-            "exclude": [
-                "(^contrib/apple-sdk-tools/)",
-                "(^electrum/)"
+                "(^src/)",
+                "(next-env.d.ts)"
             ]
         }
     }

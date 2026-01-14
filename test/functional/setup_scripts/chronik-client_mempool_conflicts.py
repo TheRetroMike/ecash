@@ -61,14 +61,13 @@ class ChronikClient_Mempool_Conflict_Setup(SetupFramework):
             CTxOut(10000, P2SH_OP_TRUE),
             CTxOut(coinvalue - 100000, P2SH_OP_TRUE),
         ]
-        tx1.rehash()
         tx1_txid = node.sendrawtransaction(tx1.serialize().hex())
         send_ipc_message({"tx1_txid": tx1_txid})
 
         tx2 = CTransaction()
         tx2.vin = [
             CTxIn(
-                COutPoint(int(tx1.hash, 16), 1),
+                COutPoint(tx1.txid_int, 1),
                 SCRIPTSIG_OP_TRUE,
             )
         ]
@@ -76,20 +75,18 @@ class ChronikClient_Mempool_Conflict_Setup(SetupFramework):
             CTxOut(546, P2SH_OP_TRUE),
             CTxOut(coinvalue - 200000, P2SH_OP_TRUE),
         ]
-        tx2.rehash()
         tx2_txid = node.sendrawtransaction(tx2.serialize().hex())
         send_ipc_message({"tx2_txid": tx2_txid})
 
         tx3 = CTransaction()
         tx3.vin = [
             CTxIn(
-                COutPoint(int(tx1.hash, 16), 0),
+                COutPoint(tx1.txid_int, 0),
                 SCRIPTSIG_OP_TRUE,
             ),
-            CTxIn(COutPoint(int(tx2.hash, 16), 0), SCRIPTSIG_OP_TRUE),
+            CTxIn(COutPoint(tx2.txid_int, 0), SCRIPTSIG_OP_TRUE),
         ]
         tx3.vout = [CTxOut(546, P2SH_OP_TRUE)]
-        tx3.rehash()
         tx3_txid = node.sendrawtransaction(tx3.serialize().hex())
         send_ipc_message({"tx3_txid": tx3_txid})
         assert_equal(node.getblockcount(), 101)

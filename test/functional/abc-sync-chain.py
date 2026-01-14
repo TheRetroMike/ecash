@@ -47,7 +47,7 @@ class SyncChainTest(BitcoinTestFramework):
             block = create_block(tip, create_coinbase(height), time)
             block.solve()
             blocks.append(block)
-            tip = block.sha256
+            tip = block.hash_int
             height += 1
             time += 1
 
@@ -61,7 +61,7 @@ class SyncChainTest(BitcoinTestFramework):
 
         # The node should eventually, completely sync without getting stuck
         def node_synced():
-            return node0.getbestblockhash() == blocks[-1].hash
+            return node0.getbestblockhash() == blocks[-1].hash_hex
 
         self.wait_until(node_synced)
 

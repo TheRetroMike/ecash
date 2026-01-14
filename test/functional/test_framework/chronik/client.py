@@ -186,8 +186,9 @@ class ChronikWs:
         self.ping_interval = kwargs.get("ping_interval", 10)
         self.ping_timeout = kwargs.get("ping_timeout", 5)
         self.is_open = False
+        ws_protocol = "wss" if client.https else "ws"
         self.ws_url = (
-            f"{'wss' if client.https else 'ws'}://{client.host}:{client.port}/ws"
+            f"{ws_protocol}://{client.host}:{client.port}{client.path_prefix}/ws"
         )
 
         self.ws = websocket.WebSocketApp(
@@ -259,6 +260,14 @@ class ChronikWs:
         sub = pb.WsSub(is_unsub=is_unsub, blocks=pb.WsSubBlocks())
         self.send_bytes(sub.SerializeToString())
 
+    def sub_to_txs(self, *, is_unsub=False) -> None:
+        sub = pb.WsSub(is_unsub=is_unsub, txs=pb.WsSubTxs())
+        self.send_bytes(sub.SerializeToString())
+
+    def sub_txid(self, txid: str, *, is_unsub=False) -> None:
+        sub = pb.WsSub(is_unsub=is_unsub, txid=pb.WsSubTxId(txid=txid))
+        self.send_bytes(sub.SerializeToString())
+
     def sub_script(self, script_type: str, payload: bytes, *, is_unsub=False) -> None:
         sub = pb.WsSub(
             is_unsub=is_unsub,
@@ -301,7 +310,10 @@ class ChronikClient:
     def __init__(
         self, host: str, port: int, https=False, timeout=DEFAULT_TIMEOUT
     ) -> None:
-        self.host = host
+        # Support for hosts in the form of "https://chronik.foo/xec"
+        host_parts = host.split("/", maxsplit=1)
+        self.host = host_parts[0]
+        self.path_prefix = "/" + host_parts[1] if len(host_parts) > 1 else ""
         self.port = port
         self.timeout = timeout
         self.https = https
@@ -321,6 +333,7 @@ class ChronikClient:
         headers = {}
         if body is not None:
             headers["Content-Type"] = self.CONTENT_TYPE
+        path = self.path_prefix + path
         client.request(method, path, body, headers)
         response = client.getresponse()
         content_type = response.getheader("Content-Type")
@@ -385,6 +398,9 @@ class ChronikClient:
             f"/block-headers/{start_height}/{end_height}{query}", pb.BlockHeaders
         )
 
+    def unconfirmed_txs(self) -> ChronikResponse:
+        return self._request_get("/unconfirmed-txs", pb.TxHistoryPage)
+
     def chronik_info(self) -> ChronikResponse:
         return self._request_get("/chronik-info", pb.ChronikInfo)
 
@@ -403,25 +419,35 @@ class ChronikClient:
         )
 
     def broadcast_tx(
-        self, raw_tx: bytes, skip_token_checks: bool = False
+        self,
+        raw_tx: bytes,
+        skip_token_checks: bool = False,
+        finalization_timeout_secs: int = 0,
     ) -> ChronikResponse:
         return self._request(
             "POST",
             "/broadcast-tx",
             pb.BroadcastTxRequest(
-                raw_tx=raw_tx, skip_token_checks=skip_token_checks
+                raw_tx=raw_tx,
+                skip_token_checks=skip_token_checks,
+                finalization_timeout_secs=finalization_timeout_secs,
             ).SerializeToString(),
             pb.BroadcastTxResponse,
         )
 
     def broadcast_txs(
-        self, raw_txs: List[bytes], skip_token_checks: bool = False
+        self,
+        raw_txs: List[bytes],
+        skip_token_checks: bool = False,
+        finalization_timeout_secs: int = 0,
     ) -> ChronikResponse:
         return self._request(
             "POST",
             "/broadcast-txs",
             pb.BroadcastTxsRequest(
-                raw_txs=raw_txs, skip_token_checks=skip_token_checks
+                raw_txs=raw_txs,
+                skip_token_checks=skip_token_checks,
+                finalization_timeout_secs=finalization_timeout_secs,
             ).SerializeToString(),
             pb.BroadcastTxsResponse,
         )

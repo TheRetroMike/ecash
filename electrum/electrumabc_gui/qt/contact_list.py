@@ -30,9 +30,9 @@ from enum import IntEnum
 from typing import TYPE_CHECKING, List, Optional
 
 import requests
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QObject, QRegExp, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont, QIcon, QPixmap, QRegExpValidator
+from qtpy import QtWidgets
+from qtpy.QtCore import QObject, QRegularExpression, Qt, QThread, Signal
+from qtpy.QtGui import QFont, QIcon, QPixmap, QRegularExpressionValidator
 
 from electrumabc import alias, networks, web
 from electrumabc.address import Address
@@ -52,6 +52,7 @@ from .util import (
     OkButton,
     WindowModalDialog,
     char_width_in_lineedit,
+    copy_to_clipboard,
     getSaveFileName,
     rate_limited,
     webopen,
@@ -67,14 +68,14 @@ class ContactList(PrintError, MessageBoxMixin, MyTreeWidget):
     # Name, Label, Address
     filter_columns = [1, 2, 3]
 
-    contact_updated = pyqtSignal()
+    contact_updated = Signal()
     """Emitted when a contact is added, renamed or deleted"""
 
-    payto_contacts_triggered = pyqtSignal(list)
+    payto_contacts_triggered = Signal(list)
     """Emits a list of selected contacts when the user clicks "Pay to" in the context
     menu"""
 
-    sign_verify_message_triggered = pyqtSignal(Address)
+    sign_verify_message_triggered = Signal(Address)
     """Emits the selected address when the user clicks Sign/Verify in the context
     menu"""
 
@@ -218,9 +219,7 @@ class ContactList(PrintError, MessageBoxMixin, MyTreeWidget):
                 column_title += f" ({len(selected)})"
             menu.addAction(
                 _("Copy {}").format(column_title),
-                lambda: QtWidgets.QApplication.instance()
-                .clipboard()
-                .setText(column_data),
+                lambda: copy_to_clipboard(column_data),
             )
             if (
                 item
@@ -503,8 +502,8 @@ class NewContactDialog(WindowModalDialog):
 
 
 class FetchAliasWorker(QObject):
-    finished = pyqtSignal()
-    timeout = pyqtSignal()
+    finished = Signal()
+    timeout = Signal()
 
     def __init__(self, alias_: str):
         super().__init__()
@@ -547,7 +546,9 @@ class FetchAliasDialog(WindowModalDialog):
         self.alias_edit.setToolTip(
             _("Provide a valid alias: 1-21 lowercase alphanumeric characters")
         )
-        alias_validator = QRegExpValidator(QRegExp(alias.ALIAS_VALIDATOR_REGEXP))
+        alias_validator = QRegularExpressionValidator(
+            QRegularExpression(alias.ALIAS_VALIDATOR_REGEXP)
+        )
         self.alias_edit.setValidator(alias_validator)
         alias_edit_layout.addWidget(self.alias_edit)
         vbox.addLayout(alias_edit_layout)

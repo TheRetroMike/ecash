@@ -5,98 +5,56 @@
 
 #include <script/sigcache.h>
 
-#include <common/system.h>
-#include <cuckoocache.h>
+#include <crypto/sha256.h>
 #include <logging.h>
 #include <pubkey.h>
 #include <random.h>
+#include <script/interpreter.h>
+#include <span.h>
 #include <uint256.h>
 
-#include <algorithm>
 #include <mutex>
-#include <optional>
 #include <shared_mutex>
 #include <vector>
 
-namespace {
+SignatureCache::SignatureCache(const size_t max_size_bytes) {
+    uint256 nonce = GetRandHash();
+    // We want the nonce to be 64 bytes long to force the hasher to process
+    // this chunk, which makes later hash computations more efficient. We
+    // just write our 32-byte entropy twice to fill the 64 bytes.
+    m_salted_hasher.Write(nonce.begin(), 32);
+    m_salted_hasher.Write(nonce.begin(), 32);
 
-/**
- * Valid signature cache, to avoid doing expensive ECDSA signature checking
- * twice for every transaction (once when accepted into memory pool, and
- * again when accepted into the block chain)
- */
-class CSignatureCache {
-private:
-    //! Entries are SHA256(nonce || signature hash || public key || signature):
-    CSHA256 m_salted_hasher;
-    typedef CuckooCache::cache<CuckooCache::KeyOnly<uint256>,
-                               SignatureCacheHasher>
-        map_type;
-    map_type setValid;
-    std::shared_mutex cs_sigcache;
-
-public:
-    CSignatureCache() {
-        uint256 nonce = GetRandHash();
-        // We want the nonce to be 64 bytes long to force the hasher to process
-        // this chunk, which makes later hash computations more efficient. We
-        // just write our 32-byte entropy twice to fill the 64 bytes.
-        m_salted_hasher.Write(nonce.begin(), 32);
-        m_salted_hasher.Write(nonce.begin(), 32);
-    }
-
-    void ComputeEntry(uint256 &entry, const uint256 &hash,
-                      const std::vector<uint8_t> &vchSig,
-                      const CPubKey &pubkey) {
-        CSHA256 hasher = m_salted_hasher;
-        hasher.Write(hash.begin(), 32)
-            .Write(pubkey.data(), pubkey.size())
-            .Write(vchSig.data(), vchSig.size())
-            .Finalize(entry.begin());
-    }
-
-    bool Get(const uint256 &entry, const bool erase) {
-        std::shared_lock<std::shared_mutex> lock(cs_sigcache);
-        return setValid.contains(entry, erase);
-    }
-
-    void Set(const uint256 &entry) {
-        std::unique_lock<std::shared_mutex> lock(cs_sigcache);
-        setValid.insert(entry);
-    }
-    std::optional<std::pair<uint32_t, size_t>> setup_bytes(size_t n) {
-        return setValid.setup_bytes(n);
-    }
-};
-
-/**
- * In previous versions of this code, signatureCache was a local static variable
- * in CachingTransactionSignatureChecker::VerifySignature. We initialize
- * signatureCache outside of VerifySignature to avoid the atomic operation per
- * call overhead associated with local static variables even though
- * signatureCache could be made local to VerifySignature.
- */
-static CSignatureCache signatureCache;
-} // namespace
-
-// To be called once in AppInitMain/BasicTestingSetup to initialize the
-// signatureCache.
-
-bool InitSignatureCache(size_t max_size_bytes) {
-    auto setup_results = signatureCache.setup_bytes(max_size_bytes);
-    if (!setup_results) {
-        return false;
-    }
-
-    const auto [num_elems, approx_size_bytes] = *setup_results;
+    const auto [num_elems, approx_size_bytes] =
+        setValid.setup_bytes(max_size_bytes);
     LogPrintf("Using %zu MiB out of %zu MiB requested for signature cache, "
               "able to store %zu elements\n",
               approx_size_bytes >> 20, max_size_bytes >> 20, num_elems);
-    return true;
+}
+
+void SignatureCache::ComputeEntry(uint256 &entry, const uint256 &hash,
+                                  const std::vector<uint8_t> &vchSig,
+                                  const CPubKey &pubkey) const {
+    CSHA256 hasher = m_salted_hasher;
+    hasher.Write(hash.begin(), 32)
+        .Write(pubkey.data(), pubkey.size())
+        .Write(vchSig.data(), vchSig.size())
+        .Finalize(entry.begin());
+}
+
+bool SignatureCache::Get(const uint256 &entry, const bool erase) {
+    std::shared_lock<std::shared_mutex> lock(cs_sigcache);
+    return setValid.contains(entry, erase);
+}
+
+void SignatureCache::Set(const uint256 &entry) {
+    std::unique_lock<std::shared_mutex> lock(cs_sigcache);
+    setValid.insert(entry);
 }
 
 template <typename F>
-bool RunMemoizedCheck(const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
+bool RunMemoizedCheck(SignatureCache &signatureCache,
+                      const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
                       const uint256 &sighash, bool storeOrErase, const F &fun) {
     uint256 entry;
     signatureCache.ComputeEntry(entry, sighash, vchSig, pubkey);
@@ -115,15 +73,16 @@ bool RunMemoizedCheck(const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
 bool CachingTransactionSignatureChecker::IsCached(
     const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
     const uint256 &sighash) const {
-    return RunMemoizedCheck(vchSig, pubkey, sighash, true,
+    return RunMemoizedCheck(m_signature_cache, vchSig, pubkey, sighash, true,
                             [] { return false; });
 }
 
 bool CachingTransactionSignatureChecker::VerifySignature(
     const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
     const uint256 &sighash) const {
-    return RunMemoizedCheck(vchSig, pubkey, sighash, store, [&] {
-        return TransactionSignatureChecker::VerifySignature(vchSig, pubkey,
-                                                            sighash);
-    });
+    return RunMemoizedCheck(
+        m_signature_cache, vchSig, pubkey, sighash, store, [&] {
+            return TransactionSignatureChecker::VerifySignature(vchSig, pubkey,
+                                                                sighash);
+        });
 }

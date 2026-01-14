@@ -63,7 +63,7 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 include_directories(
 	.
 	src
-	# For the config
+	# For the config and generated context headers
 	${CMAKE_CURRENT_BINARY_DIR}/src
 )
 
@@ -140,7 +140,7 @@ endif()
 # For convenience, we wrap this into a function.
 function(link_secp256k1_internal NAME)
 	target_link_libraries(${NAME} secp256k1)
-	target_compile_definitions(${NAME} PRIVATE HAVE_CONFIG_H SECP256K1_BUILD)
+	target_compile_definitions(${NAME} PRIVATE HAVE_CONFIG_H)
 endfunction(link_secp256k1_internal)
 
 include(InstallationHelper)
@@ -227,6 +227,27 @@ set(SECP256K1_ECMULT_WINDOW_SIZE 15 CACHE STRING "Window size for ecmult precomp
 if(${SECP256K1_ECMULT_WINDOW_SIZE} LESS 2 OR ${SECP256K1_ECMULT_WINDOW_SIZE} GREATER 24)
 	message(FATAL_ERROR "SECP256K1_ECMULT_WINDOW_SIZE must be an integer in range [2..24]")
 endif()
+if(${SECP256K1_ECMULT_WINDOW_SIZE} GREATER 15)
+	# A window size larger than 15 will require deletion of the prebuilt ecmult_static_pre_g.h
+	# file so that it can be rebuilt.
+	file(REMOVE "${CMAKE_CURRENT_SOURCE_DIR}/src/ecmult_static_pre_g.h")
+endif()
+
+# Conditionally regenerate ecmult_static_pre_g.h if it does not exist
+include(NativeExecutable)
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/ecmult_static_pre_g.h")
+	add_native_executable(gen_ecmult_static_pre_g src/gen_ecmult_static_pre_g.c)
+	add_custom_command(
+		OUTPUT src/ecmult_static_pre_g.h
+		COMMAND  "$<TARGET_FILE:gen_ecmult_static_pre_g>"
+		WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+		COMMENT "Generating src/ecmult_static_pre_g.h"
+	)
+	add_custom_target(generate_ecmult_h ALL
+		DEPENDS src/ecmult_static_pre_g.h
+	)
+	add_dependencies(secp256k1 generate_ecmult_h)
+endif()
 
 set(SECP256K1_ECMULT_GEN_PRECISION 4 CACHE STRING "Precision bits to tune the precomputed table size for signing.")
 set(VALID_PRECISIONS 2 4 8)
@@ -239,7 +260,6 @@ option(SECP256K1_ECMULT_STATIC_PRECOMPUTATION "Precompute libsecp256k1's ellipti
 if(SECP256K1_ECMULT_STATIC_PRECOMPUTATION)
 	set(USE_ECMULT_STATIC_PRECOMPUTATION 1)
 
-	include(NativeExecutable)
 	native_add_cmake_flags(
 		"-DSECP256K1_ECMULT_WINDOW_SIZE=${SECP256K1_ECMULT_WINDOW_SIZE}"
 		"-DSECP256K1_ECMULT_GEN_PRECISION=${SECP256K1_ECMULT_GEN_PRECISION}"
@@ -274,38 +294,7 @@ endif()
 
 # Generate the config
 configure_file(src/libsecp256k1-config.h.cmake.in src/libsecp256k1-config.h ESCAPE_QUOTES)
-target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H SECP256K1_BUILD)
-
-# Build the Java binding
-option(SECP256K1_ENABLE_JNI "Enable the Java Native Interface binding" OFF)
-if(SECP256K1_ENABLE_JNI)
-	if(NOT SECP256K1_ENABLE_MODULE_ECDH)
-		message(FATAL_ERROR "The secp256k1 JNI support requires ECDH. Try again with -DSECP256K1_ENABLE_MODULE_ECDH=ON.")
-	endif()
-
-	find_package(Java REQUIRED)
-	find_package(JNI REQUIRED)
-	include(UseJava)
-
-	add_library(secp256k1_jni SHARED
-		src/java/org_bitcoin_NativeSecp256k1.c
-		src/java/org_bitcoin_Secp256k1Context.c
-	)
-
-	install_shared_library(secp256k1_jni ${SECP256K1_INSTALL_EXCLUDE_FROM_ALL})
-
-	target_include_directories(secp256k1_jni PUBLIC ${JNI_INCLUDE_DIRS})
-	# As per CMake documentation: the POSITION_INDEPENDENT_CODE property is set
-	# when a target is created. It defaults to True for SHARED or MODULE library
-	# targets and False otherwise.
-	# The secp256ki_jni library being shared, the property is set and it will
-	# build with PIC enabled. But the secp256k1 dependency might not have the
-	# property set, so it's associated source files won't be built with PIC
-	# enabled. That would cause the linker to fail.
-	# Forcing the property for the secp256k1 library fixes the issue.
-	set_target_properties(secp256k1 PROPERTIES POSITION_INDEPENDENT_CODE ON)
-	link_secp256k1_internal(secp256k1_jni)
-endif()
+target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H)
 
 # Tests
 option(SECP256K1_BUILD_TEST "Build secp256k1's unit tests" ON)
@@ -328,34 +317,6 @@ if(SECP256K1_BUILD_TEST)
 	if(NOT SECP256K1_ENABLE_COVERAGE)
 		target_compile_definitions(secp256k1-tests PRIVATE VERIFY)
 		target_compile_definitions(secp256k1-exhaustive_tests PRIVATE VERIFY)
-	endif()
-
-	if(SECP256K1_ENABLE_JNI)
-		set(SECP256k1_JNI_TEST_JAR "secp256k1-jni-test")
-
-		set(CMAKE_JNI_TARGET TRUE)
-		add_jar(secp256k1-jni-test-jar
-			SOURCES
-				src/java/org/bitcoin/NativeSecp256k1.java
-				src/java/org/bitcoin/NativeSecp256k1Test.java
-				src/java/org/bitcoin/NativeSecp256k1Util.java
-				src/java/org/bitcoin/Secp256k1Context.java
-			ENTRY_POINT org/bitcoin/NativeSecp256k1Test
-			OUTPUT_NAME "${SECP256k1_JNI_TEST_JAR}"
-		)
-		add_dependencies(secp256k1-jni-test-jar secp256k1_jni)
-
-		add_custom_target(check-secp256k1-java
-			COMMAND
-				"${Java_JAVA_EXECUTABLE}"
-				"-Djava.library.path=${CMAKE_CURRENT_BINARY_DIR}"
-				"-jar"
-				"${SECP256k1_JNI_TEST_JAR}.jar"
-			WORKING_DIRECTORY
-				"${CMAKE_CURRENT_BINARY_DIR}"
-		)
-		add_dependencies(check-secp256k1-java secp256k1-jni-test-jar)
-		add_dependencies(check-secp256k1 check-secp256k1-java)
 	endif()
 endif(SECP256K1_BUILD_TEST)
 

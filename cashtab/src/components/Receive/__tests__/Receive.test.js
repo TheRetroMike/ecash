@@ -6,7 +6,7 @@ import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
-import { walletWithXecAndTokens } from 'components/App/fixtures/mocks';
+import { walletWithXecAndTokensActive } from 'components/App/fixtures/mocks';
 import { when } from 'jest-when';
 import 'fake-indexeddb/auto';
 import localforage from 'localforage';
@@ -58,7 +58,7 @@ describe('<Receive />', () => {
     it('Renders as expected on desktop, including copy paste functionality of clicking on the QR code', async () => {
         // Mock the app with context at the Receive screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/receive" />);
@@ -101,8 +101,13 @@ describe('<Receive />', () => {
         // QR Code is rendered
         const EXPECTED_DESKTOP_WIDTH = '420';
         expect(qrCodeItself).toBeInTheDocument();
-        expect(qrCodeItself).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
-        expect(qrCodeItself).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
+        // In qrcode.react v4, the title prop creates a <title> element inside the SVG
+        // So we need to find the parent SVG element
+        const svgElement = qrCodeItself.closest('svg');
+        expect(svgElement).toBeInTheDocument();
+        // qrcode.react v4 sets width/height attributes on the SVG element
+        expect(svgElement).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
+        expect(svgElement).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
 
         // We can enter an amount to generate a bip21 QR code and query string
         await userEvent.type(
@@ -111,9 +116,7 @@ describe('<Receive />', () => {
         );
 
         // We see expected validation error bc an eCash amount cannot have more than 2 decimal places
-        expect(
-            screen.getByText('XEC supports up to 2 decimal places'),
-        ).toBeInTheDocument();
+        expect(screen.getByText('Max 2 decimal places')).toBeInTheDocument();
 
         // Enter a valid amount
         await userEvent.clear(
@@ -165,9 +168,7 @@ describe('<Receive />', () => {
 
         // If we switch back to XEC, form validation catches 4 decimal places
         await user.click(screen.getByTitle('Toggle Firma'));
-        expect(
-            screen.getByText('XEC supports up to 2 decimal places'),
-        ).toBeInTheDocument();
+        expect(screen.getByText('Max 2 decimal places')).toBeInTheDocument();
     });
     it('Renders the Receive screen with QR code of expected width for smallest supported mobile view', async () => {
         // Reset the width to mobile
@@ -177,7 +178,7 @@ describe('<Receive />', () => {
         });
         // Mock the app with context at the Receive screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/receive" />);
@@ -206,8 +207,11 @@ describe('<Receive />', () => {
         const EXPECTED_DESKTOP_WIDTH = '245';
         const qrCodeItself = screen.queryByTitle('Raw QR Code');
         expect(qrCodeItself).toBeInTheDocument();
-        expect(qrCodeItself).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
-        expect(qrCodeItself).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
+        // In qrcode.react v4, the title prop creates a <title> element inside the SVG
+        const svgElement = qrCodeItself.closest('svg');
+        expect(svgElement).toBeInTheDocument();
+        expect(svgElement).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
+        expect(svgElement).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
     });
     it('Renders the Receive screen with QR code of size that is fully viewable in extension dimensions', async () => {
         // Reset the width and height to extension
@@ -224,7 +228,7 @@ describe('<Receive />', () => {
         });
         // Mock the app with context at the Receive screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/receive" />);
@@ -253,7 +257,10 @@ describe('<Receive />', () => {
         const EXPECTED_DESKTOP_WIDTH = '250';
         const qrCodeItself = screen.queryByTitle('Raw QR Code');
         expect(qrCodeItself).toBeInTheDocument();
-        expect(qrCodeItself).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
-        expect(qrCodeItself).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
+        // In qrcode.react v4, the title prop creates a <title> element inside the SVG
+        const svgElement = qrCodeItself.closest('svg');
+        expect(svgElement).toBeInTheDocument();
+        expect(svgElement).toHaveAttribute('width', EXPECTED_DESKTOP_WIDTH);
+        expect(svgElement).toHaveAttribute('height', EXPECTED_DESKTOP_WIDTH);
     });
 });

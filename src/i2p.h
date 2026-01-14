@@ -8,7 +8,6 @@
 #include <compat.h>
 #include <netaddress.h>
 #include <sync.h>
-#include <threadinterrupt.h>
 #include <util/fs.h>
 #include <util/sock.h>
 
@@ -17,6 +16,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+class CThreadInterrupt;
 
 namespace i2p {
 
@@ -149,14 +150,6 @@ namespace sam {
              */
             std::string Get(const std::string &key) const;
         };
-
-        /**
-         * Log a message in the `BCLog::I2P` category.
-         * @param[in] fmt printf(3)-like format string.
-         * @param[in] args printf(3)-like arguments that correspond to `fmt`.
-         */
-        template <typename... Args>
-        void Log(const std::string &fmt, const Args &...args) const;
 
         /**
          * Send request and get a reply from the SAM proxy.

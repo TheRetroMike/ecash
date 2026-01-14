@@ -5,6 +5,7 @@
 
 #include <txmempool.h>
 
+#include <blockindex.h>
 #include <clientversion.h>
 #include <coins.h>
 #include <common/system.h>
@@ -17,10 +18,10 @@
 #include <policy/policy.h>
 #include <reverse_iterator.h>
 #include <undo.h>
+#include <util/check.h>
 #include <util/moneystr.h>
 #include <util/time.h>
 #include <validationinterface.h>
-#include <version.h>
 
 #include <algorithm>
 #include <cmath>
@@ -304,6 +305,9 @@ void CTxMemPool::removeConflicts(const CTransaction &tx) {
         if (it != mapNextTx.end()) {
             const CTransaction &txConflict = *it->second;
             if (txConflict != tx) {
+                // We reject blocks that contains a tx conflicting with a
+                // finalized tx, so this should never happen
+                Assume(!isAvalancheFinalizedPreConsensus(txConflict.GetId()));
                 ClearPrioritisation(txConflict.GetId());
                 removeRecursive(txConflict, MemPoolRemovalReason::CONFLICT);
             }
@@ -322,20 +326,42 @@ void CTxMemPool::updateFeeForBlock() {
 }
 
 void CTxMemPool::removeForFinalizedBlock(
-    const std::vector<CTransactionRef> &vtx) {
+    const std::unordered_set<TxId, SaltedTxIdHasher>
+        &confirmedTxIdsInNonFinalizedBlocks) {
     AssertLockHeld(cs);
 
-    for (const auto &tx : vtx) {
-        // If the tx has a parent, it will be in the block as well or the block
-        // is invalid. If the tx has a child, it can remain in the tree for the
-        // next block. So we can simply remove the txs from the block with no
-        // further check.
-        if (auto removed_tx = finalizedTxs.remove(tx->GetId())) {
-            m_finalizedTxsFitter.removeTxUnchecked(removed_tx->GetTxSize(),
-                                                   removed_tx->GetSigChecks(),
-                                                   removed_tx->GetFee());
+    std::vector<CTxMemPoolEntryRef> finalizedTxsToKeep;
+    finalizedTxs.forEachLeaf(
+        [&](const CTxMemPoolEntryRef &entry) NO_THREAD_SAFETY_ANALYSIS {
+            if (mapTx.count(entry->GetTx().GetId()) > 0 ||
+                confirmedTxIdsInNonFinalizedBlocks.count(
+                    entry->GetTx().GetId()) > 0) {
+                // The transaction is either in the mempool (not confirmed) or
+                // confirmed in a non-finalized block (which might be rejeted by
+                // avalanche), so we keep it in the radix tree.
+                finalizedTxsToKeep.push_back(entry);
+            }
+
+            // All the other transactions are either confirmed in the finalized
+            // block or in one of its ancestors.
+            return true;
+        });
+
+    // Clear the radix tree and add back the transactions that are not confirmed
+    decltype(finalizedTxs) empty;
+    std::swap(finalizedTxs, empty);
+
+    m_finalizedTxsFitter.resetBlock();
+    for (const auto &entry : finalizedTxsToKeep) {
+        // We don't need to proceed to all the checks that happen during
+        // finalization here so we only recompute the size and sigchecks.
+        if (finalizedTxs.insert(entry)) {
+            m_finalizedTxsFitter.addTx(entry->GetTxSize(),
+                                       entry->GetSigChecks(), entry->GetFee());
         }
     }
+
+    nTransactionsUpdated++;
 }
 
 void CTxMemPool::_clear() {
@@ -350,9 +376,14 @@ void CTxMemPool::_clear() {
     ++nTransactionsUpdated;
 }
 
-void CTxMemPool::clear() {
+void CTxMemPool::clear(bool include_finalized_txs) {
     LOCK(cs);
     _clear();
+    if (include_finalized_txs) {
+        RadixTree<CTxMemPoolEntry, MemPoolEntryRadixTreeAdapter> empty;
+        std::swap(finalizedTxs, empty);
+        m_finalizedTxsFitter.resetBlock();
+    }
 }
 
 void CTxMemPool::check(const CCoinsViewCache &active_coins_tip,
@@ -361,7 +392,7 @@ void CTxMemPool::check(const CCoinsViewCache &active_coins_tip,
         return;
     }
 
-    if (GetRand(m_check_ratio) >= 1) {
+    if (FastRandomContext().randrange(m_check_ratio) >= 1) {
         return;
     }
 
@@ -516,12 +547,17 @@ std::vector<TxMempoolInfo> CTxMemPool::infoAll() const {
 }
 
 bool CTxMemPool::setAvalancheFinalized(const CTxMemPoolEntryRef &tx,
+                                       const Consensus::Params &params,
+                                       const CBlockIndex &active_chain_tip,
                                        std::vector<TxId> &finalizedTxIds) {
+    AssertLockHeld(::cs_main);
     AssertLockHeld(cs);
 
     auto it = mapTx.find(tx->GetTx().GetId());
     if (it == mapTx.end()) {
         // Trying to finalize a tx that is not in the mempool !
+        LogPrintf("Trying to finalize tx %s that is not in the mempool\n",
+                  tx->GetTx().GetId().ToString());
         return false;
     }
 
@@ -531,6 +567,8 @@ bool CTxMemPool::setAvalancheFinalized(const CTxMemPoolEntryRef &tx,
                                    /*fSearchForParents=*/false)) {
         // Failed to get a list of parents for this tx. If we finalize it we
         // might be missing a parent and generate an invalid block.
+        LogPrintf("Failed to calculate ancestors for tx %s\n",
+                  tx->GetTx().GetId().ToString());
         return false;
     }
 
@@ -540,6 +578,21 @@ bool CTxMemPool::setAvalancheFinalized(const CTxMemPoolEntryRef &tx,
     for (auto iter_it = setAncestors.begin(); iter_it != setAncestors.end();) {
         // iter_it is an iterator of mapTx iterator (aka txiter)
         CTxMemPoolEntryRef entry = **iter_it;
+
+        TxValidationState state;
+        if (!ContextualCheckTransactionForCurrentBlock(active_chain_tip, params,
+                                                       entry->GetTx(), state)) {
+            LogPrint(BCLog::AVALANCHE,
+                     "Delay storing finalized tx %s that would cause the block "
+                     "to be invalid%s (%s)\n",
+                     tx->GetTx().GetId().ToString(),
+                     entry->GetSharedTx()->GetId() == tx->GetSharedTx()->GetId()
+                         ? ""
+                         : strprintf(" for parent %s",
+                                     entry->GetSharedTx()->GetId().ToString()),
+                     state.ToString());
+            return false;
+        }
 
         if (m_finalizedTxsFitter.isBelowBlockMinFeeRate(
                 entry->GetModifiedFeeRate())) {
@@ -556,7 +609,7 @@ bool CTxMemPool::setAvalancheFinalized(const CTxMemPoolEntryRef &tx,
 
         // It is possible (and normal) that an ancestor is already finalized.
         // Beware to not account for it in this case.
-        if (isAvalancheFinalized(entry->GetTx().GetId())) {
+        if (isAvalancheFinalizedPreConsensus(entry->GetTx().GetId())) {
             iter_it = setAncestors.erase(iter_it);
             continue;
         }
@@ -585,8 +638,13 @@ bool CTxMemPool::setAvalancheFinalized(const CTxMemPoolEntryRef &tx,
                                        (*ancestor_it)->GetFee());
 
             finalizedTxIds.push_back((*ancestor_it)->GetTx().GetId());
+
+            GetMainSignals().TransactionFinalized(
+                (*ancestor_it)->GetSharedTx());
         }
     }
+
+    nTransactionsUpdated++;
 
     return true;
 }
@@ -792,9 +850,21 @@ int CTxMemPool::Expire(std::chrono::seconds time) {
     indexed_transaction_set::index<entry_time>::type::iterator it =
         mapTx.get<entry_time>().begin();
     setEntries toremove;
+    size_t skippedFinalizedTxs{0};
     while (it != mapTx.get<entry_time>().end() && (*it)->GetTime() < time) {
-        toremove.insert(mapTx.project<0>(it));
+        if (isAvalancheFinalizedPreConsensus((*it)->GetTx().GetId())) {
+            // Don't expire finalized transactions
+            ++skippedFinalizedTxs;
+        } else {
+            toremove.insert(mapTx.project<0>(it));
+        }
+
         it++;
+    }
+
+    if (skippedFinalizedTxs > 0) {
+        LogPrint(BCLog::MEMPOOL, "Not expiring %u finalized transaction\n",
+                 skippedFinalizedTxs);
     }
 
     setEntries stage;
@@ -878,9 +948,33 @@ void CTxMemPool::TrimToSize(size_t sizelimit,
     AssertLockHeld(cs);
 
     unsigned nTxnRemoved = 0;
+    size_t finalizedTxsSkipped = 0;
     CFeeRate maxFeeRateRemoved(Amount::zero());
     while (!mapTx.empty() && DynamicMemoryUsage() > sizelimit) {
-        auto it = mapTx.get<modified_feerate>().end();
+        auto &by_modified_feerate = mapTx.get<modified_feerate>();
+        // Lowest fee first
+        auto rit = by_modified_feerate.rbegin();
+
+        // We don't evict finalized transactions, even if they have lower fee
+        while (isAvalancheFinalizedPreConsensus((*rit)->GetTx().GetId())) {
+            ++finalizedTxsSkipped;
+            ++rit;
+            if (rit == by_modified_feerate.rend()) {
+                // Nothing we can trim
+                break;
+            }
+        }
+
+        // Convert to forward iterator.
+        // If rit == rend(), the forward iterator will be equivalent to begin()
+        // and we can't decrement it, there is nothing to remove. This could
+        // only happen if all the transactions are finalized, which in turns
+        // implies that the mempool cannot contain a block worth of txs.
+        // In this case we still exit the loop so we get the proper log message.
+        if (rit == by_modified_feerate.rend()) {
+            break;
+        }
+        auto it = rit.base();
         --it;
 
         // We set the new mempool min fee to the feerate of the removed
@@ -916,6 +1010,12 @@ void CTxMemPool::TrimToSize(size_t sizelimit,
                  "Removed %u txn, rolling minimum fee bumped to %s\n",
                  nTxnRemoved, maxFeeRateRemoved.ToString());
     }
+
+    if (finalizedTxsSkipped > 0) {
+        LogPrint(BCLog::AVALANCHE,
+                 "Not evicting %u finalized txn for low fee\n",
+                 finalizedTxsSkipped);
+    }
 }
 
 bool CTxMemPool::GetLoadTried() const {
@@ -942,6 +1042,8 @@ std::string RemovalReasonToString(const MemPoolRemovalReason &r) noexcept {
             return "conflict";
         case MemPoolRemovalReason::AVALANCHE:
             return "avalanche";
+        case MemPoolRemovalReason::MANUAL:
+            return "manual";
     }
     assert(false);
 }

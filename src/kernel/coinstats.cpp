@@ -25,8 +25,8 @@ uint64_t GetBogoSize(const CScript &script_pub_key) {
            script_pub_key.size() /* scriptPubKey */;
 }
 
-CDataStream TxOutSer(const COutPoint &outpoint, const Coin &coin) {
-    CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+DataStream TxOutSer(const COutPoint &outpoint, const Coin &coin) {
+    DataStream ss{};
     ss << outpoint;
     ss << static_cast<uint32_t>(coin.GetHeight() * 2 + coin.IsCoinBase());
     ss << coin.GetTxOut();
@@ -82,7 +82,10 @@ static void ApplyStats(CCoinsStats &stats, const TxId &txid,
     stats.nTransactions++;
     for (auto it = outputs.begin(); it != outputs.end(); ++it) {
         stats.nTransactionOutputs++;
-        stats.nTotalAmount += it->second.GetTxOut().nValue;
+        if (stats.total_amount.has_value()) {
+            stats.total_amount =
+                (*stats.total_amount).CheckedAdd(it->second.GetTxOut().nValue);
+        }
         stats.nBogoSize += GetBogoSize(it->second.GetTxOut().scriptPubKey);
     }
 }
@@ -112,7 +115,8 @@ static bool ComputeUTXOStats(CCoinsView *view, CCoinsStats &stats, T hash_obj,
             outputs[key.GetN()] = std::move(coin);
             stats.coins_count++;
         } else {
-            return error("%s: unable to read value", __func__);
+            LogError("%s: unable to read value\n", __func__);
+            return false;
         }
         pcursor->Next();
     }

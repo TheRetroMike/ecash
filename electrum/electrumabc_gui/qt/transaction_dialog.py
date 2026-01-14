@@ -22,19 +22,22 @@
 # ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+from __future__ import annotations
 
 import copy
 import datetime
 import json
 import time
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt5.QtGui import QBrush, QCursor, QFont, QIcon, QKeySequence, QTextCharFormat
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, QTimer, QUrl, Signal
+from qtpy.QtGui import QBrush, QFont, QIcon, QKeySequence, QTextCharFormat
 
 from electrumabc import web
 from electrumabc.address import Address, PublicKey, ScriptOutput
+from electrumabc.amount import base_unit, format_amount, format_fee_rate
 from electrumabc.bitcoin import base_encode
 from electrumabc.i18n import _, ngettext
 from electrumabc.plugins import run_hook
@@ -51,10 +54,14 @@ from .util import (
     CopyButton,
     MessageBoxMixin,
     TextBrowserKeyboardFocusFilter,
+    copy_to_clipboard,
     getSaveFileName,
     rate_limited,
     webopen,
 )
+
+if TYPE_CHECKING:
+    from .main_window import ElectrumWindow
 
 dialogs = []  # Otherwise python randomly garbage collects the dialogs...
 
@@ -70,10 +77,10 @@ def show_transaction(tx, parent, desc=None, prompt_if_unsaved=False):
 
 class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
     # connected to self.throttled_update -- emit from thread to do update in main thread
-    throttled_update_sig = pyqtSignal()
+    throttled_update_sig = Signal()
 
     # connected to an inner function to get a callback in main thread upon dl completion
-    dl_done_sig = pyqtSignal()
+    dl_done_sig = Signal()
 
     BROADCAST_COOLDOWN_SECS: int = 5
 
@@ -81,7 +88,9 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         Freeze = auto()
         Unfreeze = auto()
 
-    def __init__(self, tx: Transaction, parent, desc, prompt_if_unsaved):
+    def __init__(
+        self, tx: Transaction, parent: ElectrumWindow, desc, prompt_if_unsaved
+    ):
         """Transactions in the wallet will show their description.
         Pass desc to give a description for txs not yet in the wallet.
         """
@@ -93,6 +102,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         self.tx = copy.deepcopy(tx)
         self.tx.deserialize()
         self.main_window = parent
+        self.config = parent.config
         self.wallet = parent.wallet
         self.prompt_if_unsaved = prompt_if_unsaved
         self.saved = False
@@ -165,9 +175,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             if link:
                 try:
                     _, txid = link.split(":")
-                    url = web.BE_URL(
-                        self.main_window.config, web.ExplorerUrlParts.TX, txid
-                    )
+                    url = web.BE_URL(self.config, web.ExplorerUrlParts.TX, txid)
                 except Exception:
                     raise
                     url = None
@@ -214,7 +222,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         b.setToolTip(_("Show transaction QR code"))
         b.setIcon(QIcon(icon))
         b.clicked.connect(self.show_qr)
-        b.setShortcut(QKeySequence(Qt.ALT + Qt.Key_Q))
+        b.setShortcut(QKeySequence(Qt.ALT | Qt.Key_Q))
 
         self.copy_button = b = CopyButton(
             lambda: str(weakSelfRef() and weakSelfRef().tx),
@@ -352,7 +360,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
 
         self.main_window.push_top_level_window(self)
         try:
-            self.main_window.broadcast_transaction(
+            self.main_window.send_tab.broadcast_transaction(
                 self.tx, self.desc, callback=broadcast_done
             )
         finally:
@@ -497,7 +505,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         fileName = getSaveFileName(
             _("Select where to save your signed transaction"),
             name,
-            self.main_window.config,
+            self.config,
             "*.txn",
         )
         if fileName:
@@ -528,8 +536,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             # latent timer fire
             return
         desc = self.desc
-        base_unit = self.main_window.base_unit()
-        format_amount = self.main_window.format_amount
+        bu = base_unit(self.config)
         delta2, info2 = self.wallet.get_tx_extended_info(self.tx)
         spends_coins_mine = delta2.spends_coins_mine
         (
@@ -586,7 +593,8 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         )
 
         can_sign = not self.tx.is_complete() and (
-            self.wallet.can_sign(self.tx) or bool(self.main_window.tx_external_keypairs)
+            self.wallet.can_sign(self.tx)
+            or bool(self.main_window.send_tab.tx_external_keypairs)
         )
         self.sign_button.setEnabled(can_sign)
         self.tx_hash_e.setText(tx_hash or _("Unknown"))
@@ -629,20 +637,26 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             amount_str = _("Transaction unrelated to your wallet")
         elif amount > 0:
             amount_str = (
-                _("Amount received:") + " %s" % format_amount(amount) + " " + base_unit
+                _("Amount received:")
+                + " %s" % format_amount(amount, self.config)
+                + " "
+                + bu
             )
         else:
             amount_str = (
-                _("Amount sent:") + " %s" % format_amount(-amount) + " " + base_unit
+                _("Amount sent:")
+                + " %s" % format_amount(-amount, self.config)
+                + " "
+                + bu
             )
         size_str = _("Size: {size} bytes").format(size=size)
         fee_str = _("Fee") + ": "
         if fee is not None:
             fee_str = _("Fee: {fee_amount} {fee_unit} ( {fee_rate} )")
             fee_str = fee_str.format(
-                fee_amount=format_amount(fee),
-                fee_unit=base_unit,
-                fee_rate=self.main_window.format_fee_rate(fee / size * 1000),
+                fee_amount=format_amount(fee, self.config),
+                fee_unit=bu,
+                fee_rate=format_fee_rate(fee / size * 1000, self.config),
             )
             dusty_fee = sum(
                 o.value for o in self.tx.outputs() if o.value < DUST_THRESHOLD
@@ -650,7 +664,10 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             if dusty_fee:
                 fee_str += (
                     " <font color=#999999>"
-                    + (_("( %s in dust was added to fee )") % format_amount(dusty_fee))
+                    + (
+                        _("( %s in dust was added to fee )")
+                        % format_amount(dusty_fee, self.config)
+                    )
                     + "</font>"
                 )
         elif self._dl_pct is not None:
@@ -718,7 +735,9 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         self.schnorr_label = QtWidgets.QLabel(
             _("{} = Schnorr signed").format(SCHNORR_SIGIL)
         )
-        self.schnorr_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        self.schnorr_label.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
         f = self.schnorr_label.font()
         f.setPointSize(f.pointSize() - 1)  # make it a little smaller
         self.schnorr_label.setFont(f)
@@ -843,8 +862,8 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     return rec2
             return ext
 
-        def format_amount(amt):
-            return self.main_window.format_amount(amt, whitespaces=True)
+        def format_amount_whitespaces(amt):
+            return format_amount(amt, self.config, whitespaces=True)
 
         i_text.clear()
         cursor = i_text.textCursor()
@@ -858,7 +877,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             if x["type"] == "coinbase":
                 cursor.insertText("coinbase", ext)
                 if isinstance(x.get("value"), int):
-                    cursor.insertText(format_amount(x["value"]), ext)
+                    cursor.insertText(format_amount_whitespaces(x["value"]), ext)
             else:
                 prevout_hash = x.get("prevout_hash")
                 prevout_n = x.get("prevout_n")
@@ -877,7 +896,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     addr_text = addr.to_ui_string()
                 cursor.insertText(addr_text, text_format(addr))
                 if x.get("value"):
-                    cursor.insertText(format_amount(x["value"]), ext)
+                    cursor.insertText(format_amount_whitespaces(x["value"]), ext)
                 if self.tx.is_schnorr_signed(i):
                     # Schnorr
                     cursor.insertText(" {}".format(SCHNORR_SIGIL), ext)
@@ -925,23 +944,13 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     cursor.insertText(addrstr, ext)
                 # insert enough spaces until column 43, to line up amounts
                 cursor.insertText(" " * (49 - len(addrstr)), ext)
-                cursor.insertText(format_amount(v), ext)
+                cursor.insertText(format_amount_whitespaces(v), ext)
             cursor.insertBlock()
             # /Mark B. Lundeberg's patented output formatting logic™
 
         # make the change & receive legends appear only if we used that color
         self.recv_legend.setVisible(bool(rec_ct))
         self.change_legend.setVisible(bool(chg_ct))
-
-    @staticmethod
-    def _copy_to_clipboard(text, widget):
-        if not text and isinstance(widget, QtWidgets.QTextEdit):
-            widget.copy()
-        else:
-            QtWidgets.qApp.clipboard().setText(text)
-        QtWidgets.QToolTip.showText(
-            QCursor.pos(), _("Text copied to clipboard"), widget
-        )
 
     def _open_internal_link(self, target):
         """accepts either a str txid, str address, or a QUrl which should be
@@ -974,8 +983,6 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
             i = int(name.split()[1])  # split "input N", translate N -> int
             inp = (self.tx.fetched_inputs() or self.tx.inputs())[i]
             value = inp.get("value")
-            # value_text = (value is not None and (self.main_window.format_amount(value) + " " + self.main_window.base_unit()))
-            # menu.addAction(_("Input") + " #" + str(i) + (' - ' + value_text if value else '')).setDisabled(True)
             menu.addAction(_("Input") + " #" + str(i)).setDisabled(True)
             menu.addSeparator()
             if inp.get("type") == "coinbase":
@@ -993,7 +1000,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     copy_list += [
                         (
                             _("Copy Prevout"),
-                            lambda: self._copy_to_clipboard(utxo, i_text),
+                            lambda: copy_to_clipboard(utxo, i_text),
                         )
                     ]
                 addr = inp.get("address")
@@ -1001,11 +1008,11 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     addr, show_list, copy_list, i_text
                 )
                 if isinstance(value, int):
-                    value_fmtd = self.main_window.format_amount(value)
+                    value_fmtd = format_amount(value, self.config)
                     copy_list += [
                         (
                             _("Copy Amount"),
-                            lambda: self._copy_to_clipboard(value_fmtd, i_text),
+                            lambda: copy_to_clipboard(value_fmtd, i_text),
                         )
                     ]
         except (TypeError, ValueError, IndexError, KeyError, AttributeError) as e:
@@ -1023,7 +1030,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         if self.i_text_has_selection:
             # Add this if they have a selection
             menu.addAction(
-                _("Copy Selected Text"), lambda: self._copy_to_clipboard(None, i_text)
+                _("Copy Selected Text"), lambda: copy_to_clipboard(widget=i_text)
             )
         menu.addAction(_("Select All"), i_text.selectAll)
         menu.exec_(global_pos)
@@ -1035,9 +1042,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                 show_list += [
                     (_("Address Details"), lambda: self._open_internal_link(addr_text))
                 ]
-                addr_URL = web.BE_URL(
-                    self.main_window.config, web.ExplorerUrlParts.ADDR, addr
-                )
+                addr_URL = web.BE_URL(self.config, web.ExplorerUrlParts.ADDR, addr)
                 if addr_URL:
                     show_list += [
                         (_("View on block explorer"), lambda: webopen(addr_URL))
@@ -1048,9 +1053,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                 action_text = _("Copy Public Key")
             else:
                 action_text = _("Copy Address")
-            copy_list += [
-                (action_text, lambda: self._copy_to_clipboard(addr_text, widget))
-            ]
+            copy_list += [(action_text, lambda: copy_to_clipboard(addr_text, widget))]
             # also add script hex copy to clipboard
             if isinstance(addr, ScriptOutput):
                 hex_text = addr.to_script().hex() or ""
@@ -1058,7 +1061,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                     copy_list += [
                         (
                             _("Copy Script Hex"),
-                            lambda: self._copy_to_clipboard(hex_text, widget),
+                            lambda: copy_to_clipboard(hex_text, widget),
                         )
                     ]
 
@@ -1083,11 +1086,11 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
                 addr, show_list, copy_list, o_text
             )
             if isinstance(value, int):
-                value_fmtd = self.main_window.format_amount(value)
+                value_fmtd = format_amount(value, self.config)
                 copy_list += [
                     (
                         _("Copy Amount"),
-                        lambda: self._copy_to_clipboard(value_fmtd, o_text),
+                        lambda: copy_to_clipboard(value_fmtd, o_text),
                     )
                 ]
         except (TypeError, ValueError, IndexError, KeyError, AttributeError) as e:
@@ -1105,7 +1108,7 @@ class TxDialog(QtWidgets.QDialog, MessageBoxMixin, PrintError):
         if self.o_text_has_selection:
             # Add this if they have a selection
             menu.addAction(
-                _("Copy Selected Text"), lambda: self._copy_to_clipboard(None, o_text)
+                _("Copy Selected Text"), lambda: copy_to_clipboard(widget=o_text)
             )
         menu.addAction(_("Select All"), o_text.selectAll)
         menu.exec_(global_pos)

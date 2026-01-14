@@ -11,7 +11,7 @@ import stakerTestFixtures from './fixtures/stakers';
 import invalidatedBlocksTestFixtures from './fixtures/invalidatedBlocks';
 import { jsonReviver } from '../src/utils';
 import memoFixtures from './mocks/memo';
-import { consumeNextPush } from 'ecash-script';
+import { getStackArray } from 'ecash-lib';
 import { MockChronikClient } from '../../../modules/mock-chronik-client';
 import { Block, ChronikClient, TxOutput } from 'chronik-client';
 import { caching } from 'cache-manager';
@@ -36,6 +36,7 @@ import {
 } from '../src/parse';
 import appTxSamples from './mocks/appTxSamples';
 import { dailyTxs, tokenInfoMap } from './mocks/dailyTxs';
+import { CryptoTicker, Fiat } from 'ecash-price';
 
 const {
     swaps,
@@ -62,7 +63,7 @@ describe('parse.js functions', function () {
         const {
             blockTxs,
             parsedBlock,
-            coingeckoPrices,
+            fetchedPrices,
             activeStakers,
             tokenInfoMap,
             outputScriptInfoMap,
@@ -75,7 +76,7 @@ describe('parse.js functions', function () {
         assert.deepEqual(
             getBlockTgMessage(
                 parsedBlock,
-                coingeckoPrices,
+                fetchedPrices,
                 tokenInfoMap,
                 outputScriptInfoMap,
                 activeStakers,
@@ -289,12 +290,8 @@ describe('parse.js functions', function () {
     it(`parseMemoOutputScript correctly parses all tested memo actions in memo.js`, function () {
         memoFixtures.map(memoTestObj => {
             const { outputScript, msg } = memoTestObj;
-            // Get array of pushes
-            const stack = { remainingHex: outputScript.slice(2) };
-            const stackArray = [];
-            while (stack.remainingHex.length > 0) {
-                stackArray.push(consumeNextPush(stack).data);
-            }
+            // Get array of pushes using ecash-lib
+            const stackArray = getStackArray(outputScript);
             assert.deepEqual(parseMemoOutputScript(stackArray), {
                 app: opReturn.memo.app,
                 msg,
@@ -450,17 +447,20 @@ describe('parse.js functions', function () {
                 10, // show all tested agora tokens
                 10, // show all tested non-agora tokens
                 {
-                    usd: 0.00003487,
-                    usd_market_cap: 689047177.8128564,
-                    usd_24h_vol: 5957332.9687223025,
-                    usd_24h_change: -0.3973642442197056,
+                    source: CryptoTicker.XEC,
+                    quote: Fiat.USD,
+                    currentPrice: 0.00003487,
+                    marketCap: 689047177.8128564,
+                    volume: 5957332.9687223025,
+                    priceChangePercent: -0.003973642442197056,
+                    priceChangeValue: -0.000000013856,
                 },
                 block.activeStakers,
             ),
             [
                 '<b>14 Oct 2024</b>\n' +
-                    '📦61,585 blocks\n' +
-                    '➡️37 txs\n' +
+                    '📦90,011 blocks\n' +
+                    '➡️38 txs\n' +
                     `💧<i>0.00% capacity</i>\n` +
                     '\n' +
                     '📉<b>1 XEC = $0.00003487</b> <i>(-0.40%)</i>\n' +
@@ -474,7 +474,7 @@ describe('parse.js functions', function () {
                     '3. ViaBTC, 1 <i>(0%)</i>\n' +
                     '\n' +
                     '<b><i>💰3 stakers earned $33</i></b>\n' +
-                    '<b><i>🧮 71 nodes staking <code>251,280,511,703.14</code> XEC ($8.76M)</i></b>\n' +
+                    '<b><i>🧮 72 nodes staking <code>251,480,511,703.14</code> XEC ($8.77M)</i></b>\n' +
                     '<u>Top 3</u>\n' +
                     '1. <a href="https://explorer.e.cash/address/ecash:qzs8hq2pj4hu5j09fdr5uhha3986h2mthvfp7362nu">qzs...2nu</a>, 1 <i>(0% won, 1% expected)</i>\n' +
                     '2. <a href="https://explorer.e.cash/address/ecash:qr42c8c04tqndscfrdnl0rzterg0qdaegyjzt8egyg">qr4...gyg</a>, 1 <i>(0% won, 9% expected)</i>\n' +
@@ -521,7 +521,9 @@ describe('parse.js functions', function () {
                     '💸 <b>1</b> Paywall tx\n' +
                     '\n' +
                     '🏦 <b><i>Binance</i></b>\n' +
-                    '<b>1</b> withdrawal, $0.688',
+                    '<b>1</b> withdrawal, $0.688\n' +
+                    '🏦 <b><i>CoinEx</i></b>\n' +
+                    '<b>1</b> withdrawal, $15.91k',
             ],
         );
     });
@@ -536,17 +538,20 @@ describe('parse.js functions', function () {
                 10, // show all tested agora tokens
                 10, // show all tested non-agora tokens
                 {
-                    usd: 0.00003487,
-                    usd_market_cap: 689047177.8128564,
-                    usd_24h_vol: 5957332.9687223025,
-                    usd_24h_change: -0.3973642442197056,
+                    source: CryptoTicker.XEC,
+                    quote: Fiat.USD,
+                    currentPrice: 0.00003487,
+                    marketCap: 689047177.8128564,
+                    volume: 5957332.9687223025,
+                    priceChangePercent: -0.003973642442197056,
+                    priceChangeValue: -0.000000013856,
                 },
                 block.activeStakers,
             ),
             [
                 '<b>14 Oct 2024</b>\n' +
-                    '📦61,585 blocks\n' +
-                    '➡️37 txs\n' +
+                    '📦90,011 blocks\n' +
+                    '➡️38 txs\n' +
                     `💧<i>0.00% capacity</i>\n` +
                     '\n' +
                     '📉<b>1 XEC = $0.00003487</b> <i>(-0.40%)</i>\n' +
@@ -560,7 +565,7 @@ describe('parse.js functions', function () {
                     '3. ViaBTC, 1 <i>(0%)</i>\n' +
                     '\n' +
                     '<b><i>💰3 stakers earned $33</i></b>\n' +
-                    '<b><i>🧮 71 nodes staking <code>251,280,511,703.14</code> XEC ($8.76M)</i></b>\n' +
+                    '<b><i>🧮 72 nodes staking <code>251,480,511,703.14</code> XEC ($8.77M)</i></b>\n' +
                     '<u>Top 3</u>\n' +
                     '1. <a href="https://explorer.e.cash/address/ecash:qzs8hq2pj4hu5j09fdr5uhha3986h2mthvfp7362nu">qzs...2nu</a>, 1 <i>(0% won, 1% expected)</i>\n' +
                     '2. <a href="https://explorer.e.cash/address/ecash:qr42c8c04tqndscfrdnl0rzterg0qdaegyjzt8egyg">qr4...gyg</a>, 1 <i>(0% won, 9% expected)</i>\n' +
@@ -607,7 +612,9 @@ describe('parse.js functions', function () {
                     '💸 <b>1</b> Paywall tx\n' +
                     '\n' +
                     '🏦 <b><i>Binance</i></b>\n' +
-                    '<b>1</b> withdrawal, $0.688',
+                    '<b>1</b> withdrawal, $0.688\n' +
+                    '🏦 <b><i>CoinEx</i></b>\n' +
+                    '<b>1</b> withdrawal, $15.91k',
             ],
         );
     });
@@ -620,11 +627,12 @@ describe('parse.js functions', function () {
                 tokenInfoMap,
                 10, // show all tested agora tokens
                 10, // show all tested non-agora tokens
+                null,
             ),
             [
                 '<b>14 Oct 2024</b>\n' +
-                    '📦61,585 blocks\n' +
-                    '➡️37 txs\n' +
+                    '📦90,011 blocks\n' +
+                    '➡️38 txs\n' +
                     `💧<i>0.00% capacity</i>\n` +
                     '\n' +
                     '<b><i>⛏️3 miners found blocks</i></b>\n' +
@@ -680,7 +688,9 @@ describe('parse.js functions', function () {
                     '💸 <b>1</b> Paywall tx\n' +
                     '\n' +
                     '🏦 <b><i>Binance</i></b>\n' +
-                    '<b>1</b> withdrawal, 20k XEC',
+                    '<b>1</b> withdrawal, 20k XEC\n' +
+                    '🏦 <b><i>CoinEx</i></b>\n' +
+                    '<b>1</b> withdrawal, 456M XEC',
             ],
         );
     });

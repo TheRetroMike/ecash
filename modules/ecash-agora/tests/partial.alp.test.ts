@@ -24,6 +24,7 @@ import { TestRunner } from 'ecash-lib/dist/test/testRunner.js';
 import { AgoraPartial } from '../src/partial.js';
 import { makeAlpOffer, takeAlpOffer } from './partial-helper-alp.js';
 import { Agora, TakenInfo } from '../src/agora.js';
+import { Wallet } from 'ecash-wallet/src/wallet.js';
 
 use(chaiAsPromised);
 
@@ -53,6 +54,10 @@ const takerScriptHex = toHex(takerScript.bytecode);
 describe('AgoraPartial ALP', () => {
     let runner: TestRunner;
     let chronik: ChronikClient;
+
+    async function makeTakerInputs(sats: bigint[]): Promise<void> {
+        await runner.sendToScript(sats, takerScript);
+    }
 
     async function makeBuilderInputs(
         values: bigint[],
@@ -417,6 +422,7 @@ describe('AgoraPartial ALP', () => {
         },
     ];
 
+    let cancelTxsMatchCount = 0;
     for (const testCase of TEST_CASES) {
         it(`AgoraPartial ALP ${testCase.offeredAtoms} for ${testCase.info}`, async () => {
             const agora = new Agora(chronik);
@@ -429,11 +435,8 @@ describe('AgoraPartial ALP', () => {
             });
             const askedSats = agoraPartial.askedSats(testCase.acceptedAtoms);
             const requiredSats = askedSats + 2000n;
-            const [fuelInput, takerInput] = await makeBuilderInputs([
-                4000n,
-                requiredSats,
-            ]);
-
+            const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
+            await makeTakerInputs([10_000n, requiredSats]);
             const offer = await makeAlpOffer({
                 chronik,
                 agoraPartial,
@@ -444,12 +447,10 @@ describe('AgoraPartial ALP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: testCase.acceptedAtoms,
                 allowUnspendable: testCase.allowUnspendable,
             });
             const acceptTx = await chronik.tx(acceptTxid);
-            // TODO we do not even get here, keep debugging
             const offeredAtoms = agoraPartial.offeredAtoms();
             const isFullAccept = testCase.acceptedAtoms == offeredAtoms;
             if (isFullAccept) {
@@ -543,17 +544,40 @@ describe('AgoraPartial ALP', () => {
                 recipientScript: makerScript,
                 extraInputs: [fuelInput], // dummy input for measuring
             });
-            const cancelTxSer = newOffer
-                .cancelTx({
-                    cancelSk: makerSk,
-                    fuelInputs: await makeBuilderInputs([cancelFeeSats]),
-                    recipientScript: makerScript,
-                })
-                .ser();
-            const cancelTxid = (await chronik.broadcastTx(cancelTxSer)).txid;
-            const cancelTx = await chronik.tx(cancelTxid);
-            expect(cancelTx.outputs[1].token?.atoms).to.equal(leftoverTokens);
-            expect(cancelTx.outputs[1].outputScript).to.equal(makerScriptHex);
+            const cancelTx = newOffer.cancelTx({
+                cancelSk: makerSk,
+                fuelInputs: await makeBuilderInputs([cancelFeeSats]),
+                recipientScript: makerScript,
+            });
+            const cancelTxid = cancelTx.txid();
+
+            // Let's build and broadcast using cancel() instead
+            const cancelWallet = Wallet.fromSk(makerSk, chronik);
+            await cancelWallet.sync();
+            const cancelResult = await newOffer.cancel({
+                wallet: cancelWallet,
+            });
+            const broadcastCancelTxid = cancelResult.broadcasted[0];
+            if (broadcastCancelTxid === cancelTxid) {
+                cancelTxsMatchCount++;
+                console.log(
+                    `${cancelTxsMatchCount} of ${TEST_CASES.length} produce equal txids with cancelTx() and cancel()`,
+                );
+
+                // Between ~5 and ~8 of 46 of these txs are identical from each method
+
+                // On inspection, when cancel() txid does not match,
+                // it is because cancel has selected different fuel inputs
+                // This is expected behavior, these txs still show change
+                // going to the cancel wallet as expected
+            }
+            const cancelChronikTx = await chronik.tx(broadcastCancelTxid);
+            expect(cancelChronikTx.outputs[1].token?.atoms).to.equal(
+                leftoverTokens,
+            );
+            expect(cancelChronikTx.outputs[1].outputScript).to.equal(
+                makerScriptHex,
+            );
 
             // takerIndex is 2 for full accept, 3 for partial accept
             const takerIndex = isFullAccept ? 2 : 3;
@@ -611,10 +635,7 @@ describe('AgoraPartial ALP', () => {
         });
         const askedSats = agoraPartial.askedSats(thisTestCase.acceptedAtoms);
         const requiredSats = askedSats + 2000n;
-        const [fuelInput, takerInput] = await makeBuilderInputs([
-            4000n,
-            requiredSats,
-        ]);
+        const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
 
         const offer = await makeAlpOffer({
             chronik,
@@ -639,7 +660,6 @@ describe('AgoraPartial ALP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: thisTestCase.acceptedAtoms,
                 allowUnspendable: false,
             }),
@@ -678,10 +698,7 @@ describe('AgoraPartial ALP', () => {
         const acceptedAtoms = 500n;
         const askedSats = agoraPartial.askedSats(acceptedAtoms);
         const requiredSats = askedSats + 2000n;
-        const [fuelInput, takerInput] = await makeBuilderInputs([
-            4000n,
-            requiredSats,
-        ]);
+        const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
 
         const offer = await makeAlpOffer({
             chronik,
@@ -703,11 +720,105 @@ describe('AgoraPartial ALP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: acceptedAtoms,
                 allowUnspendable: false,
             }),
             expectedError,
         );
+    });
+    it('We can relist an ALP agora partial tx using the available relist() method', async () => {
+        const testCase = {
+            offeredAtoms: 0x7fffffffffffn,
+            info: '0.001sat/token, max sats accept',
+            priceNanoSatsPerAtom: 1000000n,
+            acceptedAtoms: 799999983616n,
+            askedSats: 1041666816n,
+        };
+        // Chosen at random from the above vectors
+
+        const agora = new Agora(chronik);
+        const agoraPartial = await agora.selectParams({
+            offeredAtoms: testCase.offeredAtoms,
+            priceNanoSatsPerAtom: testCase.priceNanoSatsPerAtom,
+            minAcceptedAtoms: testCase.acceptedAtoms,
+            makerPk,
+            ...BASE_PARAMS_ALP,
+        });
+        const [fuelInput] = await makeBuilderInputs([
+            4000n,
+            testCase.askedSats,
+        ]);
+
+        // Create an offer
+        const offer = await makeAlpOffer({
+            chronik,
+            agoraPartial,
+            makerSk,
+            fuelInput,
+        });
+
+        const createdTokenId = offer.token.tokenId;
+
+        // A valid offer is created with the expected price and offeredAtoms
+        const priceThisOffer = offer.askedSats(testCase.acceptedAtoms);
+        expect(priceThisOffer).to.equal(testCase.askedSats);
+
+        // NB for 32-bit, the offered atoms are very unlikely to be what we asked for with selectParams
+        const atomsThisOffer = 140737488158720n;
+        expect(offer.token.atoms).to.equal(atomsThisOffer);
+
+        // Relist it
+
+        // First, create the partial we want to relist
+        const relistParams = {
+            // Compare 0x7fffffffffffn
+            offeredAtoms: 0x00ffffffffffn,
+            // Reduce by a factor of 100
+            priceNanoSatsPerAtom: 10000n,
+            // Compare 799999983616n
+            acceptedAtoms: 799999983716n,
+        };
+
+        const relistPartial = await agora.selectParams({
+            offeredAtoms: relistParams.offeredAtoms,
+            priceNanoSatsPerAtom: relistParams.priceNanoSatsPerAtom,
+            // Unchanged
+            minAcceptedAtoms: relistParams.acceptedAtoms,
+            makerPk,
+            ...BASE_PARAMS_ALP,
+            tokenId: createdTokenId,
+        });
+
+        // Create the relist wallet
+        const relistWallet = Wallet.fromSk(makerSk, chronik);
+        await relistWallet.sync();
+
+        // Relist our existing offer
+        await offer.relist({
+            wallet: relistWallet,
+            updatedPartial: relistPartial,
+        });
+
+        // Query for this offer
+        const activeOffers = await agora.activeOffersByTokenId(
+            offer.token.tokenId,
+        );
+        // We only have one active offer
+        expect(activeOffers.length).to.equal(1);
+        const relistedOffer = activeOffers[0];
+
+        // The price of the original acceptedAtoms is different
+        expect(relistedOffer.askedSats(testCase.acceptedAtoms)).to.equal(
+            8032606n,
+        );
+        // Not the same as the original offer price
+        expect(relistedOffer.askedSats(testCase.acceptedAtoms)).not.to.equal(
+            offer.askedSats(testCase.acceptedAtoms),
+        );
+
+        // So is the listed quantity
+        expect(relistedOffer.token.atoms).to.equal(1099511562240n); // vs prev 140737488158720n
+        // Not the same as the original offer quantity
+        expect(relistedOffer.token.atoms).not.to.equal(offer.token.atoms);
     });
 });

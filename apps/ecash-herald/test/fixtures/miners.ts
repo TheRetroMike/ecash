@@ -396,6 +396,57 @@ const minerTestFixtures = [
         payoutOutputScript: 'not the one so it is parsed from hex',
         parsed: '90 01 Pte Ltd',
     },
+    // Node Miner - parsed from payout script
+    {
+        height: '905735',
+        coinbaseHex:
+            '0307d20d000453d6766804dbbb590e0be6e984b7a07c7ee00629000a062f6e6f64652f',
+        payoutOutputScript:
+            '76a9147b5e3b3c03c577cabc88275af797b15637b0fdcd88ac',
+        parsed: 'Node Miner',
+    },
+    // Node Miner - parsed from coinbase hex fragment
+    {
+        height: '905736',
+        coinbaseHex:
+            '0308d20d000458dd7668047fc02c3b0b81637c16d693af36702d000a062f6e6f64652f',
+        payoutOutputScript: 'not the one so it is parsed from hex',
+        parsed: 'Node Miner',
+    },
+    // LSoftware DMCC - parsed from payout script
+    {
+        height: '917134',
+        coinbaseHex:
+            '038efe0d044b42df680cfabe6d6d000000000000000000000000000000000000000000000000000000000000000001000000000000000000008daf871ed1e62d0000174c536f66747761726520444d4343206266633539383637',
+        payoutOutputScript:
+            '76a91467e5fd9e06f01bc40627ad0bdbb5a014c743a81788ac',
+        parsed: 'LSoftware DMCC',
+    },
+    // LSoftware DMCC - parsed from coinbase hex fragment
+    {
+        height: '917133',
+        coinbaseHex:
+            '038dfe0d049541df680cfabe6d6d0000000000000000000000000000000000000000000000000000000000000000010000000000000027fffc2cb0f72c102e2d0000174c536f66747761726520444d4343206439306433393437',
+        payoutOutputScript: 'not the one so it is parsed from hex',
+        parsed: 'LSoftware DMCC',
+    },
+    // hash-hut.net - parsed from payout script
+    {
+        height: '927610',
+        coinbaseHex:
+            '037a270e04abfc3f6908b6f388e9290000004e2f686173682d6875742e6e65742f31386263666877476a376e7234373262fabe6d6dceeb5dbb501d3c59f0b00178078803b2631257356ef2bffe33d888bd14befb77200000008e00000000000000',
+        payoutOutputScript:
+            '76a914a1a16b0c06361696165c638b12e2f5cf714bc18f88ac',
+        parsed: 'hash-hut.net',
+    },
+    // hash-hut.net - parsed from coinbase hex fragment
+    {
+        height: '927611',
+        coinbaseHex:
+            '037a270e04abfc3f6908b6f388e9290000004e2f686173682d6875742e6e65742f31386263666877476a376e7234373262fabe6d6dceeb5dbb501d3c59f0b00178078803b2631257356ef2bffe33d888bd14befb77200000008e00000000000000',
+        payoutOutputScript: 'not the one so it is parsed from hex',
+        parsed: 'hash-hut.net',
+    },
 ];
 
 export default minerTestFixtures;

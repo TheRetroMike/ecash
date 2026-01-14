@@ -3,7 +3,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <avalanche/avalanche.h>
+#include <avalanche/processor.h>
 #include <chainparams.h>
+#include <clientversion.h>
+#include <common/args.h>
 #include <config.h>
 #include <consensus/amount.h>
 #include <httpserver.h>
@@ -15,6 +19,7 @@
 #include <logging.h>
 #include <node/context.h>
 #include <outputtype.h>
+#include <policy/block/stakingrewards.h>
 #include <rpc/blockchain.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
@@ -81,7 +86,7 @@ static RPCHelpMan validateaddress() {
                     ret.pushKV("scriptPubKey", HexStr(scriptPubKey));
 
                     UniValue detail = DescribeAddress(dest);
-                    ret.pushKVs(detail);
+                    ret.pushKVs(std::move(detail));
                 }
             }
             return ret;
@@ -815,7 +820,7 @@ static UniValue SummaryToJSON(const IndexSummary &&summary,
     UniValue entry(UniValue::VOBJ);
     entry.pushKV("synced", summary.synced);
     entry.pushKV("best_block_height", summary.best_block_height);
-    ret_summary.pushKV(summary.name, entry);
+    ret_summary.pushKV(summary.name, std::move(entry));
     return ret_summary;
 }
 
@@ -921,7 +926,15 @@ static RPCHelpMan getinfo() {
                 {RPCResult::Type::STR, "version_full",
                  "The full version as a string"},
                 {RPCResult::Type::BOOL, "avalanche",
-                 "Wether avalanche is enabled"},
+                 "Whether avalanche is enabled"},
+                {RPCResult::Type::BOOL, "avalanche_staking_rewards",
+                 "Whether avalanche staking rewards is enabled"},
+                {RPCResult::Type::BOOL, "avalanche_staking_preconsensus",
+                 "Whether avalanche staking rewards preconsensus is enabled"},
+                {RPCResult::Type::BOOL, "avalanche_preconsensus",
+                 "Whether avalanche preconsensus is enabled"},
+                {RPCResult::Type::BOOL, "avalanche_mining_preconsensus",
+                 "Whether mining based on avalanche preconsensus is enabled"},
             },
         },
         RPCExamples{HelpExampleCli("getinfo", "") +
@@ -929,11 +942,40 @@ static RPCHelpMan getinfo() {
         [&](const RPCHelpMan &self, const Config &config,
             const JSONRPCRequest &request) -> UniValue {
             NodeContext &node = EnsureAnyNodeContext(request.context);
+            ChainstateManager &chainman = EnsureChainman(node);
+            ArgsManager &argsman = EnsureArgsman(node);
+
+            const Consensus::Params &params =
+                config.GetChainParams().GetConsensus();
+            const CBlockIndex *tip =
+                WITH_LOCK(cs_main, return chainman.ActiveTip());
 
             UniValue infoObj(UniValue::VOBJ);
             infoObj.pushKV("version_number", CLIENT_VERSION);
             infoObj.pushKV("version_full", FormatFullVersion());
-            infoObj.pushKV("avalanche", !!node.avalanche);
+
+            if (node.avalanche) {
+                infoObj.pushKV("avalanche", true);
+                infoObj.pushKV("avalanche_staking_rewards",
+                               IsStakingRewardsActivated(params, tip));
+                infoObj.pushKV(
+                    "avalanche_staking_preconsensus",
+                    node.avalanche->isStakingPreconsensusActivated(tip));
+                const bool fPreconsensus =
+                    node.avalanche->isPreconsensusActivated(tip);
+                infoObj.pushKV("avalanche_preconsensus", fPreconsensus);
+                infoObj.pushKV("avalanche_mining_preconsensus",
+                               fPreconsensus &&
+                                   argsman.GetBoolArg(
+                                       "-avalanchepreconsensusmining",
+                                       DEFAULT_AVALANCHE_MINING_PRECONSENSUS));
+            } else {
+                infoObj.pushKV("avalanche", false);
+                infoObj.pushKV("avalanche_staking_rewards", false);
+                infoObj.pushKV("avalanche_staking_preconsensus", false);
+                infoObj.pushKV("avalanche_preconsensus", false);
+                infoObj.pushKV("avalanche_mining_preconsensus", false);
+            }
             return infoObj;
         },
     };

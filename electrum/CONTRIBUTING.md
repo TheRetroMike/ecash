@@ -96,7 +96,7 @@ is required for either).
    `git clone https://github.com/Bitcoin-ABC/ElectrumABC && cd ElectrumABC`
 2. Install python 3+. For brew:
    `brew install python3`
-3. Install PyQt5: `python3 -m pip install --user pyqt5`
+3. Install PyQt5 and `qtpy`: `python3 -m pip install --user pyqt5 qtpy `
 4. [Install Electrum ABC requirements](#python-packages)
 5. [Compile libsecp256k1](#compiling-libsecp256k1)
 
@@ -114,10 +114,15 @@ ninja check-electrum
 
 Functional tests can be run with the following command:
 ```shell
-pytest electrumabc/tests/regtest
+python3 test_runner.py functional
 ```
 
-This requires `docker` and additional python dependencies:
+or as a `ninja` target:
+```shell
+ninja check-electrum-functional
+```
+
+This requires a few additional python dependencies:
 ```shell
 pip3 install -r contrib/requirements/requirements-regtest.txt
 ```

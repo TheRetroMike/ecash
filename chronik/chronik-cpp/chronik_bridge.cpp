@@ -21,6 +21,7 @@
 #include <shutdown.h>
 #include <span.h>
 #include <streams.h>
+#include <sync.h>
 #include <undo.h>
 #include <util/error.h>
 #include <validation.h>
@@ -103,25 +104,40 @@ chronik_bridge::BlockTx BridgeBlockTx(bool isCoinbase, const CTransaction &tx,
             .undo_pos = uint32_t(isCoinbase ? 0 : undo_pos)};
 }
 
-size_t GetFirstBlockTxOffset(const CBlock &block, const CBlockIndex &bindex) {
-    return bindex.nDataPos + ::GetSerializeSize(CBlockHeader()) +
+inline size_t GetFirstBlockTxOffset(const CBlock &block,
+                                    const size_t block_data_pos) {
+    return block_data_pos + ::GetSerializeSize(CBlockHeader()) +
            GetSizeOfCompactSize(block.vtx.size());
 }
 
-size_t GetFirstUndoOffset(const CBlock &block, const CBlockIndex &bindex) {
+inline size_t GetFirstUndoOffset(const CBlock &block,
+                                 const size_t block_undo_pos) {
     // We have to -1 here, because coinbase txs don't have undo data.
-    return bindex.nUndoPos + GetSizeOfCompactSize(block.vtx.size() - 1);
+    return block_undo_pos + GetSizeOfCompactSize(block.vtx.size() - 1);
 }
 
 chronik_bridge::Block BridgeBlock(const CBlock &block,
                                   const CBlockUndo &block_undo,
-                                  const CBlockIndex &bindex) {
-    size_t data_pos = GetFirstBlockTxOffset(block, bindex);
+                                  const CBlockIndex &bindex)
+    EXCLUSIVE_LOCKS_REQUIRED(!::cs_main) {
+    AssertLockNotHeld(::cs_main);
+
+    uint32_t block_file_num{0};
+    uint32_t block_data_pos{0};
+    uint32_t block_undo_pos{0};
+    {
+        LOCK(::cs_main);
+        block_file_num = uint32_t(bindex.nFile);
+        block_data_pos = bindex.nDataPos;
+        block_undo_pos = bindex.nUndoPos;
+    }
+
+    size_t data_pos = GetFirstBlockTxOffset(block, block_data_pos);
     size_t undo_pos = 0;
 
     // Set undo offset; for the genesis block leave it at 0
     if (bindex.nHeight > 0) {
-        undo_pos = GetFirstUndoOffset(block, bindex);
+        undo_pos = GetFirstUndoOffset(block, block_undo_pos);
     }
 
     rust::Vec<chronik_bridge::BlockTx> bridged_txs;
@@ -149,9 +165,9 @@ chronik_bridge::Block BridgeBlock(const CBlock &block,
             .n_bits = block.nBits,
             .timestamp = block.GetBlockTime(),
             .height = bindex.nHeight,
-            .file_num = uint32_t(bindex.nFile),
-            .data_pos = bindex.nDataPos,
-            .undo_pos = bindex.nUndoPos,
+            .file_num = block_file_num,
+            .data_pos = block_data_pos,
+            .undo_pos = block_undo_pos,
             .size = ::GetSerializeSize(block),
             .txs = bridged_txs};
 }
@@ -160,9 +176,9 @@ namespace chronik_bridge {
 
 void log_print(const rust::Str logging_function, const rust::Str source_file,
                const uint32_t source_line, const rust::Str msg) {
-    LogInstance().LogPrintStr(std::string(msg), std::string(logging_function),
-                              std::string(source_file), source_line,
-                              BCLog::LogFlags::NONE, BCLog::Level::None);
+    LogInstance().LogPrintStr(std::string(msg), std::source_location::current(),
+                              BCLog::LogFlags::NONE, BCLog::Level::Info,
+                              /*should_ratelimit=*/false);
 }
 
 void log_print_chronik(const rust::Str logging_function,
@@ -256,7 +272,7 @@ ChronikBridge::get_block_hashes_by_range(int start, int end) const {
 std::unique_ptr<CBlock>
 ChronikBridge::load_block(const CBlockIndex &bindex) const {
     CBlock block;
-    if (!m_node.chainman->m_blockman.ReadBlockFromDisk(block, bindex)) {
+    if (!m_node.chainman->m_blockman.ReadBlock(block, bindex)) {
         throw std::runtime_error("Reading block data failed");
     }
     return std::make_unique<CBlock>(std::move(block));
@@ -267,7 +283,7 @@ ChronikBridge::load_block_undo(const CBlockIndex &bindex) const {
     CBlockUndo block_undo;
     // Read undo data (genesis block doesn't have undo data)
     if (bindex.nHeight > 0) {
-        if (!m_node.chainman->m_blockman.UndoReadFromDisk(block_undo, bindex)) {
+        if (!m_node.chainman->m_blockman.ReadBlockUndo(block_undo, bindex)) {
             throw std::runtime_error("Reading block undo data failed");
         }
     }
@@ -299,9 +315,23 @@ rust::Vec<uint8_t> ChronikBridge::load_raw_tx(uint32_t file_num,
             tx, FlatFilePos(file_num, data_pos))) {
         throw std::runtime_error("Reading tx data from disk failed");
     }
-    CDataStream raw_tx{SER_NETWORK, PROTOCOL_VERSION};
+    DataStream raw_tx{};
     raw_tx << tx;
     return chronik::util::ToRustVec<uint8_t>(MakeUCharSpan(raw_tx));
+}
+
+bool ChronikBridge::is_avalanche_finalized_preconsensus(
+    const std::array<uint8_t, 32> &mempool_txid) const {
+    if (!m_node.mempool) {
+        return false;
+    }
+
+    AssertLockNotHeld(m_node.mempool->cs);
+
+    TxId txid{chronik::util::ArrayToHash(mempool_txid)};
+    return WITH_LOCK(
+        m_node.mempool->cs,
+        return m_node.mempool->isAvalancheFinalizedPreConsensus(txid));
 }
 
 Tx bridge_tx(const CTransaction &tx, const std::vector<::Coin> &spent_coins) {
@@ -367,7 +397,7 @@ std::array<uint8_t, 32>
 ChronikBridge::broadcast_tx(rust::Slice<const uint8_t> raw_tx,
                             int64_t max_fee) const {
     std::vector<uint8_t> vec = chronik::util::FromRustSlice(raw_tx);
-    CDataStream stream{vec, SER_NETWORK, PROTOCOL_VERSION};
+    DataStream stream{vec};
     CMutableTransaction tx;
     stream >> tx;
     CTransactionRef tx_ref = MakeTransactionRef(tx);
@@ -387,9 +417,10 @@ ChronikBridge::broadcast_tx(rust::Slice<const uint8_t> raw_tx,
     return chronik::util::HashToArray(tx_ref->GetId());
 }
 
-void ChronikBridge::abort_node(const rust::Str msg,
-                               const rust::Str user_msg) const {
-    AbortNode(std::string(msg), Untranslated(std::string(user_msg)));
+void ChronikBridge::fatal_error(const rust::Str msg,
+                                const rust::Str user_msg) const {
+    m_node.chainman->GetNotifications().fatalError(
+        std::string(msg), Untranslated(std::string(user_msg)));
 }
 
 bool ChronikBridge::shutdown_requested() const {
@@ -419,13 +450,38 @@ int64_t ChronikBridge::min_relay_feerate_sats_per_kb() const {
     return m_node.mempool->m_min_relay_feerate.GetFeePerK() / Amount::satoshi();
 }
 
+bool ChronikBridge::get_feerate_info(std::array<uint8_t, 32> mempool_txid,
+                                     int64_t &modified_fee_rate_sats_per_kb,
+                                     uint32_t &virtual_size_bytes) const {
+    TxId txid{chronik::util::ArrayToHash(mempool_txid)};
+
+    if (!m_node.mempool) {
+        return false;
+    }
+
+    AssertLockNotHeld(m_node.mempool->cs);
+    LOCK(m_node.mempool->cs);
+
+    auto iter = m_node.mempool->GetIter(txid);
+    if (!iter) {
+        return false;
+    }
+
+    modified_fee_rate_sats_per_kb =
+        (**iter)->GetModifiedFeeRate().GetFeePerK() / Amount::satoshi();
+    virtual_size_bytes = (**iter)->GetTxVirtualSize();
+
+    return true;
+}
+
 std::unique_ptr<ChronikBridge> make_bridge(const node::NodeContext &node) {
     return std::make_unique<ChronikBridge>(node);
 }
 
 chronik_bridge::Block bridge_block(const CBlock &block,
                                    const CBlockUndo &block_undo,
-                                   const CBlockIndex &bindex) {
+                                   const CBlockIndex &bindex)
+    EXCLUSIVE_LOCKS_REQUIRED(!::cs_main) {
     return BridgeBlock(block, block_undo, bindex);
 }
 
@@ -437,7 +493,7 @@ BlockInfo get_block_info(const CBlockIndex &bindex) {
 }
 
 std::array<uint8_t, 80> get_block_header(const CBlockIndex &index) {
-    CDataStream ser_header{SER_NETWORK, PROTOCOL_VERSION};
+    DataStream ser_header{};
     ser_header << index.GetBlockHeader();
     std::array<uint8_t, 80> array;
     std::copy_n(MakeUCharSpan(ser_header).begin(), 80, array.begin());
@@ -456,14 +512,14 @@ const CBlockIndex &get_block_ancestor(const CBlockIndex &index,
 rust::Vec<uint8_t> compress_script(rust::Slice<const uint8_t> bytecode) {
     std::vector<uint8_t> vec = chronik::util::FromRustSlice(bytecode);
     CScript script{vec.begin(), vec.end()};
-    CDataStream compressed{SER_NETWORK, PROTOCOL_VERSION};
+    DataStream compressed{};
     compressed << Using<ScriptCompression>(script);
     return chronik::util::ToRustVec<uint8_t>(MakeUCharSpan(compressed));
 }
 
 rust::Vec<uint8_t> decompress_script(rust::Slice<const uint8_t> compressed) {
     std::vector<uint8_t> vec = chronik::util::FromRustSlice(compressed);
-    CDataStream stream{vec, SER_NETWORK, PROTOCOL_VERSION};
+    DataStream stream{vec};
     CScript script;
     stream >> Using<ScriptCompression>(script);
     return chronik::util::ToRustVec<uint8_t>(script);
@@ -483,6 +539,10 @@ void sync_with_validation_interface_queue() {
 
 bool init_error(const rust::Str msg) {
     return InitError(Untranslated(std::string(msg)));
+}
+
+rust::String client_name() {
+    return CLIENT_NAME;
 }
 
 rust::String format_full_version() {

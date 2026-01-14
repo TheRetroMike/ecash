@@ -8,17 +8,14 @@
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
-#include <version.h>
 
 namespace {
 
 /** A class that deserializes a single CTransaction one time. */
 class TxInputStream {
 public:
-    TxInputStream(int nTypeIn, int nVersionIn, const uint8_t *txTo,
-                  size_t txToLen)
-        : m_type(nTypeIn), m_version(nVersionIn), m_data(txTo),
-          m_remaining(txToLen) {}
+    TxInputStream(const uint8_t *txTo, size_t txToLen)
+        : m_data(txTo), m_remaining(txToLen) {}
 
     void read(Span<std::byte> dst) {
         if (dst.size() > m_remaining) {
@@ -46,12 +43,7 @@ public:
         return *this;
     }
 
-    int GetVersion() const { return m_version; }
-    int GetType() const { return m_type; }
-
 private:
-    const int m_type;
-    const int m_version;
     const uint8_t *m_data;
     size_t m_remaining;
 };
@@ -86,13 +78,13 @@ static int verify_script(const uint8_t *scriptPubKey,
         return set_error(err, bitcoinconsensus_ERR_INVALID_FLAGS);
     }
     try {
-        TxInputStream stream(SER_NETWORK, PROTOCOL_VERSION, txTo, txToLen);
+        TxInputStream stream{txTo, txToLen};
         CTransaction tx(deserialize, stream);
         if (nIn >= tx.vin.size()) {
             return set_error(err, bitcoinconsensus_ERR_TX_INDEX);
         }
 
-        if (GetSerializeSize(tx, PROTOCOL_VERSION) != txToLen) {
+        if (GetSerializeSize(tx) != txToLen) {
             return set_error(err, bitcoinconsensus_ERR_TX_SIZE_MISMATCH);
         }
 

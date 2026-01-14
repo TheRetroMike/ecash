@@ -4,9 +4,10 @@ import json
 import struct
 from typing import List, Optional, Union
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from qtpy import QtCore, QtGui, QtWidgets
 
 from electrumabc.address import Address, AddressError
+from electrumabc.amount import format_satoshis
 from electrumabc.avalanche.primitives import Key, PublicKey
 from electrumabc.avalanche.proof import (
     Proof,
@@ -16,14 +17,19 @@ from electrumabc.avalanche.proof import (
     StakeAndSigningData,
 )
 from electrumabc.bitcoin import is_private_key
-from electrumabc.constants import PROOF_DUST_THRESHOLD, STAKE_UTXO_CONFIRMATIONS
+from electrumabc.constants import (
+    BASE_UNITS_BY_DECIMALS,
+    PROOF_DUST_THRESHOLD,
+    STAKE_UTXO_CONFIRMATIONS,
+)
 from electrumabc.i18n import _
 from electrumabc.keystore import MAXIMUM_INDEX_DERIVATION_PATH
 from electrumabc.serialize import DeserializationError, compact_size, serialize_blob
+from electrumabc.simple_config import SimpleConfig
 from electrumabc.storage import StorageKeys
 from electrumabc.transaction import OutPoint, get_address_from_output_script
 from electrumabc.uint256 import UInt256
-from electrumabc.util import UserCancelled, format_satoshis
+from electrumabc.util import UserCancelled
 from electrumabc.wallet import AddressNotFoundError, DeterministicWallet
 
 from .delegation_editor import AvaDelegationDialog
@@ -72,14 +78,16 @@ class StakesWidget(QtWidgets.QTableWidget):
     immature stakes or stakes below the dust threshold.
     """
 
-    total_amount_changed = QtCore.pyqtSignal("quint64")
+    total_amount_changed = QtCore.Signal("quint64")
     """Emit total stake amount in sats."""
 
-    def __init__(self, blockchain__height: int):
+    def __init__(self, blockchain__height: int, config: SimpleConfig):
         super().__init__()
+        self.config = config
         self.setColumnCount(5)
+        unit = BASE_UNITS_BY_DECIMALS.get(self.config.get_decimal_point(), "XEC")
         self.setHorizontalHeaderLabels(
-            ["txid", "vout", "amount (XEC)", "block height", ""]
+            ["txid", "vout", f"amount ({unit})", "block height", ""]
         )
         self.verticalHeader().setVisible(False)
         self.setSelectionMode(QtWidgets.QTableWidget.NoSelection)
@@ -95,6 +103,9 @@ class StakesWidget(QtWidgets.QTableWidget):
 
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.create_menu)
+
+        # By default sort by descending amount
+        self.sortByColumn(2, QtCore.Qt.DescendingOrder)
 
         self.stakes: List[Union[SignedStake, StakeAndSigningData]] = []
 
@@ -158,6 +169,7 @@ class StakesWidget(QtWidgets.QTableWidget):
     def add_stakes(self, stakes: List[Union[SignedStake, StakeAndSigningData]]):
         previous_utxo_count = len(self.stakes)
         self.stakes += stakes
+        self.setSortingEnabled(False)
         self.setRowCount(len(self.stakes))
 
         for i, ss in enumerate(stakes):
@@ -165,16 +177,24 @@ class StakesWidget(QtWidgets.QTableWidget):
             height = stake.height
 
             row_index = previous_utxo_count + i
-            txid_item = QtWidgets.QTableWidgetItem(stake.utxo.txid.get_hex())
+            txid_item = QtWidgets.QTableWidgetItem(stake.outpoint.txid.get_hex())
             self.setItem(row_index, 0, txid_item)
 
-            vout_item = QtWidgets.QTableWidgetItem(str(stake.utxo.n))
+            vout_item = QtWidgets.QTableWidgetItem(str(stake.outpoint.n))
             self.setItem(row_index, 1, vout_item)
 
             amount_item = QtWidgets.QTableWidgetItem(
-                format_satoshis(stake.amount, num_zeros=2)
+                format_satoshis(
+                    stake.amount,
+                    self.config.get_num_zeros(),
+                    self.config.get_decimal_point(),
+                    whitespaces=True,
+                )
             )
-            amount_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            amount_item.setTextAlignment(
+                QtCore.Qt.AlignmentFlag.AlignRight
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
             if stake.amount < PROOF_DUST_THRESHOLD:
                 amount_item.setForeground(QtGui.QColor("red"))
                 amount_item.setToolTip(
@@ -205,12 +225,14 @@ class StakesWidget(QtWidgets.QTableWidget):
             self.setCellWidget(row_index, 4, del_button)
 
         self.update_total_amount()
+        self.setSortingEnabled(True)
 
 
 class AvaProofEditor(CachedWalletPasswordWidget):
     def __init__(
         self,
         wallet: DeterministicWallet,
+        config: SimpleConfig,
         receive_address: Optional[Address] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ):
@@ -223,6 +245,7 @@ class AvaProofEditor(CachedWalletPasswordWidget):
         self.receive_address = receive_address
 
         self.wallet = wallet
+        self.config = config
 
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
@@ -283,10 +306,9 @@ class AvaProofEditor(CachedWalletPasswordWidget):
         self.master_pubkey_view.setReadOnly(True)
         # setReadOnly does not change the style of the widget to indicate it is not
         # editable. setEnabled(False) would prevent selecting and copying the key.
-        # Manually change the background color.
-        self.master_pubkey_view.setStyleSheet(
-            "QLineEdit {background-color: lightGray;}"
-        )
+        # Manually change the style so the widget looks different from a regular
+        # line edit.
+        self.master_pubkey_view.setStyleSheet("QLineEdit {border: none}")
         self.master_pubkey_view.setToolTip("Computed from Master private key")
         layout.addWidget(self.master_pubkey_view)
         layout.addSpacing(10)
@@ -297,7 +319,7 @@ class AvaProofEditor(CachedWalletPasswordWidget):
         layout.addWidget(self.payout_addr_edit)
         layout.addSpacing(10)
 
-        self.utxos_wigdet = StakesWidget(self.wallet.get_local_height())
+        self.utxos_wigdet = StakesWidget(self.wallet.get_local_height(), config)
         layout.addWidget(self.utxos_wigdet)
 
         self.total_amount_label = QtWidgets.QLabel("Total amount:")
@@ -538,7 +560,11 @@ class AvaProofEditor(CachedWalletPasswordWidget):
         self.add_utxos(utxos)
 
     def on_add_coins_from_wallet_clicked(self):
-        d = UtxosDialog(self.wallet)
+        already_added_outpoints = {
+            str(signed_stake.stake.outpoint)
+            for signed_stake in self.utxos_wigdet.stakes
+        }
+        d = UtxosDialog(self.wallet, self.config, already_added_outpoints)
         if d.exec_() == QtWidgets.QDialog.Rejected:
             return
         utxos = d.get_selected_utxos()
@@ -798,6 +824,7 @@ class AvaProofDialog(QtWidgets.QDialog):
     def __init__(
         self,
         wallet: DeterministicWallet,
+        config: SimpleConfig,
         receive_address: Optional[Address] = None,
         parent: Optional[QtWidgets.QWidget] = None,
     ):
@@ -806,7 +833,7 @@ class AvaProofDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
-        self.proof_widget = AvaProofEditor(wallet, receive_address, self)
+        self.proof_widget = AvaProofEditor(wallet, config, receive_address, self)
         layout.addWidget(self.proof_widget)
 
         buttons_layout = QtWidgets.QHBoxLayout()
@@ -930,13 +957,20 @@ def check_utxos(utxos: List[dict], parent: Optional[QtWidgets.QWidget] = None) -
 class UtxosDialog(QtWidgets.QDialog):
     """A widget listing all coins in a wallet and allowing to load multiple coins"""
 
-    def __init__(self, wallet: DeterministicWallet):
+    def __init__(
+        self,
+        wallet: DeterministicWallet,
+        config: SimpleConfig,
+        outpoints_to_exclude: set[str],
+    ):
         super().__init__()
         self.setMinimumWidth(750)
 
         self.wallet = wallet
+        self.config = config
         self.utxos: List[dict] = []
         self.selected_rows: List[int] = []
+        self.outpoints_to_exclude = outpoints_to_exclude
 
         layout = QtWidgets.QVBoxLayout(self)
         self.setLayout(layout)
@@ -944,8 +978,9 @@ class UtxosDialog(QtWidgets.QDialog):
         self.utxos_table = QtWidgets.QTableWidget()
         layout.addWidget(self.utxos_table)
         self.utxos_table.setColumnCount(4)
+        unit = BASE_UNITS_BY_DECIMALS.get(config.get_decimal_point(), "XEC")
         self.utxos_table.setHorizontalHeaderLabels(
-            ["txid", "vout", "amount (sats)", "block height"]
+            ["txid", "vout", f"amount ({unit})", "block height"]
         )
         self.utxos_table.verticalHeader().setVisible(False)
         self.utxos_table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
@@ -953,6 +988,8 @@ class UtxosDialog(QtWidgets.QDialog):
         self.utxos_table.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.Stretch
         )
+        # By default sort by descending amount
+        self.utxos_table.sortByColumn(2, QtCore.Qt.DescendingOrder)
         layout.addWidget(self.utxos_table)
         self._fill_utxos_table()
 
@@ -972,11 +1009,19 @@ class UtxosDialog(QtWidgets.QDialog):
         self.utxos_table.itemSelectionChanged.connect(self._on_selection_changed)
 
     def _fill_utxos_table(self):
-        self.utxos = [u for u in self.wallet.get_utxos() if u["height"] > 0]
+        def is_usable_utxo(utxo: dict) -> bool:
+            return (
+                utxo["height"] > 0
+                and f"{utxo['prevout_hash']}:{utxo['prevout_n']}"
+                not in self.outpoints_to_exclude
+            )
+
+        self.utxos = list(filter(is_usable_utxo, self.wallet.get_utxos()))
         self.utxos.sort(key=lambda u: u["value"], reverse=True)
 
         tip = self.wallet.get_local_height()
 
+        self.utxos_table.setSortingEnabled(False)
         self.utxos_table.setRowCount(len(self.utxos))
 
         for row_index, utxo in enumerate(self.utxos):
@@ -987,9 +1032,17 @@ class UtxosDialog(QtWidgets.QDialog):
             self.utxos_table.setItem(row_index, 1, vout_item)
 
             amount_item = QtWidgets.QTableWidgetItem(
-                format_satoshis(utxo["value"], num_zeros=2)
+                format_satoshis(
+                    utxo["value"],
+                    self.config.get_num_zeros(),
+                    self.config.get_decimal_point(),
+                    whitespaces=True,
+                )
             )
-            amount_item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            amount_item.setTextAlignment(
+                QtCore.Qt.AlignmentFlag.AlignRight
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
             if utxo["value"] < PROOF_DUST_THRESHOLD:
                 amount_item.setForeground(QtGui.QColor("red"))
                 amount_item.setToolTip(
@@ -1014,6 +1067,8 @@ class UtxosDialog(QtWidgets.QDialog):
                     f"valid after block {utxo_validity_height}."
                 )
             self.utxos_table.setItem(row_index, 3, height_item)
+
+        self.utxos_table.setSortingEnabled(True)
 
     def _on_selection_changed(self):
         self.selected_rows = [

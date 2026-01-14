@@ -196,7 +196,23 @@ bool ScriptInterpreter::RunUntilEnd() {
     return set_success(&script_error);
 }
 
-bool ScriptInterpreter::RunNextOp() {
+bool ScriptInterpreter::RunNextOp() noexcept {
+    try {
+        if (!RunNextOpInner()) {
+            // script_error is set
+            return false;
+        }
+    } catch (scriptnum_overflow_error &e) {
+        return set_error(&script_error, ScriptError::INTEGER_OVERFLOW);
+    } catch (scriptnum_encoding_error &e) {
+        return set_error(&script_error, ScriptError::BAD_INTEGER_ENCODING);
+    } catch (...) {
+        return set_error(&script_error, ScriptError::UNKNOWN);
+    }
+    return true;
+}
+
+bool ScriptInterpreter::RunNextOpInner() {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
     static const valtype vchFalse(0);
@@ -208,6 +224,9 @@ bool ScriptInterpreter::RunNextOp() {
     ScriptError *serror = &script_error;
     bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
     bool fExec = vfExec.all_true();
+
+    // Maximum integer byte size
+    const size_t nMaxNumSize = MAX_SCRIPTNUM_BYTE_SIZE;
 
     //
     // Read instruction
@@ -583,7 +602,9 @@ bool ScriptInterpreter::RunNextOp() {
                     return set_error(serror,
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
-                int64_t n = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                int64_t n =
+                    CScriptNum(stacktop(-1), fRequireMinimal, nMaxNumSize)
+                        .getint();
                 popstack(stack);
                 if (n < 0 || uint64_t(n) >= uint64_t(stack.size())) {
                     return set_error(serror,
@@ -727,7 +748,7 @@ bool ScriptInterpreter::RunNextOp() {
                     return set_error(serror,
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
-                CScriptNum bn(stacktop(-1), fRequireMinimal);
+                CScriptNum bn(stacktop(-1), fRequireMinimal, nMaxNumSize);
                 switch (opcode) {
                     case OP_1ADD:
                         bn += bnOne;
@@ -777,8 +798,8 @@ bool ScriptInterpreter::RunNextOp() {
                     return set_error(serror,
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
-                CScriptNum bn1(stacktop(-2), fRequireMinimal);
-                CScriptNum bn2(stacktop(-1), fRequireMinimal);
+                CScriptNum bn1(stacktop(-2), fRequireMinimal, nMaxNumSize);
+                CScriptNum bn2(stacktop(-1), fRequireMinimal, nMaxNumSize);
                 CScriptNum bn(0);
                 switch (opcode) {
                     case OP_ADD:
@@ -861,9 +882,9 @@ bool ScriptInterpreter::RunNextOp() {
                     return set_error(serror,
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
-                CScriptNum bn1(stacktop(-3), fRequireMinimal);
-                CScriptNum bn2(stacktop(-2), fRequireMinimal);
-                CScriptNum bn3(stacktop(-1), fRequireMinimal);
+                CScriptNum bn1(stacktop(-3), fRequireMinimal, nMaxNumSize);
+                CScriptNum bn2(stacktop(-2), fRequireMinimal, nMaxNumSize);
+                CScriptNum bn3(stacktop(-1), fRequireMinimal, nMaxNumSize);
                 bool fValue = (bn2 <= bn1 && bn1 < bn3);
                 popstack(stack);
                 popstack(stack);
@@ -999,7 +1020,8 @@ bool ScriptInterpreter::RunNextOp() {
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
                 const int64_t nKeysCount =
-                    CScriptNum(stacktop(-idxKeyCount), fRequireMinimal)
+                    CScriptNum(stacktop(-idxKeyCount), fRequireMinimal,
+                               nMaxNumSize)
                         .getint();
                 if (nKeysCount < 0 || nKeysCount > MAX_PUBKEYS_PER_MULTISIG) {
                     return set_error(serror, ScriptError::PUBKEY_COUNT);
@@ -1019,7 +1041,8 @@ bool ScriptInterpreter::RunNextOp() {
                                      ScriptError::INVALID_STACK_OPERATION);
                 }
                 const int64_t nSigsCount =
-                    CScriptNum(stacktop(-idxSigCount), fRequireMinimal)
+                    CScriptNum(stacktop(-idxSigCount), fRequireMinimal,
+                               nMaxNumSize)
                         .getint();
                 if (nSigsCount < 0 || nSigsCount > nKeysCount) {
                     return set_error(serror, ScriptError::SIG_COUNT);
@@ -1240,7 +1263,8 @@ bool ScriptInterpreter::RunNextOp() {
 
                 // Make sure the split point is appropriate.
                 uint64_t position =
-                    CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    CScriptNum(stacktop(-1), fRequireMinimal, nMaxNumSize)
+                        .getint();
                 if (position > data.size()) {
                     return set_error(serror, ScriptError::INVALID_SPLIT_RANGE);
                 }
@@ -1277,7 +1301,8 @@ bool ScriptInterpreter::RunNextOp() {
                 }
 
                 uint64_t size =
-                    CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    CScriptNum(stacktop(-1), fRequireMinimal, nMaxNumSize)
+                        .getint();
                 if (size > MAX_SCRIPT_ELEMENT_SIZE) {
                     return set_error(serror, ScriptError::PUSH_SIZE);
                 }
@@ -1324,8 +1349,10 @@ bool ScriptInterpreter::RunNextOp() {
                 CScriptNum::MinimallyEncode(n);
 
                 // The resulting number must be a valid number.
-                if (!CScriptNum::IsMinimallyEncoded(n)) {
-                    return set_error(serror, ScriptError::INVALID_NUMBER_RANGE);
+                // Note: Since n is already minimally encoded, this only checks
+                // for integer overflows.
+                if (!CScriptNum::IsMinimallyEncoded(n, nMaxNumSize)) {
+                    return set_error(serror, ScriptError::INTEGER_OVERFLOW);
                 }
             } break;
 
@@ -1505,11 +1532,36 @@ template PrecomputedTransactionData::PrecomputedTransactionData(
 template PrecomputedTransactionData::PrecomputedTransactionData(
     const CMutableTransaction &txTo);
 
+int SigHashCache::CacheIndex(const SigHashType &hash_type) const noexcept {
+    return 6 * hash_type.hasForkId() + 3 * hash_type.hasAnyoneCanPay() +
+           2 * (hash_type.getBaseType() == BaseSigHashType::SINGLE) +
+           1 * (hash_type.getBaseType() == BaseSigHashType::NONE);
+}
+
+bool SigHashCache::Load(const SigHashType &hash_type,
+                        const CScript &script_code,
+                        HashWriter &writer) const noexcept {
+    auto &entry = m_cache_entries[CacheIndex(hash_type)];
+    if (entry.has_value() && (script_code == entry->first)) {
+        writer = HashWriter(entry->second);
+        return true;
+    }
+    return false;
+}
+
+void SigHashCache::Store(const SigHashType &hash_type,
+                         const CScript &script_code,
+                         const HashWriter &writer) noexcept {
+    auto &entry = m_cache_entries[CacheIndex(hash_type)];
+    entry.emplace(script_code, writer);
+}
+
 template <class T>
 uint256 SignatureHash(const CScript &scriptCode, const T &txTo,
                       unsigned int nIn, SigHashType sigHashType,
                       const Amount amount,
-                      const PrecomputedTransactionData *cache, uint32_t flags) {
+                      const PrecomputedTransactionData *cache, uint32_t flags,
+                      SigHashCache *sighash_cache) {
     assert(nIn < txTo.vin.size());
 
     if (flags & SCRIPT_ENABLE_REPLAY_PROTECTION) {
@@ -1520,7 +1572,27 @@ uint256 SignatureHash(const CScript &scriptCode, const T &txTo,
         sigHashType = sigHashType.withForkValue(0xff0000 | newForkValue);
     }
 
-    if (sigHashType.hasForkId() && (flags & SCRIPT_ENABLE_SIGHASH_FORKID)) {
+    const bool use_forkid_sighash =
+        sigHashType.hasForkId() && (flags & SCRIPT_ENABLE_SIGHASH_FORKID);
+
+    // Check for invalid use of SIGHASH_SINGLE
+    if (!use_forkid_sighash &&
+        (sigHashType.getBaseType() == BaseSigHashType::SINGLE) &&
+        (nIn >= txTo.vout.size())) {
+        //  nOut out of range
+        return uint256::ONE;
+    }
+
+    HashWriter ss{};
+
+    // Try to compute using cached SHA256 midstate.
+    if (sighash_cache && sighash_cache->Load(sigHashType, scriptCode, ss)) {
+        // Add sighash type and hash.
+        ss << sigHashType;
+        return ss.GetHash();
+    }
+
+    if (use_forkid_sighash) {
         uint256 hashPrevouts;
         uint256 hashSequence;
         uint256 hashOutputs;
@@ -1534,18 +1606,16 @@ uint256 SignatureHash(const CScript &scriptCode, const T &txTo,
             (sigHashType.getBaseType() != BaseSigHashType::NONE)) {
             hashSequence = cache ? cache->hashSequence : GetSequenceHash(txTo);
         }
-
         if ((sigHashType.getBaseType() != BaseSigHashType::SINGLE) &&
             (sigHashType.getBaseType() != BaseSigHashType::NONE)) {
             hashOutputs = cache ? cache->hashOutputs : GetOutputsHash(txTo);
         } else if ((sigHashType.getBaseType() == BaseSigHashType::SINGLE) &&
                    (nIn < txTo.vout.size())) {
-            HashWriter ss{};
-            ss << txTo.vout[nIn];
-            hashOutputs = ss.GetHash();
+            HashWriter inner_ss{};
+            inner_ss << txTo.vout[nIn];
+            hashOutputs = inner_ss.GetHash();
         }
 
-        HashWriter ss{};
         // Version
         ss << txTo.nVersion;
         // Input prevouts/nSequence (none/all, depending on flags)
@@ -1562,27 +1632,22 @@ uint256 SignatureHash(const CScript &scriptCode, const T &txTo,
         ss << hashOutputs;
         // Locktime
         ss << txTo.nLockTime;
-        // Sighash type
-        ss << sigHashType;
+    } else {
+        // Wrapper to serialize only the necessary parts of the transaction
+        // being signed
+        CTransactionSignatureSerializer<T> txTmp(txTo, scriptCode, nIn,
+                                                 sigHashType);
 
-        return ss.GetHash();
+        ss << txTmp;
     }
 
-    // Check for invalid use of SIGHASH_SINGLE
-    if ((sigHashType.getBaseType() == BaseSigHashType::SINGLE) &&
-        (nIn >= txTo.vout.size())) {
-        //  nOut out of range
-        return uint256::ONE;
+    // If a cache object was provided, store the midstate there.
+    if (sighash_cache != nullptr) {
+        sighash_cache->Store(sigHashType, scriptCode, ss);
     }
 
-    // Wrapper to serialize only the necessary parts of the transaction being
-    // signed
-    CTransactionSignatureSerializer<T> txTmp(txTo, scriptCode, nIn,
-                                             sigHashType);
-
-    // Serialize and hash
-    HashWriter ss{};
-    ss << txTmp << sigHashType;
+    // Add sighash type and hash
+    ss << sigHashType;
     return ss.GetHash();
 }
 
@@ -1614,7 +1679,7 @@ bool GenericTransactionSignatureChecker<T>::CheckSig(
     vchSig.pop_back();
 
     uint256 sighash = SignatureHash(scriptCode, *txTo, nIn, sigHashType, amount,
-                                    this->txdata, flags);
+                                    this->txdata, flags, &m_sighash_cache);
 
     if (!VerifySignature(vchSig, pubkey, sighash)) {
         return false;

@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the avalanche cooldown between polls."""
+
 import time
 
 from test_framework.avatools import get_ava_p2p_interface
@@ -36,13 +37,14 @@ class AvalancheCooldownTest(BitcoinTestFramework):
                 "-avaminavaproofsnodecount=0",
                 "-avacooldown=10000",
                 "-persistavapeers=0",
-                # For polling transactions
-                "-avalanchepreconsensus=1",
             ],
         ]
 
     def run_test(self):
         node = self.nodes[0]
+
+        now = int(time.time())
+        node.setmocktime(now)
 
         # Build a fake quorum of nodes.
         def get_quorum():
@@ -116,7 +118,12 @@ class AvalancheCooldownTest(BitcoinTestFramework):
         # node uses the steady clock which is not mockable.
         cooldown_ms = 100
         self.restart_node(
-            0, extra_args=self.extra_args[0] + [f"-avacooldown={cooldown_ms}"]
+            0,
+            extra_args=self.extra_args[0]
+            + [
+                f"-avacooldown={cooldown_ms}",
+                f"-mocktime={now}",
+            ],
         )
 
         quorum = get_quorum()

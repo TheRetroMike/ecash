@@ -53,7 +53,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         block.solve()
         # Save the coinbase for later
         block1 = block
-        tip = block.sha256
+        tip = block.hash_int
         peer.send_blocks_and_test([block1], node, success=True)
 
         self.log.info("Mature the block.")
@@ -84,13 +84,13 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         )
         block_time += 1
         block2.solve()
-        orig_hash = block2.sha256
+        orig_hash = block2.hash_int
         block2_orig = copy.deepcopy(block2)
 
         # Mutate block 2
         block2.vtx.append(block2.vtx[2])
         assert_equal(block2.hashMerkleRoot, block2.calc_merkle_root())
-        assert_equal(orig_hash, block2.rehash())
+        assert_equal(orig_hash, block2.hash_int)
         assert block2_orig.vtx != block2.vtx
 
         peer.send_blocks_and_test(
@@ -102,7 +102,6 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
 
         block2_dup = copy.deepcopy(block2_orig)
         block2_dup.vtx[2].vin.append(block2_dup.vtx[2].vin[0])
-        block2_dup.vtx[2].rehash()
         make_conform_to_ctor(block2_dup)
         block2_dup.hashMerkleRoot = block2_dup.calc_merkle_root()
         block2_dup.solve()
@@ -134,7 +133,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         # Update tip info
         height += 1
         block_time += 1
-        tip = int(block2_orig.hash, 16)
+        tip = int(block2_orig.hash_hex, 16)
 
         # Complete testing of CVE-2018-17144, by checking for the inflation bug.
         # Create a block that spends the output of a tx in a previous block.
@@ -143,7 +142,6 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         )
         # Duplicates input
         tx3.vin.append(tx3.vin[0])
-        tx3.rehash()
         block4 = create_block(tip, create_coinbase(height), block_time, txlist=[tx3])
         block4.solve()
         self.log.info("Test inflation by duplicating input")

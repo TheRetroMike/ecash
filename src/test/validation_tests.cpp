@@ -6,7 +6,6 @@
 #include <validation.h>
 
 #include <chainparams.h>
-#include <clientversion.h>
 #include <common/system.h>
 #include <config.h>
 #include <consensus/amount.h>
@@ -95,7 +94,7 @@ static CBlock makeLargeDummyBlock(const size_t num_tx) {
 /**
  * Test that LoadExternalBlockFile works with the buffer size set below the
  * size of a large block. Currently, LoadExternalBlockFile has the buffer size
- * for CBufferedFile set to 2 * MAX_TX_SIZE. Test with a value of
+ * for BufferedFile set to 2 * MAX_TX_SIZE. Test with a value of
  * 10 * MAX_TX_SIZE.
  */
 BOOST_AUTO_TEST_CASE(validation_load_external_block_file) {
@@ -116,24 +115,20 @@ BOOST_AUTO_TEST_CASE(validation_load_external_block_file) {
     BOOST_CHECK_EQUAL(nwritten, 1UL);
 
     CTransaction empty_tx;
-    size_t empty_tx_size = GetSerializeSize(empty_tx, CLIENT_VERSION);
+    size_t empty_tx_size = GetSerializeSize(empty_tx);
 
     size_t num_tx = (10 * MAX_TX_SIZE) / empty_tx_size;
 
     CBlock block = makeLargeDummyBlock(num_tx);
 
-    BOOST_CHECK(GetSerializeSize(block, CLIENT_VERSION) > 2 * MAX_TX_SIZE);
+    BOOST_CHECK(GetSerializeSize(block) > 2 * MAX_TX_SIZE);
 
-    unsigned int size = GetSerializeSize(block, CLIENT_VERSION);
-    {
-        CAutoFile outs(fp, SER_DISK, CLIENT_VERSION);
-        outs << size;
-        outs << block;
-        outs.release();
-    }
+    unsigned int size = GetSerializeSize(block);
+    AutoFile outs{fp};
+    outs << size;
+    outs << block;
 
-    fseek(fp, 0, SEEK_SET);
-    BOOST_CHECK_NO_THROW({ m_node.chainman->LoadExternalBlockFile(fp, 0); });
+    BOOST_CHECK_NO_THROW({ m_node.chainman->LoadExternalBlockFile(outs, 0); });
 }
 
 //! Test retrieval of valid assumeutxo values.
@@ -245,7 +240,7 @@ BOOST_AUTO_TEST_CASE(block_malleation) {
             block.vtx.push_back(MakeTransactionRef(mtx));
             block.hashMerkleRoot = block.vtx.back()->GetHash();
             assert(block.vtx.back()->IsCoinBase());
-            assert(GetSerializeSize(block.vtx.back(), PROTOCOL_VERSION) == 64);
+            assert(GetSerializeSize(block.vtx.back()) == 64);
         }
         BOOST_CHECK(is_not_mutated(block));
     }
@@ -285,7 +280,7 @@ BOOST_AUTO_TEST_CASE(block_malleation) {
             hasher << tx2.GetId();
             assert(hasher.GetHash() == tx3.GetHash());
             // Verify that tx3 is 64 bytes in size.
-            assert(GetSerializeSize(tx3, PROTOCOL_VERSION) == 64);
+            assert(GetSerializeSize(tx3) == 64);
         }
 
         CBlock block;

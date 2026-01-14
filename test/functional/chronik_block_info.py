@@ -53,7 +53,6 @@ class ChronikBlockInfoTest(BitcoinTestFramework):
             CTxOut(coinvalue - 10000, P2SH_OP_TRUE),
             CTxOut(1000, CScript([OP_RETURN, b"test"])),
         ]
-        tx.rehash()
 
         txid = node.sendrawtransaction(tx.serialize().hex())
 
@@ -94,7 +93,6 @@ class ChronikBlockInfoTest(BitcoinTestFramework):
             CTxOut(5000, CScript([OP_RETURN, b"test"])),
             CTxOut(coinvalue - 20000, P2SH_OP_TRUE),
         ]
-        tx2.rehash()
 
         block = create_block(
             int(prev_hash, 16),
@@ -107,10 +105,10 @@ class ChronikBlockInfoTest(BitcoinTestFramework):
         node.syncwithvalidationinterfacequeue()
 
         assert_equal(
-            chronik.block(block.hash).ok(),
+            chronik.block(block.hash_hex).ok(),
             pb.Block(
                 block_info=pb.BlockInfo(
-                    hash=bytes.fromhex(block.hash)[::-1],
+                    hash=bytes.fromhex(block.hash_hex)[::-1],
                     prev_hash=bytes.fromhex(prev_hash)[::-1],
                     height=102,
                     n_bits=0x207FFFFF,

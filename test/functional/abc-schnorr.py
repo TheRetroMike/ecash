@@ -49,10 +49,6 @@ NULLFAIL_ERROR = (
     " CHECK(MULTI)SIG operation)"
 )
 
-# Blocks with invalid scripts give this error:
-BADINPUTS_ERROR = "blk-bad-inputs"
-
-
 # This 64-byte signature is used to test exclusion & banning according to
 # the above error messages.
 # Tests of real 64 byte ECDSA signatures can be found in script_tests.
@@ -78,26 +74,24 @@ class SchnorrTest(BitcoinTestFramework):
         block_height = node.getblockcount()
         blockhash = node.getblockhash(block_height)
         block = FromHex(CBlock(), node.getblock(blockhash, 0))
-        block.calc_sha256()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def build_block(self, parent, transactions=(), nTime=None):
         """Make a new block with an OP_1 coinbase output.
 
         Requires parent to have its height registered."""
-        parent.calc_sha256()
-        block_height = self.block_heights[parent.sha256] + 1
+        block_height = self.block_heights[parent.hash_int] + 1
         block_time = (parent.nTime + 1) if nTime is None else nTime
 
         block = create_block(
-            parent.sha256,
+            parent.hash_int,
             create_coinbase(block_height),
             block_time,
             txlist=transactions,
         )
         block.solve()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def check_for_ban_on_rejected_tx(self, tx, reject_reason=None):
@@ -169,13 +163,12 @@ class SchnorrTest(BitcoinTestFramework):
             txfund = create_tx_with_script(
                 spendfrom, 0, b"", amount=value, script_pub_key=script
             )
-            txfund.rehash()
             fundings.append(txfund)
 
             # Spend transaction
             txspend = CTransaction()
             txspend.vout.append(CTxOut(value - 1000, CScript([OP_TRUE])))
-            txspend.vin.append(CTxIn(COutPoint(txfund.sha256, 0), b""))
+            txspend.vin.append(CTxIn(COutPoint(txfund.txid_int, 0), b""))
 
             # Sign the transaction
             sighashtype = SIGHASH_ALL | SIGHASH_FORKID
@@ -191,7 +184,6 @@ class SchnorrTest(BitcoinTestFramework):
                 txspend.vin[0].scriptSig = CScript([b"", txsig])
             else:
                 txspend.vin[0].scriptSig = CScript([txsig])
-            txspend.rehash()
 
             return txspend
 
@@ -210,8 +202,8 @@ class SchnorrTest(BitcoinTestFramework):
         self.generate(node, 1, sync_fun=self.no_op)
         tip = self.getbestblock(node)
         # Make sure they are in the block, and mempool is now empty.
-        txhashes = {schnorrchecksigtx.hash, ecdsachecksigtx.hash}
-        assert txhashes.issubset(tx.rehash() for tx in tip.vtx)
+        txhashes = {schnorrchecksigtx.txid_hex, ecdsachecksigtx.txid_hex}
+        assert txhashes.issubset(tx.txid_hex for tx in tip.vtx)
         assert not node.getrawmempool()
 
         self.log.info("Schnorr in multisig is rejected with mandatory error.")
@@ -225,7 +217,7 @@ class SchnorrTest(BitcoinTestFramework):
         self.check_for_ban_on_rejected_tx(schnorrmultisigtx, SCHNORR_MULTISIG_ERROR)
         # And it can't be mined
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [schnorrmultisigtx]), BADINPUTS_ERROR
+            self.build_block(tip, [schnorrmultisigtx]), SCHNORR_MULTISIG_ERROR
         )
 
         self.log.info("Bad 64-byte sig is rejected with mandatory error.")
@@ -242,10 +234,10 @@ class SchnorrTest(BitcoinTestFramework):
         self.check_for_ban_on_rejected_tx(sig64multisigtx, SCHNORR_MULTISIG_ERROR)
         # And they can't be mined either...
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [sig64checksigtx]), BADINPUTS_ERROR
+            self.build_block(tip, [sig64checksigtx]), NULLFAIL_ERROR
         )
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [sig64multisigtx]), BADINPUTS_ERROR
+            self.build_block(tip, [sig64multisigtx]), SCHNORR_MULTISIG_ERROR
         )
 
 

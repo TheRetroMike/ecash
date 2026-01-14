@@ -23,7 +23,7 @@ from test_framework.util import assert_equal
 
 
 class PreviousSpendableOutput:
-    def __init__(self, tx=CTransaction(), n=-1):
+    def __init__(self, tx: CTransaction, n=-1):
         self.tx = tx
         self.n = n  # the output we're spending
 
@@ -38,7 +38,6 @@ class TransactionOrderingTest(BitcoinTestFramework):
         self.noban_tx_relay = True
 
     def add_transactions_to_block(self, block, tx_list):
-        [tx.rehash() for tx in tx_list]
         block.vtx.extend(tx_list)
 
     def next_block(self, number, spend=None, tx_count=0):
@@ -46,7 +45,7 @@ class TransactionOrderingTest(BitcoinTestFramework):
             base_block_hash = self.genesis_hash
             block_time = int(time.time()) + 1
         else:
-            base_block_hash = self.tip.sha256
+            base_block_hash = self.tip.hash_int
             block_time = self.tip.nTime + 1
         # First create the coinbase
         height = self.block_heights[base_block_hash] + 1
@@ -57,7 +56,6 @@ class TransactionOrderingTest(BitcoinTestFramework):
         else:
             # all but one satoshi to fees
             coinbase.vout[0].nValue += spend.tx.vout[spend.n].nValue - 1
-            coinbase.rehash()
             block = create_block(base_block_hash, coinbase, block_time)
 
             # Make sure we have plenty enough to spend going forward.
@@ -68,7 +66,7 @@ class TransactionOrderingTest(BitcoinTestFramework):
                 tx = CTransaction()
                 # Spend from one of the spendable outputs
                 spend = spendable_outputs.popleft()
-                tx.vin.append(CTxIn(COutPoint(spend.tx.sha256, spend.n)))
+                tx.vin.append(CTxIn(COutPoint(spend.tx.txid_int, spend.n)))
                 # Add spendable outputs
                 for i in range(4):
                     tx.vout.append(CTxOut(0, CScript([OP_TRUE])))
@@ -80,11 +78,6 @@ class TransactionOrderingTest(BitcoinTestFramework):
                 return tx
 
             tx = get_base_transaction()
-
-            # Make it the same format as transaction added for padding and save the size.
-            # It's missing the padding output, so we add a constant to account
-            # for it.
-            tx.rehash()
 
             # Add the transaction to the block
             self.add_transactions_to_block(block, [tx])
@@ -106,7 +99,7 @@ class TransactionOrderingTest(BitcoinTestFramework):
         # Do PoW, which is cheap on regnet
         block.solve()
         self.tip = block
-        self.block_heights[block.sha256] = height
+        self.block_heights[block.hash_int] = height
         assert number not in self.blocks
         self.blocks[number] = block
         return block
@@ -136,13 +129,13 @@ class TransactionOrderingTest(BitcoinTestFramework):
         # update block state
         def update_block(block_number):
             block = self.blocks[block_number]
-            old_sha256 = block.sha256
+            old_sha256 = block.hash_int
             block.hashMerkleRoot = block.calc_merkle_root()
             block.solve()
             # Update the internal state just like in next_block
             self.tip = block
-            if block.sha256 != old_sha256:
-                self.block_heights[block.sha256] = self.block_heights[old_sha256]
+            if block.hash_int != old_sha256:
+                self.block_heights[block.hash_int] = self.block_heights[old_sha256]
                 del self.block_heights[old_sha256]
             self.blocks[block_number] = block
             return block
@@ -219,7 +212,7 @@ class TransactionOrderingTest(BitcoinTestFramework):
         assert_equal(len(replay_tx_block.vtx), 16)
         replay_tx_block.vtx.append(proper_block.vtx[5])
         replay_tx_block.vtx = [replay_tx_block.vtx[0]] + sorted(
-            replay_tx_block.vtx[1:], key=lambda tx: tx.get_id()
+            replay_tx_block.vtx[1:], key=lambda tx: tx.txid_hex
         )
         update_block(4449)
         peer.send_blocks_and_test(

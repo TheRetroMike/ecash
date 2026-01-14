@@ -26,7 +26,6 @@ EXPECTED_CIRCULAR_DEPENDENCIES=(
     "avalanche/processor -> policy/block/stakingrewards -> avalanche/processor"
     "chainparams -> protocol -> chainparams"
     "chainparamsbase -> common/args -> chainparamsbase"
-    "script/scriptcache -> validation -> script/scriptcache"
     "seeder/bitcoin -> seeder/db -> seeder/bitcoin"
     "chainparams -> protocol -> config -> chainparams"
     "avalanche/peermanager -> avalanche/proofpool -> avalanche/peermanager"
@@ -36,6 +35,9 @@ EXPECTED_CIRCULAR_DEPENDENCIES=(
 
     # Temporary, removed in a followup
     "index/base -> node/context -> net_processing -> index/blockfilterindex -> index/base"
+
+    # Temporary, to be removed when preconsensus is activated by default
+    "avalanche/processor -> validation -> policy/block/preconsensus -> avalanche/processor"
 )
 
 EXIT_CODE=0

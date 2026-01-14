@@ -11,9 +11,10 @@ from functools import partial, wraps
 from locale import atof
 from typing import Optional
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import (
+import qtpy
+from qtpy import QtWidgets
+from qtpy.QtCore import QObject, Qt, QThread, QTimer, Signal
+from qtpy.QtGui import (
     QColor,
     QCursor,
     QFocusEvent,
@@ -102,9 +103,9 @@ class WWLabel(QtWidgets.QLabel):
 # --- Help widgets
 class HelpMixin:
     def __init__(self, help_text, *, custom_parent=None):
-        assert isinstance(
-            self, QtWidgets.QWidget
-        ), "HelpMixin must be a QWidget instance!"
+        assert isinstance(self, QtWidgets.QWidget), (
+            "HelpMixin must be a QWidget instance!"
+        )
         self.help_text = help_text
         self.custom_parent = custom_parent
         if isinstance(self, QtWidgets.QLabel):
@@ -155,7 +156,7 @@ class HelpButton(HelpMixin, QtWidgets.QPushButton):
         HelpMixin.__init__(self, text, custom_parent=custom_parent)
         self.setToolTip(tool_tip or _("Show help"))
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setFocusPolicy(Qt.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if fixed_size:
             self.setFixedWidth(round(2.2 * char_width_in_lineedit()))
         if icon:
@@ -431,7 +432,7 @@ class WaitingDialog(WindowModalDialog):
     close the dialog. Sometimes this is desirable, and sometimes it isn't, hence
     why the option is offered."""
 
-    _update_progress_sig = pyqtSignal(int)
+    _update_progress_sig = Signal(int)
 
     def __init__(
         self,
@@ -517,7 +518,15 @@ class WaitingDialog(WindowModalDialog):
             super().keyPressEvent(e)
 
 
-def text_dialog(parent, title, label, ok_label, default=None, allow_multi=False):
+def text_dialog(
+    parent,
+    title,
+    label,
+    ok_label,
+    config: SimpleConfig,
+    default=None,
+    allow_multi=False,
+):
     from .qrtextedit import ScanQRTextEdit
 
     dialog = WindowModalDialog(parent, title)
@@ -525,7 +534,7 @@ def text_dialog(parent, title, label, ok_label, default=None, allow_multi=False)
     layout = QtWidgets.QVBoxLayout()
     dialog.setLayout(layout)
     layout.addWidget(QtWidgets.QLabel(label))
-    txt = ScanQRTextEdit(allow_multi=allow_multi)
+    txt = ScanQRTextEdit(config, allow_multi=allow_multi)
     if default:
         txt.setText(default)
     layout.addWidget(txt)
@@ -606,7 +615,9 @@ def filename_field(config, defaultname, select_msg):
         _filter = (
             "*.csv"
             if text.endswith(".csv")
-            else "*.json" if text.endswith(".json") else None
+            else "*.json"
+            if text.endswith(".json")
+            else None
         )
         p, __ = QtWidgets.QFileDialog.getSaveFileName(None, select_msg, text, _filter)
         if p:
@@ -735,8 +746,7 @@ class OverlayControlMixin:
         return self.addButton(":icons/copy.png", self.on_copy, _("Copy to clipboard"))
 
     def on_copy(self):
-        QtWidgets.QApplication.instance().clipboard().setText(self.text())
-        QtWidgets.QToolTip.showText(QCursor.pos(), _("Text copied to clipboard"), self)
+        copy_to_clipboard(self.text(), self)
 
     def keyPressEvent(self, e):
         if not self.hasFocus():
@@ -769,7 +779,7 @@ class ButtonsTextEdit(OverlayControlMixin, QtWidgets.QPlainTextEdit):
 class PasswordLineEdit(QtWidgets.QLineEdit):
     def __init__(self, *args, **kwargs):
         QtWidgets.QLineEdit.__init__(self, *args, **kwargs)
-        self.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
 
 
 class TaskThread(PrintError, QThread):
@@ -777,7 +787,7 @@ class TaskThread(PrintError, QThread):
     to happen in the context of its parent."""
 
     Task = namedtuple("Task", "task cb_success cb_done cb_error")
-    doneSig = pyqtSignal(object, object, object)
+    doneSig = Signal(object, object, object)
 
     def __init__(self, parent, on_error=None, *, name=None):
         QThread.__init__(self, parent)
@@ -875,7 +885,11 @@ class _ColorScheme:
             self.GRAY = ColorSchemeItem("#777777", "#a0a0a4")  # darkGray, gray
 
     def has_dark_background(self, widget):
-        brightness = sum(widget.palette().color(QPalette.Background).getRgb()[0:3])
+        if qtpy.QT5:
+            bg_color_role = QPalette.Background
+        else:
+            bg_color_role = QPalette.ColorRole.Window
+        brightness = sum(widget.palette().color(bg_color_role).getRgb()[0:3])
         return brightness < (255 * 3 / 2)
 
     def update_from_widget(self, widget, *, force_dark=False):
@@ -977,9 +991,9 @@ class RateLimiter(PrintError):
     def invoke(cls, rate, ts_after, func, args, kwargs):
         """Calls _invoke() on an existing RateLimiter object (or creates a new
         one for the given function on first run per target object instance)."""
-        assert args and isinstance(
-            args[0], object
-        ), "@rate_limited decorator may only be used with object instance methods"
+        assert args and isinstance(args[0], object), (
+            "@rate_limited decorator may only be used with object instance methods"
+        )
         assert threading.current_thread() is threading.main_thread(), (
             "@rate_limited decorator may only be used with functions called in the main"
             " thread"
@@ -1108,9 +1122,9 @@ class RateLimiterClassLvl(RateLimiter):
 
     @classmethod
     def invoke(cls, rate, ts_after, func, args, kwargs):
-        assert args and not isinstance(
-            args[0], type
-        ), "@rate_limited decorator may not be used with static or class methods"
+        assert args and not isinstance(args[0], type), (
+            "@rate_limited decorator may not be used with static or class methods"
+        )
         obj = args[0]
         objcls = obj.__class__
         args = list(args)
@@ -1197,9 +1211,9 @@ def destroyed_print_error(qobject, msg=None):
     """Supply a message to be printed via print_error when obj is destroyed (Qt C++ deleted).
     This is useful for debugging memory leaks. Note that this function is a no-op unless debug_destroyed is True.
     """
-    assert isinstance(
-        qobject, QObject
-    ), "destroyed_print_error can only be used on QObject instances!"
+    assert isinstance(qobject, QObject), (
+        "destroyed_print_error can only be used on QObject instances!"
+    )
     if not debug_destroyed:
         return
     if msg is None:
@@ -1309,6 +1323,21 @@ def getSaveFileName(title, filename, config: SimpleConfig, filtr="", parent=None
     if fileName and directory != os.path.dirname(fileName):
         config.set_key("io_dir", os.path.dirname(fileName), True)
     return fileName
+
+
+def copy_to_clipboard(
+    text: str = "", widget: Optional[QtWidgets.QWidget] = None, tooltip: str = ""
+):
+    """Copy text to clipboard and show a tooltip.
+    If text is not specified and widget is a QTextEdit, copy the selected text in the widget.
+    """
+    tooltip = tooltip or _("Text copied to clipboard")
+    if not text and isinstance(widget, QtWidgets.QTextEdit):
+        widget.copy()
+    else:
+        QtWidgets.QApplication.instance().clipboard().setText(text)
+    if widget is not None:
+        QtWidgets.QToolTip.showText(QCursor.pos(), tooltip, widget)
 
 
 if __name__ == "__main__":

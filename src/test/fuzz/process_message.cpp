@@ -8,12 +8,12 @@
 #include <consensus/consensus.h>
 #include <net.h>
 #include <net_processing.h>
+#include <node/protocol_version.h>
 #include <protocol.h>
 #include <scheduler.h>
 #include <script/script.h>
 #include <streams.h>
 #include <validationinterface.h>
-#include <version.h>
 
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
@@ -56,7 +56,8 @@ void fuzz_target(const std::vector<uint8_t> &buffer,
     LOCK(NetEventsInterface::g_msgproc_mutex);
 
     const std::string random_message_type{
-        fuzzed_data_provider.ConsumeBytesAsString(CMessageHeader::COMMAND_SIZE)
+        fuzzed_data_provider
+            .ConsumeBytesAsString(CMessageHeader::MESSAGE_TYPE_SIZE)
             .c_str()};
     if (!LIMIT_TO_MESSAGE_TYPE.empty() &&
         random_message_type != LIMIT_TO_MESSAGE_TYPE) {
@@ -71,9 +72,8 @@ void fuzz_target(const std::vector<uint8_t> &buffer,
     g_setup->m_node.peerman->InitializeNode(
         config, p2p_node, ServiceFlags(NODE_NETWORK | NODE_BLOOM));
     // fuzzed_data_provider is fully consumed after this call, don't use it
-    CDataStream random_bytes_data_stream{
-        fuzzed_data_provider.ConsumeRemainingBytes<uint8_t>(), SER_NETWORK,
-        PROTOCOL_VERSION};
+    DataStream random_bytes_data_stream{
+        fuzzed_data_provider.ConsumeRemainingBytes<uint8_t>()};
     try {
         g_setup->m_node.peerman->ProcessMessage(
             config, p2p_node, random_message_type, random_bytes_data_stream,

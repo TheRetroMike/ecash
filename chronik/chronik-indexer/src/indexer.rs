@@ -46,11 +46,12 @@ use crate::{
     indexer::ChronikIndexerError::*,
     merkle::MerkleTree,
     query::{
-        QueryBlocks, QueryBroadcast, QueryGroupHistory, QueryGroupUtxos,
-        QueryPlugins, QueryTxs, UtxoProtobufOutput, UtxoProtobufValue,
+        read_plugin_outputs, QueryBlocks, QueryBroadcast, QueryGroupHistory,
+        QueryGroupUtxos, QueryPlugins, QueryTxs, UtxoProtobufOutput,
+        UtxoProtobufValue,
     },
     subs::{BlockMsg, BlockMsgType, Subs},
-    subs_group::TxMsgType,
+    subs_group::{TxFinalizationReason, TxMsgType},
 };
 
 const CURRENT_INDEXER_VERSION: SchemaVersion = 13;
@@ -88,6 +89,7 @@ pub struct ChronikIndexerParams {
 #[derive(Debug)]
 pub struct ChronikIndexer {
     db: Db,
+    node: Arc<Node>,
     mem_data: MemData,
     mempool: Mempool,
     script_group: ScriptGroup,
@@ -246,18 +248,42 @@ pub enum ChronikIndexerError {
     #[error("Inconsistent DB: Tx with tx_num {0} doesn't exist")]
     TxNotFound(TxNum),
 
+    /// Inconsistent DB: Tx doesn't exist
+    #[error("Inconsistent DB: Tx with id {0} doesn't exist")]
+    TxIdNotFound(TxId),
+
     /// Inconsistent DB: Block doesn't exist
     #[error("Inconsistent DB: Block with height {0} doesn't exist")]
     BlockNotFound(BlockHeight),
+
+    /// Inconsistent DB: Tx doesn't exist
+    #[error("Inconsistent DB: Tx with id {0} has no block")]
+    DbTxHasNoBlock(TxId),
+}
+
+/// Structured data about the paths used by the indexer setup
+#[derive(Debug)]
+struct ChronikIndexerPathInfo {
+    perf_path: PathBuf,
+    db_path: PathBuf,
+}
+
+/// Structured data about the db used by the indexer setup
+
+#[derive(Debug)]
+struct ChronikIndexerDbInfo {
+    db: Db,
+    schema_version: u64,
+    needs_lokad_id_reindex: bool,
+    needs_scripthash_reindex: bool,
+    plugin_name_map: PluginNameMap,
 }
 
 impl ChronikIndexer {
-    /// Setup the indexer with the given parameters, e.g. open the DB etc.
-    pub fn setup(
-        params: ChronikIndexerParams,
-        load_tx: impl Fn(u32, u32, u32) -> Result<Tx>,
-        shutdown_requested: impl Fn() -> bool,
-    ) -> Result<Self> {
+    /// Prepare the files and directories
+    fn prepare_db_folder(
+        params: &ChronikIndexerParams,
+    ) -> Result<ChronikIndexerPathInfo> {
         let indexes_path = params.datadir_net.join("indexes");
         let perf_path = params.datadir_net.join("perf");
         if !indexes_path.exists() {
@@ -274,8 +300,17 @@ impl ChronikIndexer {
             Db::destroy(&db_path)?;
         }
 
+        Ok(ChronikIndexerPathInfo { perf_path, db_path })
+    }
+
+    /// Prepare the db
+    fn prepare_db(
+        params: &ChronikIndexerParams,
+        db_path: &PathBuf,
+    ) -> Result<ChronikIndexerDbInfo> {
         log_chronik!("Opening Chronik at {}\n", db_path.to_string_lossy());
-        let db = Db::open(&db_path)?;
+
+        let db = Db::open(db_path)?;
         let is_db_empty = db.is_db_empty()?;
         let schema_version = verify_schema_version(&db)?;
         verify_enable_token_index(&db, params.enable_token_index)?;
@@ -289,18 +324,34 @@ impl ChronikIndexer {
             is_db_empty,
             params.enable_scripthash_index,
         )?;
-        upgrade_db_if_needed(
-            &db,
-            schema_version,
-            params.enable_token_index,
-            &load_tx,
-            &shutdown_requested,
-        )?;
-
         let plugin_name_map = update_plugins_index(
             &db,
             &params.plugin_ctx,
             params.enable_lokad_id_index,
+        )?;
+
+        Ok(ChronikIndexerDbInfo {
+            db,
+            schema_version,
+            needs_lokad_id_reindex,
+            needs_scripthash_reindex,
+            plugin_name_map,
+        })
+    }
+
+    /// Setup the indexer with the given parameters, e.g. open the DB etc.
+    pub fn setup(
+        params: ChronikIndexerParams,
+        node: Arc<Node>,
+    ) -> Result<Self> {
+        let path_info = ChronikIndexer::prepare_db_folder(&params)?;
+        let db_info = ChronikIndexer::prepare_db(&params, &path_info.db_path)?;
+
+        upgrade_db_if_needed(
+            &db_info.db,
+            &node,
+            db_info.schema_version,
+            params.enable_token_index,
         )?;
 
         let mempool = Mempool::new(
@@ -313,33 +364,31 @@ impl ChronikIndexer {
             script_history: params.script_history,
         });
         Ok(ChronikIndexer {
-            db,
+            db: db_info.db,
+            node,
             mempool,
             mem_data,
             script_group: ScriptGroup,
             avalanche: Avalanche::default(),
             subs: RwLock::new(Subs::new(ScriptGroup)),
-            perf_path: params.enable_perf_stats.then_some(perf_path),
+            perf_path: params.enable_perf_stats.then_some(path_info.perf_path),
             is_token_index_enabled: params.enable_token_index,
             is_lokad_id_index_enabled: params.enable_lokad_id_index,
-            needs_lokad_id_reindex,
+            needs_lokad_id_reindex: db_info.needs_lokad_id_reindex,
             is_scripthash_index_enabled: params.enable_scripthash_index,
-            needs_scripthash_reindex,
+            needs_scripthash_reindex: db_info.needs_scripthash_reindex,
             plugin_ctx: params.plugin_ctx,
-            plugin_name_map,
+            plugin_name_map: db_info.plugin_name_map,
             block_merkle_tree: Mutex::new(MerkleTree::new()),
             decompress_script_fn: params.decompress_script_fn,
         })
     }
 
     /// Resync Chronik index to the node
-    pub fn resync_indexer(
-        &mut self,
-        bridge: &ffi::ChronikBridge,
-    ) -> Result<()> {
+    pub fn resync_indexer(&mut self, node: &Node) -> Result<()> {
         let block_reader = BlockReader::new(&self.db)?;
         let indexer_tip = block_reader.tip()?;
-        let Ok(node_tip_index) = bridge.get_chain_tip() else {
+        let Ok(node_tip_index) = node.bridge.get_chain_tip() else {
             if let Some(indexer_tip) = &indexer_tip {
                 return Err(
                     CannotRewindChronik(indexer_tip.hash.clone()).into()
@@ -359,10 +408,11 @@ impl ChronikIndexer {
                      {node_tip_hash} at height {node_height}, and Chronik is \
                      on block {indexer_tip_hash} at height {indexer_height}.\n"
                 );
-                let indexer_tip_index = bridge
+                let indexer_tip_index = node
+                    .bridge
                     .lookup_block_index(tip.hash.to_bytes())
                     .map_err(|_| CannotRewindChronik(tip.hash.clone()))?;
-                self.rewind_indexer(bridge, indexer_tip_index, &tip)?
+                self.rewind_indexer(node, indexer_tip_index, &tip)?
             }
             Some(tip) => tip.height,
             None => {
@@ -374,21 +424,21 @@ impl ChronikIndexer {
             }
         };
         if self.needs_lokad_id_reindex {
-            self.reindex_lokad_id_index(bridge, node_tip_index, start_height)?;
+            self.reindex_lokad_id_index(node, node_tip_index, start_height)?;
             self.needs_lokad_id_reindex = false;
         }
         if self.needs_scripthash_reindex {
-            self.reindex_scripthash_index(bridge)?;
+            self.reindex_scripthash_index(node)?;
             self.needs_scripthash_reindex = false;
         }
         let tip_height = node_tip_info.height;
         for height in start_height + 1..=tip_height {
-            if bridge.shutdown_requested() {
+            if node.bridge.shutdown_requested() {
                 log!("Stopped re-sync adding blocks\n");
                 return Ok(());
             }
             let block_index = ffi::get_block_ancestor(node_tip_index, height)?;
-            let block = self.load_chronik_block(bridge, block_index)?;
+            let block = self.load_chronik_block(node, block_index)?;
             let hash = block.db_block.hash.clone();
             self.handle_block_connected(block)?;
             log_chronik!(
@@ -415,12 +465,13 @@ impl ChronikIndexer {
 
     fn rewind_indexer(
         &mut self,
-        bridge: &ffi::ChronikBridge,
+        node: &Node,
         indexer_tip_index: &ffi::CBlockIndex,
         indexer_db_tip: &DbBlock,
     ) -> Result<BlockHeight> {
         let indexer_height = indexer_db_tip.height;
-        let fork_block_index = bridge
+        let fork_block_index = node
+            .bridge
             .find_fork(indexer_tip_index)
             .map_err(|_| CannotRewindChronik(indexer_db_tip.hash.clone()))?;
         let fork_info = ffi::get_block_info(fork_block_index);
@@ -433,7 +484,7 @@ impl ChronikIndexer {
         );
         log!("Reverting Chronik blocks {revert_height} to {indexer_height}.\n");
         for height in (revert_height..indexer_height).rev() {
-            if bridge.shutdown_requested() {
+            if node.bridge.shutdown_requested() {
                 log!("Stopped re-sync rewinding blocks\n");
                 // return MAX here so we don't add any blocks
                 return Ok(BlockHeight::MAX);
@@ -444,10 +495,11 @@ impl ChronikIndexer {
                     missing: height,
                     exists: indexer_height,
                 })?;
-            let block_index = bridge
+            let block_index = node
+                .bridge
                 .lookup_block_index(db_block.hash.to_bytes())
                 .map_err(|_| CannotRewindChronik(db_block.hash))?;
-            let block = self.load_chronik_block(bridge, block_index)?;
+            let block = self.load_chronik_block(node, block_index)?;
             self.handle_block_disconnected(block)?;
         }
         Ok(fork_info.height)
@@ -455,7 +507,7 @@ impl ChronikIndexer {
 
     fn reindex_lokad_id_index(
         &mut self,
-        bridge: &ffi::ChronikBridge,
+        node: &Node,
         node_tip_index: &ffi::CBlockIndex,
         end_height: BlockHeight,
     ) -> Result<()> {
@@ -470,12 +522,12 @@ impl ChronikIndexer {
         self.db.write_batch(batch)?;
 
         for height in 0..=end_height {
-            if bridge.shutdown_requested() {
+            if node.bridge.shutdown_requested() {
                 log!("Stopped reindexing LOKAD ID index\n");
                 return Ok(());
             }
             let block_index = ffi::get_block_ancestor(node_tip_index, height)?;
-            let block = self.load_chronik_block(bridge, block_index)?;
+            let block = self.load_chronik_block(node, block_index)?;
             let first_tx_num = tx_reader
                 .first_tx_num_by_block(block.db_block.height)?
                 .unwrap();
@@ -511,10 +563,7 @@ impl ChronikIndexer {
         Ok(())
     }
 
-    fn reindex_scripthash_index(
-        &mut self,
-        bridge: &ffi::ChronikBridge,
-    ) -> Result<()> {
+    fn reindex_scripthash_index(&mut self, node: &Node) -> Result<()> {
         let script_history_writer =
             ScriptHistoryWriter::new(&self.db, ScriptGroup)?;
         let metadata_writer = MetadataWriter::new(&self.db)?;
@@ -526,7 +575,7 @@ impl ChronikIndexer {
 
         script_history_writer
             .reindex_member_hash(self.decompress_script_fn, || {
-                bridge.shutdown_requested()
+                node.bridge.shutdown_requested()
             })?;
 
         let mut batch = WriteBatch::default();
@@ -537,7 +586,7 @@ impl ChronikIndexer {
         // We also wipe the db now to be sure to not keep a useless partial
         // index on disk in case -chronikscripthashindex=0 is set on next
         // restart.
-        if bridge.shutdown_requested() {
+        if node.bridge.shutdown_requested() {
             script_history_writer.wipe_member_hash(&mut batch);
             self.db.write_batch(batch)?;
             return Ok(());
@@ -844,7 +893,7 @@ impl ChronikIndexer {
         };
         subs.handle_block_tx_events(
             &block.txs,
-            TxMsgType::Finalized,
+            TxMsgType::Finalized(TxFinalizationReason::PostConsensus),
             &token_id_aux,
             &plugin_outputs,
         );
@@ -870,6 +919,133 @@ impl ChronikIndexer {
         Ok(())
     }
 
+    /// Transaction finalized with Avalanche.
+    pub fn handle_transaction_finalized(&mut self, txid: &TxId) -> Result<()> {
+        let (tx, token_id_aux, plugin_outputs) = match self.mempool.tx(txid) {
+            Some(tx) => {
+                let tx = tx.tx.clone();
+                let token_id_aux = if self.is_token_index_enabled {
+                    TokenIdGroupAux::from_mempool(&tx, self.mempool.tokens())
+                } else {
+                    TokenIdGroupAux::default()
+                };
+                let plugin_outputs = read_plugin_outputs(
+                    &self.db,
+                    &self.mempool,
+                    &tx,
+                    None,
+                    !self.plugin_name_map.is_empty(),
+                )?;
+
+                (tx, token_id_aux, plugin_outputs)
+            }
+            None => {
+                // It is possible that the transaction has been mined and is no
+                // longer in the mempool when it gets finalized, either because
+                // of the vote or because the callback is asynchronous. We need
+                // to handle both the mempool (above) and the DB case.
+                let tx_reader = TxReader::new(&self.db)?;
+                let (tx_num, block_tx) = tx_reader
+                    .tx_and_num_by_txid(txid)?
+                    .ok_or(TxIdNotFound(*txid))?;
+                let tx_entry = block_tx.entry;
+                let block_reader = BlockReader::new(&self.db)?;
+                let block = block_reader
+                    .by_height(block_tx.block_height)?
+                    .ok_or(DbTxHasNoBlock(*txid))?;
+                let tx = Tx::from(
+                    self.node
+                        .bridge
+                        .load_tx(
+                            block.file_num,
+                            tx_entry.data_pos,
+                            tx_entry.undo_pos,
+                        )
+                        .wrap_err(TxNotFound(tx_num))?,
+                );
+                let txs = [tx.clone()];
+                let index_txs = prepare_indexed_txs_cached(
+                    &self.db,
+                    tx_num,
+                    &txs,
+                    &mut self.mem_data.tx_num_cache,
+                    PrepareUpdateMode::Read,
+                )?;
+                let token_id_aux =
+                    TokenIdGroupAux::from_db(&index_txs, &self.db)?;
+                let plugin_outputs = read_plugin_outputs(
+                    &self.db,
+                    &self.mempool,
+                    &tx,
+                    Some(tx_num),
+                    !self.plugin_name_map.is_empty(),
+                )?;
+
+                (tx, token_id_aux, plugin_outputs)
+            }
+        };
+
+        let subs = self.subs.get_mut();
+        subs.handle_tx_event(
+            &tx,
+            TxMsgType::Finalized(TxFinalizationReason::PreConsensus),
+            &token_id_aux,
+            &plugin_outputs,
+        );
+        Ok(())
+    }
+
+    /// Transaction invalidated with Avalanche.
+    pub fn handle_transaction_invalidated(&mut self, tx: Tx) -> Result<()> {
+        let txid = tx.txid();
+
+        match self.mempool.tx(&txid) {
+            Some(tx) => {
+                let token_id_aux = if self.is_token_index_enabled {
+                    TokenIdGroupAux::from_mempool(&tx.tx, self.mempool.tokens())
+                } else {
+                    TokenIdGroupAux::default()
+                };
+                let plugin_outputs = read_plugin_outputs(
+                    &self.db,
+                    &self.mempool,
+                    &tx.tx,
+                    None,
+                    !self.plugin_name_map.is_empty(),
+                )?;
+
+                self.subs.get_mut().handle_tx_event(
+                    &tx.tx,
+                    TxMsgType::Invalidated,
+                    &token_id_aux,
+                    &plugin_outputs,
+                );
+            }
+            None => {
+                // If the tx is no longer in the mempool we need to parse it
+                // again.
+                let result = self.mempool.probe_tx(
+                    &self.db,
+                    MempoolTx {
+                        tx,
+                        time_first_seen: 0,
+                    },
+                    &self.plugin_ctx,
+                    &self.plugin_name_map,
+                )?;
+
+                self.subs.get_mut().handle_tx_event(
+                    &result.mempool_tx.tx,
+                    TxMsgType::Invalidated,
+                    &result.token_id_aux,
+                    &result.plugin_outputs,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Return [`QueryBroadcast`] to broadcast tx to the network.
     pub fn broadcast<'a>(&'a self, node: &'a Node) -> QueryBroadcast<'a> {
         QueryBroadcast {
@@ -879,6 +1055,7 @@ impl ChronikIndexer {
             node,
             is_token_index_enabled: self.is_token_index_enabled,
             plugin_name_map: &self.plugin_name_map,
+            subs: &self.subs,
         }
     }
 
@@ -927,13 +1104,15 @@ impl ChronikIndexer {
     }
 
     /// Return [`QueryGroupUtxos`] for scripts to query the utxos of scripts.
-    pub fn script_utxos(
-        &self,
-    ) -> Result<QueryGroupUtxos<'_, ScriptGroup, UtxoProtobufValue>> {
+    pub fn script_utxos<'a>(
+        &'a self,
+        node: &'a Node,
+    ) -> Result<QueryGroupUtxos<'a, ScriptGroup, UtxoProtobufValue>> {
         Ok(QueryGroupUtxos {
             db: &self.db,
             avalanche: &self.avalanche,
             mempool: &self.mempool,
+            node,
             mempool_utxos: self.mempool.script_utxos(),
             group: self.script_group.clone(),
             utxo_mapper: UtxoProtobufValue,
@@ -963,13 +1142,15 @@ impl ChronikIndexer {
     }
 
     /// Return [`QueryGroupUtxos`] for token IDs to query the utxos of token IDs
-    pub fn token_id_utxos(
-        &self,
-    ) -> QueryGroupUtxos<'_, TokenIdGroup, UtxoProtobufOutput> {
+    pub fn token_id_utxos<'a>(
+        &'a self,
+        node: &'a Node,
+    ) -> QueryGroupUtxos<'a, TokenIdGroup, UtxoProtobufOutput> {
         QueryGroupUtxos {
             db: &self.db,
             avalanche: &self.avalanche,
             mempool: &self.mempool,
+            node,
             mempool_utxos: self.mempool.token_id_utxos(),
             group: TokenIdGroup,
             utxo_mapper: UtxoProtobufOutput,
@@ -1084,16 +1265,21 @@ impl ChronikIndexer {
     /// Load a ChronikBlock from the node given the CBlockIndex.
     pub fn load_chronik_block(
         &self,
-        bridge: &ffi::ChronikBridge,
+        node: &Node,
         block_index: &ffi::CBlockIndex,
     ) -> Result<ChronikBlock> {
-        let ffi_block = bridge.load_block(block_index)?;
+        let ffi_block = node.bridge.load_block(block_index)?;
         let ffi_block = expect_unique_ptr("load_block", &ffi_block);
-        let ffi_block_undo = bridge.load_block_undo(block_index)?;
+        let ffi_block_undo = node.bridge.load_block_undo(block_index)?;
         let ffi_block_undo =
             expect_unique_ptr("load_block_undo", &ffi_block_undo);
         let block = ffi::bridge_block(ffi_block, ffi_block_undo, block_index)?;
         Ok(self.make_chronik_block(block))
+    }
+
+    /// Mempool, behind read/write lock
+    pub fn mempool(&self) -> &Mempool {
+        &self.mempool
     }
 }
 
@@ -1167,11 +1353,14 @@ fn verify_enable_token_index(db: &Db, enable_token_index: bool) -> Result<()> {
 
 fn upgrade_db_if_needed(
     db: &Db,
+    node: &Node,
     mut schema_version: u64,
     enable_token_index: bool,
-    load_tx: impl Fn(u32, u32, u32) -> Result<Tx>,
-    shutdown_requested: impl Fn() -> bool,
 ) -> Result<()> {
+    let load_tx = |file_num, data_pos, undo_pos| {
+        Ok(Tx::from(node.bridge.load_tx(file_num, data_pos, undo_pos)?))
+    };
+
     // DB has version 10, upgrade to 11
     if schema_version == 10 {
         upgrade_10_to_11(db, enable_token_index)?;
@@ -1179,17 +1368,13 @@ fn upgrade_db_if_needed(
     }
     // DB has version 11, upgrade to 12
     if schema_version == 11 {
-        upgrade_11_to_12(db, enable_token_index, &load_tx)?;
-        schema_version = 12;
+        upgrade_11_to_12(db, enable_token_index, load_tx)?;
     }
     // DB has version 12, upgrade to 13
     if schema_version == 12 {
-        upgrade_12_to_13(
-            db,
-            enable_token_index,
-            &load_tx,
-            &shutdown_requested,
-        )?;
+        upgrade_12_to_13(db, enable_token_index, load_tx, || {
+            node.bridge.shutdown_requested()
+        })?;
     }
     Ok(())
 }
@@ -1489,7 +1674,7 @@ impl Node {
     pub fn ok_or_abort<T>(&self, func_name: &str, result: Result<T>) {
         if let Err(report) = result {
             log_chronik!("{report:?}\n");
-            self.bridge.abort_node(
+            self.bridge.fatal_error(
                 &format!("ERROR Chronik in {func_name}"),
                 &format!("{report:#}"),
             );
@@ -1510,18 +1695,17 @@ impl std::fmt::Debug for ChronikIndexerParams {
 #[cfg(test)]
 mod tests {
     use abc_rust_error::Result;
-    use bitcoinsuite_core::block::BlockHash;
     use chronik_db::{
         db::{Db, WriteBatch, CF_META},
-        io::{BlockReader, BlockTxs, DbBlock, MetadataReader, MetadataWriter},
+        io::{MetadataReader, MetadataWriter},
         plugins::{PluginMeta, PluginsReader},
     };
     use chronik_plugin::{context::PluginContext, plugin::Plugin};
     use pretty_assertions::assert_eq;
 
     use crate::indexer::{
-        update_plugins_index, ChronikBlock, ChronikIndexer,
-        ChronikIndexerError, ChronikIndexerParams, CURRENT_INDEXER_VERSION,
+        update_plugins_index, ChronikIndexer, ChronikIndexerError,
+        ChronikIndexerParams, CURRENT_INDEXER_VERSION,
     };
 
     /// A mock "decompression" that just prefixes with "DECOMPRESS:".
@@ -1531,11 +1715,6 @@ mod tests {
 
     #[test]
     fn test_indexer() -> Result<()> {
-        use bitcoinsuite_core::tx::{Tx, TxId, TxMut};
-
-        let load_tx = |_, _, _| unreachable!();
-        let shutdown_requested = || false;
-
         let tempdir = tempdir::TempDir::new("chronik-indexer--indexer")?;
         let datadir_net = tempdir.path().join("regtest");
         let params = ChronikIndexerParams {
@@ -1552,7 +1731,7 @@ mod tests {
         };
         // regtest folder doesn't exist yet -> error
         assert_eq!(
-            ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)
+            ChronikIndexer::prepare_db_folder(&params)
                 .unwrap_err()
                 .downcast::<ChronikIndexerError>()?,
             ChronikIndexerError::CreateDirFailed(datadir_net.join("indexes")),
@@ -1560,66 +1739,19 @@ mod tests {
 
         // create regtest folder, setup will work now
         std::fs::create_dir(&datadir_net)?;
-        let mut indexer =
-            ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)?;
-        // indexes and indexes/chronik folder now exist
+        let path_info = ChronikIndexer::prepare_db_folder(&params)?;
+        // indexes now exists
         assert!(datadir_net.join("indexes").exists());
+
+        ChronikIndexer::prepare_db(&params, &path_info.db_path)?;
+        // indexes/chronik now exists
         assert!(datadir_net.join("indexes").join("chronik").exists());
-
-        // DB is empty
-        assert_eq!(BlockReader::new(&indexer.db)?.by_height(0)?, None);
-        let coinbase = TxMut {
-            ..Default::default()
-        };
-        let block = ChronikBlock {
-            db_block: DbBlock {
-                hash: BlockHash::from([4; 32]),
-                prev_hash: BlockHash::from([0; 32]),
-                height: 0,
-                n_bits: 0x1deadbef,
-                timestamp: 1234567890,
-                file_num: 0,
-                data_pos: 1337,
-            },
-            block_txs: BlockTxs {
-                block_height: 0,
-                txs: vec![],
-            },
-            size: 285,
-            txs: vec![Tx::with_txid(TxId::from_tx(&coinbase), coinbase)],
-        };
-
-        // Add block
-        indexer.handle_block_connected(block.clone())?;
-        assert_eq!(
-            BlockReader::new(&indexer.db)?.by_height(0)?,
-            Some(block.db_block.clone())
-        );
-
-        // Remove block again
-        indexer.handle_block_disconnected(block.clone())?;
-        assert_eq!(BlockReader::new(&indexer.db)?.by_height(0)?, None);
-
-        // Add block then wipe, block not there
-        indexer.handle_block_connected(block)?;
-        std::mem::drop(indexer);
-        let indexer = ChronikIndexer::setup(
-            ChronikIndexerParams {
-                wipe_db: true,
-                ..params
-            },
-            load_tx,
-            shutdown_requested,
-        )?;
-        assert_eq!(BlockReader::new(&indexer.db)?.by_height(0)?, None);
 
         Ok(())
     }
 
     #[test]
     fn test_schema_version() -> Result<()> {
-        let load_tx = |_, _, _| unreachable!();
-        let shutdown_requested = || false;
         let dir = tempdir::TempDir::new("chronik-indexer--schema_version")?;
         let chronik_path = dir.path().join("indexes").join("chronik");
         let params = ChronikIndexerParams {
@@ -1636,7 +1768,9 @@ mod tests {
         };
 
         // Setting up DB first time sets the schema version
-        ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)?;
+        let path_info = ChronikIndexer::prepare_db_folder(&params)?;
+        assert_eq!(&path_info.db_path, &chronik_path);
+        ChronikIndexer::prepare_db(&params, &chronik_path)?;
         {
             let db = Db::open(&chronik_path)?;
             assert_eq!(
@@ -1645,7 +1779,7 @@ mod tests {
             );
         }
         // Opening DB again works fine
-        ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)?;
+        ChronikIndexer::prepare_db(&params, &chronik_path)?;
 
         // Override DB schema version to 0
         {
@@ -1656,7 +1790,7 @@ mod tests {
         }
         // -> DB too old
         assert_eq!(
-            ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)
+            ChronikIndexer::prepare_db(&params, &chronik_path)
                 .unwrap_err()
                 .downcast::<ChronikIndexerError>()?,
             ChronikIndexerError::DatabaseOutdated(0),
@@ -1674,7 +1808,7 @@ mod tests {
         }
         // -> Chronik too old
         assert_eq!(
-            ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)
+            ChronikIndexer::prepare_db(&params, &chronik_path)
                 .unwrap_err()
                 .downcast::<ChronikIndexerError>()?,
             ChronikIndexerError::ChronikOutdated(CURRENT_INDEXER_VERSION + 1),
@@ -1689,7 +1823,7 @@ mod tests {
             db.write_batch(batch)?;
         }
         assert_eq!(
-            ChronikIndexer::setup(params.clone(), load_tx, shutdown_requested)
+            ChronikIndexer::prepare_db(&params, &chronik_path)
                 .unwrap_err()
                 .downcast::<ChronikIndexerError>()?,
             ChronikIndexerError::CorruptedSchemaVersion,
@@ -1697,13 +1831,15 @@ mod tests {
 
         // New db path, but has existing data
         let new_dir = dir.path().join("new");
+        std::fs::create_dir_all(&new_dir)?;
         let new_chronik_path = new_dir.join("indexes").join("chronik");
-        std::fs::create_dir_all(&new_chronik_path)?;
         let new_params = ChronikIndexerParams {
             datadir_net: new_dir,
             wipe_db: false,
             ..params
         };
+        let path_info = ChronikIndexer::prepare_db_folder(&new_params)?;
+        assert_eq!(&path_info.db_path, &new_chronik_path);
         {
             // new db with obscure field in meta
             let db = Db::open(&new_chronik_path)?;
@@ -1713,24 +1849,18 @@ mod tests {
         }
         // Error: non-empty DB without schema version
         assert_eq!(
-            ChronikIndexer::setup(
-                new_params.clone(),
-                load_tx,
-                shutdown_requested
-            )
-            .unwrap_err()
-            .downcast::<ChronikIndexerError>()?,
+            ChronikIndexer::prepare_db(&new_params, &new_chronik_path)
+                .unwrap_err()
+                .downcast::<ChronikIndexerError>()?,
             ChronikIndexerError::MissingSchemaVersion,
         );
         // with wipe it works
-        ChronikIndexer::setup(
-            ChronikIndexerParams {
-                wipe_db: true,
-                ..new_params
-            },
-            load_tx,
-            shutdown_requested,
-        )?;
+        let new_params = ChronikIndexerParams {
+            wipe_db: true,
+            ..new_params
+        };
+        ChronikIndexer::prepare_db_folder(&new_params)?;
+        ChronikIndexer::prepare_db(&new_params, &new_chronik_path)?;
 
         Ok(())
     }

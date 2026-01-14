@@ -65,7 +65,7 @@ class BIP66Test(BitcoinTestFramework):
         block.solve()
 
         with self.nodes[0].assert_debug_log(
-            expected_msgs=[f"{block.hash}, bad-version(0x00000002)"]
+            expected_msgs=[f"{block.hash_hex}, bad-version(0x00000002)"]
         ):
             peer.send_and_ping(msg_block(block))
             assert_equal(self.nodes[0].getbestblockhash(), tip)
@@ -76,20 +76,25 @@ class BIP66Test(BitcoinTestFramework):
         )
         block.nVersion = 3
 
-        spendtx = self.create_tx(self.coinbase_txids[1])
+        coin_txid = self.coinbase_txids[1]
+        spendtx = self.create_tx(coin_txid)
         unDERify(spendtx)
-        spendtx.rehash()
 
         # First we show that this tx is valid except for DERSIG by getting it
         # rejected from the mempool for exactly that reason.
+        spendtx_txid = spendtx.txid_hex
         assert_equal(
             [
                 {
-                    "txid": spendtx.hash,
+                    "txid": spendtx_txid,
                     "allowed": False,
                     "reject-reason": (
                         "mandatory-script-verify-flag-failed (Non-canonical DER"
                         " signature)"
+                    ),
+                    "reject-details": (
+                        "mandatory-script-verify-flag-failed (Non-canonical DER signature), "
+                        f"input 0 of {spendtx_txid}, spending {coin_txid}:0"
                     ),
                 }
             ],
@@ -104,7 +109,10 @@ class BIP66Test(BitcoinTestFramework):
         block.solve()
 
         with self.nodes[0].assert_debug_log(
-            expected_msgs=[f"ConnectBlock {block.hash} failed, blk-bad-inputs"]
+            expected_msgs=[
+                f"BlockChecked: block hash={block.hash_hex} "
+                f"state=mandatory-script-verify-flag-failed (Non-canonical DER signature)"
+            ]
         ):
             peer.send_and_ping(msg_block(block))
             assert_equal(self.nodes[0].getbestblockhash(), tip)
@@ -119,7 +127,7 @@ class BIP66Test(BitcoinTestFramework):
         block.solve()
 
         peer.send_and_ping(msg_block(block))
-        assert_equal(int(self.nodes[0].getbestblockhash(), 16), block.sha256)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
 
 if __name__ == "__main__":

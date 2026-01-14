@@ -38,6 +38,7 @@ from functools import wraps
 
 from . import alias, bitcoin, util, web
 from .address import Address, AddressError
+from .amount import format_satoshis
 from .bitcoin import CASH, TYPE_ADDRESS
 from .constants import PROJECT_NAME, SCRIPT_NAME, XEC
 from .crypto import hash_160
@@ -45,7 +46,6 @@ from .ecc import ECPrivkey, ECPubkey, verify_message_with_address
 from .json_util import json_decode
 from .mnemo import MnemonicElectrum, make_bip39_words
 from .paymentrequest import PR_EXPIRED, PR_PAID, PR_UNCONFIRMED, PR_UNKNOWN, PR_UNPAID
-from .plugins import run_hook
 from .printerror import print_error
 from .simple_config import SimpleConfig
 from .transaction import (
@@ -56,7 +56,7 @@ from .transaction import (
     multisig_script,
     rawtx_from_str,
 )
-from .util import format_satoshis, to_bytes
+from .util import to_bytes
 from .version import PACKAGE_VERSION
 from .wallet import create_new_wallet, restore_wallet_from_text
 
@@ -645,7 +645,7 @@ class Commands:
     def _resolver(self, x):
         if x is None:
             return None
-        out = alias.resolve(x)
+        out = alias.resolve(x, self.config)
         if (
             out.get("type") == "openalias"
             and self.nocheck is False
@@ -744,7 +744,6 @@ class Commands:
         if locktime is not None:
             tx.locktime = locktime
         if not unsigned:
-            run_hook("sign_tx", self.wallet, tx)
             self.wallet.sign_transaction(tx, password)
             if addtransaction:
                 self.wallet.add_transaction(tx.txid(), tx)
@@ -898,7 +897,7 @@ class Commands:
     @command("w")
     def getalias(self, key):
         """Retrieve alias. Lookup in your list of contacts, and for an OpenAlias DNS record."""
-        return alias.resolve(key)
+        return alias.resolve(key, self.config)
 
     @command("w")
     def searchcontacts(self, query):
@@ -1088,7 +1087,7 @@ class Commands:
         alias_ = self.config.get("alias")
         if not alias_:
             raise ValueError("No alias in your configuration")
-        data = alias.resolve(alias_)
+        data = alias.resolve(alias_, self.config)
         alias_addr = (data and data.get("address")) or None
         if not alias_addr:
             raise RuntimeError("Alias could not be resolved")

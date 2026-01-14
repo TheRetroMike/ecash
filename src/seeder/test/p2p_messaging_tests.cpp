@@ -5,6 +5,7 @@
 #include <chainparams.h>
 #include <common/system.h>
 #include <net_processing.h>
+#include <node/protocol_version.h>
 #include <protocol.h>
 #include <seeder/bitcoin.h>
 #include <seeder/db.h>
@@ -12,7 +13,6 @@
 #include <serialize.h>
 #include <streams.h>
 #include <util/chaintype.h>
-#include <version.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -33,13 +33,13 @@ public:
     CSeederNodeTest(const CService &service, std::vector<CAddress> *vAddrIn)
         : CSeederNode(service, vAddrIn) {}
 
-    void TestProcessMessage(const std::string &strCommand, CDataStream &message,
+    void TestProcessMessage(const std::string &strCommand, DataStream &message,
                             PeerMessagingState expectedState) {
         PeerMessagingState ret = ProcessMessage(strCommand, message);
         BOOST_CHECK_EQUAL(ret, expectedState);
     }
 
-    CDataStream getSendBuffer() { return vSend; }
+    DataStream getSendBuffer() { return vSend; }
 
     void setStartingHeight(int starting_height) {
         nStartingHeight = starting_height;
@@ -72,7 +72,7 @@ BOOST_FIXTURE_TEST_SUITE(p2p_messaging_tests, SeederTestingSetup)
 static const int SEEDER_INIT_VERSION = 0;
 
 BOOST_AUTO_TEST_CASE(process_version_msg) {
-    CDataStream versionMessage(SER_NETWORK, INIT_PROTO_VERSION);
+    DataStream versionMessage{};
     uint64_t serviceflags = ServiceFlags(NODE_NETWORK);
     CService addr_to = vAddr[0];
     uint64_t addr_to_services = vAddr[0].nServices;
@@ -82,7 +82,8 @@ BOOST_AUTO_TEST_CASE(process_version_msg) {
 
     // Don't include the time in CAddress serialization. See D14753.
     versionMessage << INIT_PROTO_VERSION << serviceflags << GetTime()
-                   << addr_to_services << addr_to << serviceflags << addr_from
+                   << addr_to_services << WithParams(CNetAddr::V1, addr_to)
+                   << serviceflags << WithParams(CNetAddr::V1, addr_from)
                    << nonce << user_agent << GetRequireHeight();
 
     // Verify the version is set as the initial value
@@ -90,29 +91,25 @@ BOOST_AUTO_TEST_CASE(process_version_msg) {
                       SEEDER_INIT_VERSION);
     testNode->TestProcessMessage(NetMsgType::VERSION, versionMessage,
                                  PeerMessagingState::AwaitingMessages);
-    // Verify the version has been updated
-    BOOST_CHECK_EQUAL(testNode->CSeederNode::GetClientVersion(),
-                      versionMessage.GetVersion());
 }
 
 BOOST_FIXTURE_TEST_CASE(process_verack_msg, MainNetSeederTestingSetup) {
-    CDataStream verackMessage(SER_NETWORK, 0);
-    verackMessage.SetVersion(INIT_PROTO_VERSION);
+    DataStream verackMessage{};
     testNode->TestProcessMessage(NetMsgType::VERACK, verackMessage,
                                  PeerMessagingState::AwaitingMessages);
 
     // Seeder should respond with an ADDR message
     const CMessageHeader::MessageMagic netMagic = Params().NetMagic();
     CMessageHeader header(netMagic);
-    CDataStream sendBuffer = testNode->getSendBuffer();
+    DataStream sendBuffer = testNode->getSendBuffer();
     sendBuffer >> header;
     BOOST_CHECK(header.IsValidWithoutConfig(netMagic));
-    BOOST_CHECK_EQUAL(header.GetCommand(), NetMsgType::GETADDR);
+    BOOST_CHECK_EQUAL(header.GetMessageType(), NetMsgType::GETADDR);
 
     // Next message should be GETHEADERS
     sendBuffer >> header;
     BOOST_CHECK(header.IsValidWithoutConfig(netMagic));
-    BOOST_CHECK_EQUAL(header.GetCommand(), NetMsgType::GETHEADERS);
+    BOOST_CHECK_EQUAL(header.GetMessageType(), NetMsgType::GETHEADERS);
 
     CBlockLocator locator;
     uint256 hashStop;
@@ -123,11 +120,10 @@ BOOST_FIXTURE_TEST_CASE(process_verack_msg, MainNetSeederTestingSetup) {
     BOOST_CHECK(hashStop == uint256());
 }
 
-static CDataStream CreateAddrMessage(std::vector<CAddress> sendAddrs,
-                                     uint32_t nVersion = INIT_PROTO_VERSION) {
-    CDataStream payload(SER_NETWORK, 0);
-    payload.SetVersion(nVersion);
-    payload << sendAddrs;
+static DataStream CreateAddrMessage(std::vector<CAddress> sendAddrs,
+                                    uint32_t nVersion = INIT_PROTO_VERSION) {
+    DataStream payload{};
+    payload << WithParams(CAddress::V1_NETWORK, sendAddrs);
     return payload;
 }
 
@@ -142,8 +138,7 @@ BOOST_FIXTURE_TEST_CASE(process_addr_msg, MainNetSeederTestingSetup) {
     auto header = CBlockHeader{};
     header.hashPrevBlock = recentCheckpoint;
     testNode->setStartingHeight(recentCheckpointHeight + 1);
-    CDataStream headersMsg(SER_NETWORK, 0);
-    headersMsg.SetVersion(INIT_PROTO_VERSION);
+    DataStream headersMsg{};
     WriteCompactSize(headersMsg, 1);
     headersMsg << header;
     // sanity check: node is expecting headers
@@ -161,7 +156,7 @@ BOOST_FIXTURE_TEST_CASE(process_addr_msg, MainNetSeederTestingSetup) {
     // Happy path
     // addrs are added normally to vAddr until ADDR_SOFT_CAP is reached.
     // Add addrs up to the soft cap.
-    CDataStream addrMessage = CreateAddrMessage(sendAddrs);
+    DataStream addrMessage = CreateAddrMessage(sendAddrs);
     BOOST_CHECK_EQUAL(1, vAddr.size());
     testNode->TestProcessMessage(NetMsgType::ADDR, addrMessage,
                                  PeerMessagingState::AwaitingMessages);
@@ -190,8 +185,7 @@ BOOST_FIXTURE_TEST_CASE(process_addr_msg, MainNetSeederTestingSetup) {
 BOOST_AUTO_TEST_CASE(ban_too_many_headers) {
     // Process the maximum number of headers
     auto header = CBlockHeader{};
-    CDataStream maxHeaderMessages(SER_NETWORK, 0);
-    maxHeaderMessages.SetVersion(INIT_PROTO_VERSION);
+    DataStream maxHeaderMessages{};
     WriteCompactSize(maxHeaderMessages, MAX_HEADERS_RESULTS);
     for (size_t i = 0; i < MAX_HEADERS_RESULTS; i++) {
         maxHeaderMessages << header;
@@ -202,8 +196,7 @@ BOOST_AUTO_TEST_CASE(ban_too_many_headers) {
     BOOST_CHECK_EQUAL(testNode->GetBan(), 0);
 
     // Process one too many headers
-    CDataStream tooManyHeadersMessage(SER_NETWORK, 0);
-    tooManyHeadersMessage.SetVersion(INIT_PROTO_VERSION);
+    DataStream tooManyHeadersMessage{};
     WriteCompactSize(tooManyHeadersMessage, MAX_HEADERS_RESULTS + 1);
     // The message processing will abort when seeing the excessive number of
     // headers from the compact size. No need to actually pack any header data.
@@ -214,8 +207,7 @@ BOOST_AUTO_TEST_CASE(ban_too_many_headers) {
 
 BOOST_AUTO_TEST_CASE(empty_headers) {
     // Check that an empty headers message does not cause issues
-    CDataStream zeroHeadersMessage(SER_NETWORK, 0);
-    zeroHeadersMessage.SetVersion(INIT_PROTO_VERSION);
+    DataStream zeroHeadersMessage{};
     WriteCompactSize(zeroHeadersMessage, 0);
     testNode->TestProcessMessage(NetMsgType::HEADERS, zeroHeadersMessage,
                                  PeerMessagingState::AwaitingMessages);
@@ -233,8 +225,11 @@ BOOST_FIXTURE_TEST_CASE(good_checkpoint, MainNetSeederTestingSetup) {
     auto header = CBlockHeader{};
     header.hashPrevBlock = recentCheckpoint;
     testNode->setStartingHeight(recentCheckpointHeight + 1);
-    CDataStream headersOnCorrectChain(SER_NETWORK, 0);
-    headersOnCorrectChain.SetVersion(INIT_PROTO_VERSION);
+    DataStream headersOnCorrectChain{};
+    // The following .reserve() call is a workaround for a spurious
+    // [-Werror=stringop-overflow=] warning in gcc <= 12.2.
+    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=100366#c20
+    headersOnCorrectChain.reserve(4);
     WriteCompactSize(headersOnCorrectChain, 1);
     headersOnCorrectChain << header;
     testNode->TestProcessMessage(NetMsgType::HEADERS, headersOnCorrectChain,
@@ -253,8 +248,7 @@ BOOST_FIXTURE_TEST_CASE(bad_checkpoint, MainNetSeederTestingSetup) {
     // We just ignore HEADERS messages sent by nodes with a chaintip before our
     // most recent checkpoint.
     testNode->setStartingHeight(recentCheckpointHeight - 1);
-    CDataStream shortHeaderChain(SER_NETWORK, 0);
-    shortHeaderChain.SetVersion(INIT_PROTO_VERSION);
+    DataStream shortHeaderChain{};
     WriteCompactSize(shortHeaderChain, 1);
     shortHeaderChain << header;
     testNode->TestProcessMessage(NetMsgType::HEADERS, shortHeaderChain,
@@ -266,8 +260,7 @@ BOOST_FIXTURE_TEST_CASE(bad_checkpoint, MainNetSeederTestingSetup) {
     // our most recent checkpoint, check that the node is banned.
     BOOST_CHECK(header.hashPrevBlock != recentCheckpoint);
     testNode->setStartingHeight(recentCheckpointHeight + 1);
-    CDataStream headersOnWrongChain(SER_NETWORK, 0);
-    headersOnWrongChain.SetVersion(INIT_PROTO_VERSION);
+    DataStream headersOnWrongChain{};
     WriteCompactSize(headersOnWrongChain, 1);
     headersOnWrongChain << header;
     testNode->TestProcessMessage(NetMsgType::HEADERS, headersOnWrongChain,

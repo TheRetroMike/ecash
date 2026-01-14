@@ -123,14 +123,17 @@ FUZZ_TARGET_INIT(coins_view, initialize_coins_view) {
                 random_mutable_transaction = *opt_mutable_transaction;
             },
             [&] {
+                CoinsCachePair sentinel{};
+                sentinel.second.SelfRef(sentinel);
+                size_t usage{0};
                 CCoinsMapMemoryResource resource;
                 CCoinsMap coins_map{
                     0, SaltedOutpointHasher{/*deterministic=*/true},
                     CCoinsMap::key_equal{}, &resource};
                 while (fuzzed_data_provider.ConsumeBool()) {
                     CCoinsCacheEntry coins_cache_entry;
-                    coins_cache_entry.flags =
-                        fuzzed_data_provider.ConsumeIntegral<uint8_t>();
+                    const auto dirty{fuzzed_data_provider.ConsumeBool()};
+                    const auto fresh{fuzzed_data_provider.ConsumeBool()};
                     if (fuzzed_data_provider.ConsumeBool()) {
                         coins_cache_entry.coin = random_coin;
                     } else {
@@ -141,13 +144,24 @@ FUZZ_TARGET_INIT(coins_view, initialize_coins_view) {
                         }
                         coins_cache_entry.coin = *opt_coin;
                     }
-                    coins_map.emplace(random_out_point,
-                                      std::move(coins_cache_entry));
+                    auto it{coins_map
+                                .emplace(random_out_point,
+                                         std::move(coins_cache_entry))
+                                .first};
+                    if (dirty) {
+                        CCoinsCacheEntry::SetDirty(*it, sentinel);
+                    }
+                    if (fresh) {
+                        CCoinsCacheEntry::SetFresh(*it, sentinel);
+                    }
+                    usage += it->second.coin.DynamicMemoryUsage();
                 }
                 bool expected_code_path = false;
                 try {
+                    auto cursor{CoinsViewCacheCursor(usage, sentinel, coins_map,
+                                                     /*will_erase=*/true)};
                     coins_view_cache.BatchWrite(
-                        coins_map,
+                        cursor,
                         fuzzed_data_provider.ConsumeBool()
                             ? BlockHash{ConsumeUInt256(fuzzed_data_provider)}
                             : coins_view_cache.GetBestBlock());

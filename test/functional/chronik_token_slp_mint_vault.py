@@ -66,7 +66,6 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
             CTxOut(100000, P2SH_OP_TRUE),
             CTxOut(coinvalue - 500000, P2SH_OP_TRUE),
         ]
-        fan_tx.rehash()
         fan_txid = node.sendrawtransaction(fan_tx.serialize().hex())
 
         # VAULT script locking MINT txs
@@ -106,13 +105,12 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
             CTxOut(546, P2SH_OP_TRUE),
             CTxOut(99000, P2SH_OP_TRUE),
         ]
-        tx.rehash()
         genesis = TokenTx(
             tx=tx,
             status=pb.TOKEN_STATUS_NORMAL,
             entries=[
                 pb.TokenEntry(
-                    token_id=tx.hash,
+                    token_id=tx.txid_hex,
                     token_type=pb.TokenType(slp=pb.SLP_TOKEN_TYPE_MINT_VAULT),
                     tx_type=pb.GENESIS,
                     actual_burn_atoms="0",
@@ -121,11 +119,11 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
             inputs=[pb.Token()],
             outputs=[
                 pb.Token(),
-                vault_token(token_id=tx.hash, atoms=1000),
+                vault_token(token_id=tx.txid_hex, atoms=1000),
                 pb.Token(),
             ],
             token_info=pb.TokenInfo(
-                token_id=tx.hash,
+                token_id=tx.txid_hex,
                 token_type=pb.TokenType(slp=pb.SLP_TOKEN_TYPE_MINT_VAULT),
                 genesis_info=pb.GenesisInfo(
                     token_ticker=b"SLPVAULT",
@@ -194,7 +192,7 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
         block.solve()
         peer.send_blocks_and_test([block], node)
         node.syncwithvalidationinterfacequeue()
-        genesis.test(chronik, block.hash)
+        genesis.test(chronik, block.hash_hex)
 
         # MINT is still invalid, despite GENESIS being mined.
         # This inconsistency is intended behavior, see chronik/chronik-db/src/mem/tokens.rs for details.
@@ -282,7 +280,7 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
         node.invalidateblock(block_mint3)
 
         # Reorg block with the GENESIS tx
-        node.invalidateblock(block.hash)
+        node.invalidateblock(block.hash_hex)
 
         # GENESIS still valid
         genesis.test(chronik)
@@ -307,13 +305,13 @@ class ChronikTokenSlpMintVault(BitcoinTestFramework):
         block.solve()
         peer.send_blocks_and_test([block], node)
         node.syncwithvalidationinterfacequeue()
-        block_hashes.append(block.hash)
+        block_hashes.append(block.hash_hex)
 
         # GENESIS still valid
-        genesis.test(chronik, block.hash)
+        genesis.test(chronik, block.hash_hex)
         # MINTs still invalid
         mint.test(chronik)
-        mint2.test(chronik, block.hash)
+        mint2.test(chronik, block.hash_hex)
 
         # Add SEND to mempool from `mint`
         tx = CTransaction()

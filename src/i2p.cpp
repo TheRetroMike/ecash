@@ -19,6 +19,7 @@
 #include <util/sock.h>
 #include <util/spanparsing.h>
 #include <util/strencodings.h>
+#include <util/threadinterrupt.h>
 
 #include <chrono>
 #include <memory>
@@ -130,7 +131,8 @@ namespace sam {
             conn.sock = StreamAccept();
             return true;
         } catch (const std::runtime_error &e) {
-            Log("Error listening: %s", e.what());
+            LogPrintLevel(BCLog::I2P, BCLog::Level::Error,
+                          "Couldn't listen: %s\n", e.what());
             CheckControlSock();
         }
         return false;
@@ -156,7 +158,10 @@ namespace sam {
                 return true;
             }
         } catch (const std::runtime_error &e) {
-            Log("Error accepting: %s", e.what());
+            // TODO: Improve log message as per core#29833 (commit 7d3662fbe)
+            //       when backporting core#28077
+            LogPrintLevel(BCLog::I2P, BCLog::Level::Debug,
+                          "Error accepting: %s\n", e.what());
             CheckControlSock();
         }
         return false;
@@ -217,7 +222,9 @@ namespace sam {
 
             throw std::runtime_error(strprintf("\"%s\"", connect_reply.full));
         } catch (const std::runtime_error &e) {
-            Log("Error connecting to %s: %s", to.ToString(), e.what());
+            LogPrintLevel(BCLog::I2P, BCLog::Level::Debug,
+                          "Error connecting to %s: %s\n", to.ToString(),
+                          e.what());
             CheckControlSock();
             return false;
         }
@@ -233,11 +240,6 @@ namespace sam {
                           request, full));
         }
         return pos->second.value();
-    }
-
-    template <typename... Args>
-    void Session::Log(const std::string &fmt, const Args &...args) const {
-        LogPrint(BCLog::I2P, "I2P: %s\n", tfm::format(fmt, args...));
     }
 
     Session::Reply Session::SendRequestAndGetReply(const Sock &sock,
@@ -304,7 +306,8 @@ namespace sam {
 
         std::string errmsg;
         if (!m_control_sock->IsConnected(errmsg)) {
-            Log("Control socket error: %s", errmsg);
+            LogPrintLevel(BCLog::I2P, BCLog::Level::Debug,
+                          "Control socket error: %s\n", errmsg);
             Disconnect();
         }
     }
@@ -343,7 +346,7 @@ namespace sam {
 
         uint16_t cert_len;
         memcpy(&cert_len, &m_private_key.at(CERT_LEN_POS), sizeof(cert_len));
-        cert_len = be16toh(cert_len);
+        cert_len = be16toh_internal(cert_len);
 
         const size_t dest_len = DEST_LEN_BASE + cert_len;
 
@@ -356,7 +359,9 @@ namespace sam {
             return;
         }
 
-        Log("Creating SAM session with %s", m_control_host.ToString());
+        LogPrintLevel(BCLog::I2P, BCLog::Level::Info,
+                      "Creating SAM session with %s\n",
+                      m_control_host.ToString());
 
         auto sock = Hello();
 
@@ -380,9 +385,9 @@ namespace sam {
         m_session_id = session_id;
         m_control_sock = std::move(sock);
 
-        LogPrintfCategory(BCLog::I2P,
-                          "SAM session created: session id=%s, my address=%s\n",
-                          m_session_id, m_my_addr.ToString());
+        LogPrintLevel(BCLog::I2P, BCLog::Level::Debug,
+                      "SAM session created: session id=%s, my address=%s\n",
+                      m_session_id, m_my_addr.ToString());
     }
 
     std::unique_ptr<Sock> Session::StreamAccept() {
@@ -410,9 +415,11 @@ namespace sam {
     void Session::Disconnect() {
         if (m_control_sock->Get() != INVALID_SOCKET) {
             if (m_session_id.empty()) {
-                Log("Destroying incomplete session");
+                LogPrintLevel(BCLog::I2P, BCLog::Level::Info,
+                              "Destroying incomplete SAM session\n");
             } else {
-                Log("Destroying session %s", m_session_id);
+                LogPrintLevel(BCLog::I2P, BCLog::Level::Info,
+                              "Destroying SAM session %s\n", m_session_id);
             }
         }
         m_control_sock->Reset();

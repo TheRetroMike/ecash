@@ -259,33 +259,33 @@ export class FailoverProxy {
         for (let i = 0; i < this._endpointArray.length; i += 1) {
             const index = this.deriveEndpointIndex(i);
             const thisProxyWsUrl = this._endpointArray[index].wsUrl;
-            const websocketUrlConnects = await this._websocketUrlConnects(
-                thisProxyWsUrl,
-            );
+            const websocketUrlConnects =
+                await this._websocketUrlConnects(thisProxyWsUrl);
             if (websocketUrlConnects) {
                 // Set this index to state
                 this._workingIndex = index;
 
                 const ws = new WebSocket(thisProxyWsUrl);
-                ws.onmessage = e => wsEndpoint.handleMsg(e as MessageEvent);
+                ws.onmessage = (e: MessageEvent) =>
+                    wsEndpoint.handleMsg(e as MessageEvent);
                 ws.onerror = () => {
                     if (wsEndpoint.onError !== undefined) {
                         wsEndpoint.close();
                     }
                 };
-                ws.onclose = e => {
+                ws.onclose = (e: ws.CloseEvent) => {
                     // End if manually closed or no auto-reconnect
                     if (
                         wsEndpoint.manuallyClosed ||
                         !wsEndpoint.autoReconnect
                     ) {
                         if (wsEndpoint.onEnd !== undefined) {
-                            wsEndpoint.onEnd(e);
+                            wsEndpoint.onEnd(e as ws.Event);
                         }
                         return;
                     }
                     if (wsEndpoint.onReconnect !== undefined) {
-                        wsEndpoint.onReconnect(e);
+                        wsEndpoint.onReconnect(e as ws.Event);
                     }
 
                     this._workingIndex =
@@ -295,7 +295,7 @@ export class FailoverProxy {
                 };
                 wsEndpoint.ws = ws;
                 wsEndpoint.connected = new Promise(resolve => {
-                    ws.onopen = msg => {
+                    ws.onopen = (msg: ws.Event) => {
                         // Subscribe to all previously-subscribed scripts
                         wsEndpoint.subs.scripts.forEach(sub =>
                             wsEndpoint.subscribeToScript(
@@ -311,10 +311,18 @@ export class FailoverProxy {
                         wsEndpoint.subs.tokens.forEach(tokenId =>
                             wsEndpoint.subscribeToTokenId(tokenId),
                         );
+                        // Subscribe to all previously-subscribed txids
+                        wsEndpoint.subs.txids.forEach(txid =>
+                            wsEndpoint.subscribeToTxid(txid),
+                        );
 
                         // Subscribe to blocks method, if previously subscribed
                         if (wsEndpoint.subs.blocks === true) {
                             wsEndpoint.subscribeToBlocks();
+                        }
+                        // Subscribe to txs method, if previously subscribed
+                        if (wsEndpoint.subs.txs === true) {
+                            wsEndpoint.subscribeToTxs();
                         }
                         resolve(msg);
                         if (wsEndpoint.onConnect !== undefined) {

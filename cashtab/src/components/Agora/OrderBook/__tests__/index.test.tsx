@@ -22,9 +22,12 @@ import {
     tokenMockXecx,
     SettingsUsd,
     agoraOfferCachetAlphaUnacceptable,
+    agoraOfferCachetAffordable,
+    agoraOfferCachetUnaffordable,
     bullCacheMocks,
     CachedXecx,
 } from 'components/Agora/fixtures/mocks';
+import { FEE_SATS_PER_KB_XEC_MINIMUM } from 'constants/transactions';
 import { ChronikClient } from 'chronik-client';
 import { Ecc, Address } from 'ecash-lib';
 import { Agora } from 'ecash-agora';
@@ -75,7 +78,7 @@ const OrderBookTestWrapper: React.FC<OrderBookTestWrapperProps> = ({
         ecc={ecc}
     >
         <ThemeProvider theme={theme}>
-            <ToastContainer />
+            <ToastContainer aria-label="Notifications" />
             <div>Test</div>
             <Orderbook
                 tokenId={tokenId}
@@ -453,6 +456,12 @@ describe('<OrderBook />', () => {
             SettingsUsd,
         );
 
+        // Mock satsPerKb to minimum fee for this test to match hardcoded transaction hex
+        await localForage.setItem('settings', {
+            ...SettingsUsd,
+            satsPerKb: FEE_SATS_PER_KB_XEC_MINIMUM,
+        });
+
         // Prepare mockedChronik for a tx that cancels a listing
         const cancelHex =
             '0200000002f7bb552354b6f5076eb2664a8bcbbedc87b42f2ebfcb1480ee0a9141bbae63590000000064414e90dfcdd1508f599267d5b761db8268c164567032f6eb597677d010df4e67eb61e29721535f92070d3c77d7679d78a209122aabec6c7f8d536db072b7dda28241210233f09cd4dc3381162f09975f90866f085350a5ec890d7fba5f6739c9c0ac2afdffffffffbfd08cec4d74b7820cea750b36a0a69d88b6cec3c084caf29e9b866cd8999f6d01000000fdab010441475230075041525449414c4162790797e5a77ccb0326f5e85ad2ec334b17616a636bad4d21a9fa8ec73e6e249443ef7f598a513ee6023bf0f4090300e3f1f37e96c5ea39fe15db0f2f3a56b941004d58014c766a04534c500001010453454e4420aed861a31b96934b88c0252ede135cb9700d7649f69191235087a3030e553cb10800000000000000000001db4603000000000079150000000000008ec420000000000008b7023e0233f09cd4dc3381162f09975f90866f085350a5ec890d7fba5f6739c9c0ac2afd08b0caff7f00000000ab7b63817b6ea26976038ec420a2697603db46039700887d94527901377f75789263587e7803db4603965880bc007e7e68587e527903db4603965880bc007e7e825980bc7c7e01007e7b027815930279159657807e041976a914707501557f77a97e0288ac7e7e6b7d02220258800317a9147e024c7672587d807e7e7e01ab7e537901257f7702d6007f5c7f7701207f547f750408b7023e886b7ea97e01877e7c92647500687b8292697e6c6c7b7eaa88520144807c7ea86f7bbb7501c17e7c677501557f7768ad075041525449414c88044147523087ffffffff030000000000000000376a04534c500001010453454e4420aed861a31b96934b88c0252ede135cb9700d7649f69191235087a3030e553cb108000000000000271022020000000000001976a91403b830e4b9dce347f3495431e1f9d1005f4b420488acaf650600000000001976a91403b830e4b9dce347f3495431e1f9d1005f4b420488ac00000000';
@@ -707,8 +716,13 @@ describe('<OrderBook />', () => {
         await userEvent.clear(buyAmountCachetInput);
         await userEvent.type(buyAmountCachetInput, '55.55');
 
-        // Buy button is no longer disabled
-        expect(buyCachetButton).toBeEnabled();
+        // Buy button should be enabled since affordable offer is selected
+        console.log(
+            'Buy button disabled:',
+            (buyCachetButton as HTMLButtonElement).disabled,
+        );
+
+        expect(buyCachetButton).not.toBeDisabled();
 
         await userEvent.click(buyCachetButton);
 
@@ -793,7 +807,7 @@ describe('<OrderBook />', () => {
         ]);
 
         const alphaWalletOutputScript = Address.p2pkh(
-            agoraPartialAlphaWallet.paths.get(1899).hash,
+            agoraPartialAlphaWallet.hash,
         ).toScriptHex();
 
         // Mod tokenmocks so that alphaWallet is the mint address
@@ -918,7 +932,7 @@ describe('<OrderBook />', () => {
         // Quantities are not displayed until they load, so we await
         expect(await screen.findByText(SPOT_MIN_QTY)).toBeInTheDocument();
 
-        expect(screen.getByText(SPOT_PRICE_MIN_BUY)).toBeInTheDocument();
+        expect(await screen.findByText(SPOT_PRICE_MIN_BUY)).toBeInTheDocument();
 
         const buyXecxButton = screen.getByRole('button', {
             name: 'Buy XECX',
@@ -1056,5 +1070,174 @@ describe('<OrderBook />', () => {
         expect(
             await screen.findByText('No active offers for this token'),
         ).toBeInTheDocument();
+    });
+    it('shows unaffordable offers with visual indication', async () => {
+        mockPrice(0.000033);
+        const mockedAgora = new MockAgora();
+
+        // Use an offer that costs more than the user's balance for min buy
+        mockedAgora.setActiveOffersByTokenId(CACHET_TOKEN_ID, [
+            agoraOfferCachetAlphaOne,
+        ]);
+
+        // Use a wallet with a low balance
+        const mockedChronik = await prepareContext(
+            localForage,
+            [agoraPartialBetaWallet],
+            tokenMocks,
+        );
+
+        // Set expected settings in localforage
+        await localForage.setItem(
+            SupportedCashtabStorageKeys.Settings,
+            SettingsUsd,
+        );
+
+        render(
+            <OrderBookTestWrapper
+                agora={mockedAgora}
+                chronik={mockedChronik}
+                ecc={ecc}
+                theme={theme}
+                tokenId={CACHET_TOKEN_ID}
+                userLocale={'en-US'}
+            />,
+        );
+
+        await waitForContext();
+
+        // The offer should be visible but marked as unaffordable
+        expect(await screen.findByText('Cachet')).toBeInTheDocument();
+        expect(await screen.findByText('CACHET')).toBeInTheDocument();
+
+        // Should show warning about unaffordable offer
+        expect(
+            await screen.findByText(
+                'This offer requires a minimum purchase that exceeds your available balance.',
+            ),
+        ).toBeInTheDocument();
+
+        // Buy button should be disabled
+        const buyButton = screen.getByRole('button', { name: /Buy CACHET/i });
+        expect(buyButton).toBeDisabled();
+
+        // Slider and percentage buttons should not be visible for unaffordable offers
+        expect(screen.queryByText('25%')).not.toBeInTheDocument();
+        expect(screen.queryByText('50%')).not.toBeInTheDocument();
+        expect(screen.queryByText('75%')).not.toBeInTheDocument();
+        expect(screen.queryByText('Max')).not.toBeInTheDocument();
+    });
+    it('renders percentage buttons and sets correct amounts when user can afford the whole offer', async () => {
+        mockPrice(0.000033);
+        const mockedAgora = new MockAgora();
+
+        // Use an offer the user can fully afford
+        mockedAgora.setActiveOffersByTokenId(CACHET_TOKEN_ID, [
+            agoraOfferCachetAlphaOne,
+        ]);
+
+        // Use a wallet with a high balance
+        const mockedChronik = await prepareContext(
+            localForage,
+            [agoraPartialBetaMoreBalanceWallet],
+            tokenMocks,
+        );
+
+        // Set expected settings in localforage
+        await localForage.setItem(
+            SupportedCashtabStorageKeys.Settings,
+            SettingsUsd,
+        );
+
+        render(
+            <OrderBookTestWrapper
+                agora={mockedAgora}
+                chronik={mockedChronik}
+                ecc={ecc}
+                theme={theme}
+                tokenId={CACHET_TOKEN_ID}
+                userLocale={'en-US'}
+            />,
+        );
+
+        await waitForContext();
+
+        // Wait for the offer to be visible
+        expect(await screen.findByText('Cachet')).toBeInTheDocument();
+        await userEvent.click(screen.getByText('10,000.97 XEC'));
+
+        // Percentage buttons should be present
+        expect(screen.getByText('25%')).toBeInTheDocument();
+        expect(screen.getByText('50%')).toBeInTheDocument();
+        expect(screen.getByText('75%')).toBeInTheDocument();
+        expect(screen.getByText('Max')).toBeInTheDocument();
+
+        // Test 25% button
+        await userEvent.click(screen.getByText('25%'));
+        expect(screen.getByText('25.00 CACHET')).toBeInTheDocument();
+
+        // Test 50% button
+        await userEvent.click(screen.getByText('50%'));
+        expect(screen.getByText('50.00 CACHET')).toBeInTheDocument();
+
+        // Test 75% button
+        await userEvent.click(screen.getByText('75%'));
+        expect(screen.getByText('75.00 CACHET')).toBeInTheDocument();
+
+        // Test Max button
+        await userEvent.click(screen.getByText('Max'));
+        expect(screen.getByText('100.00 CACHET')).toBeInTheDocument();
+    });
+    it('auto-selects affordable offers over unaffordable ones', async () => {
+        mockPrice(0.000033);
+        const mockedAgora = new MockAgora();
+
+        mockedAgora.setActiveOffersByTokenId(CACHET_TOKEN_ID, [
+            agoraOfferCachetUnaffordable, // Lower price, unaffordable
+            agoraOfferCachetAffordable, // Higher price, affordable
+        ]);
+
+        // Use a wallet with moderate balance
+        const mockedChronik = await prepareContext(
+            localForage,
+            [agoraPartialBetaWallet],
+            tokenMocks,
+        );
+
+        // Set expected settings in localforage
+        await localForage.setItem(
+            SupportedCashtabStorageKeys.Settings,
+            SettingsUsd,
+        );
+
+        render(
+            <OrderBookTestWrapper
+                agora={mockedAgora}
+                chronik={mockedChronik}
+                ecc={ecc}
+                theme={theme}
+                tokenId={CACHET_TOKEN_ID}
+                userLocale={'en-US'}
+            />,
+        );
+
+        await waitForContext();
+
+        // Should show both offers
+        expect(await screen.findByText('Cachet')).toBeInTheDocument();
+
+        // Wait for auto-selection to complete
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Should not show the unaffordable warning since the affordable offer should be selected
+        expect(
+            screen.queryByText(
+                'This offer requires a minimum purchase that exceeds your available balance.',
+            ),
+        ).not.toBeInTheDocument();
+
+        // Buy button should be enabled since affordable offer is selected
+        const buyButton = screen.getByRole('button', { name: /Buy CACHET/i });
+        expect(buyButton).not.toBeDisabled();
     });
 });

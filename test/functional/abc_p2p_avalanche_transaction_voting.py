@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test avalanche transaction voting."""
+
 import random
 import time
 from decimal import Decimal
@@ -22,10 +23,13 @@ from test_framework.messages import (
     MSG_TX,
     AvalancheTxVoteError,
     AvalancheVote,
+    CInv,
     CTransaction,
     FromHex,
+    msg_inv,
+    msg_tx,
 )
-from test_framework.p2p import P2PDataStore
+from test_framework.p2p import P2PDataStore, p2p_lock
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -44,18 +48,22 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         self.noban_tx_relay = True
         self.extra_args = [
             [
-                "-avalanchepreconsensus=1",
                 "-avacooldown=0",
                 "-avaproofstakeutxoconfirmations=1",
                 # Low enough for coinbase transactions to be staked in valid proofs
                 "-avaproofstakeutxodustthreshold=1000000",
                 "-avaminquorumstake=0",
                 "-avaminavaproofsnodecount=0",
+                "-avastalevotethreshold=256",
             ]
         ]
 
     def run_test(self):
         node = self.nodes[0]
+
+        now = int(time.time())
+        node.setmocktime(now)
+
         poll_node = get_ava_p2p_interface(self, node)
         peer = node.add_p2p_connection(P2PDataStore())
 
@@ -87,6 +95,11 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
             [AvalancheVote(AvalancheTxVoteError.UNKNOWN, txid) for txid in tx_ids],
         )
 
+        # Now disconnect the poll_node. It's not part of the quorum and will be
+        # polled but never respond which could cause requests timeouts.
+        poll_node.peer_disconnect()
+        poll_node.wait_for_disconnect()
+
         self.log.info("Check the votes on valid mempool transactions")
 
         def get_quorum():
@@ -97,6 +110,7 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         quorum = get_quorum()
         assert node.getavalancheinfo()["ready_to_poll"]
 
+        poll_node = quorum[0]
         poll_node.send_poll(tx_ids, MSG_TX)
         assert_response(
             poll_node,
@@ -139,7 +153,7 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         self.log.info("Check the votes on invalid transactions")
 
         invalid_tx = CTransaction()
-        invalid_txid = int(invalid_tx.rehash(), 16)
+        invalid_txid = invalid_tx.txid_int
 
         # The node has the NOBAN whitelist flag, so it remains connected
         peer.send_txs_and_test(
@@ -155,9 +169,7 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         self.log.info("Check the votes on orphan transactions")
 
         def from_wallet_tx(tx):
-            tx_obj = FromHex(CTransaction(), tx["hex"])
-            tx_obj.rehash()
-            return tx_obj
+            return FromHex(CTransaction(), tx["hex"])
 
         orphan_tx = wallet.create_self_transfer_chain(chain_length=2)[-1]
         orphan_txid = int(orphan_tx["txid"], 16)
@@ -286,10 +298,9 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         self.wait_until(lambda: has_finalized_tx(txid))
         assert txid in node.getrawmempool()
 
-        # Bump the time by 5s so we add the new tx to the block template
-        now = int(time.time())
+        # Bump the time by 6s so we add the new tx to the block template
+        now += 6
         node.setmocktime(now)
-        node.bumpmocktime(5)
 
         finalized_txs_size = node.getmempoolinfo()["finalized_txs_bytes"]
         finalized_tx_sigchecks = sum(
@@ -377,12 +388,15 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         self.wait_until(lambda: has_finalized_tx(txid))
         assert txid in node.getrawmempool()
 
+        blockhash = node.getbestblockhash()
+        blocktime = node.getblock(blockhash, 2)["time"]
         conflicting_block = create_block(
-            int(node.getbestblockhash(), 16),
+            int(blockhash, 16),
             create_coinbase(node.getblockcount() - 1),
+            ntime=blocktime,
         )
         conflicting_tx = wallet.create_self_transfer(utxo_to_spend=utxo)["tx"]
-        assert conflicting_tx.get_id() != txid
+        assert conflicting_tx.txid_hex != txid
 
         conflicting_block.vtx.append(conflicting_tx)
         make_conform_to_ctor(conflicting_block)
@@ -509,6 +523,12 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
         assert mempool_tx["txid"] in node.getrawmempool()
         assert conflicting_tx["txid"] not in node.getrawmempool()
 
+        # Also reject the mempool_tx so the conflicting_tx is pulled back to the
+        # mempool
+        self.wait_until(lambda: has_rejected_tx(mempool_tx["txid"]))
+        assert mempool_tx["txid"] not in node.getrawmempool()
+        assert conflicting_tx["txid"] in node.getrawmempool()
+
         self.wait_until(lambda: has_invalidated_tx(conflicting_tx["txid"]))
         assert mempool_tx["txid"] in node.getrawmempool()
         assert conflicting_tx["txid"] not in node.getrawmempool()
@@ -534,6 +554,29 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
                 expect_disconnect=False,
                 reject_reason="txn-mempool-conflict",
             )
+
+        assert mempool_tx["txid"] in node.getrawmempool()
+        assert another_conflicting_tx["txid"] not in node.getrawmempool()
+
+        # We can now invalidate both transactions and they will both be removed
+        # from all the pools independently of where they used to be. The
+        # mempool_tx is polled first, then the conflicting tx once it reaches
+        # the mempool
+        self.wait_until(lambda: has_rejected_tx(mempool_tx["txid"]))
+        assert mempool_tx["txid"] not in node.getrawmempool()
+        assert another_conflicting_tx["txid"] in node.getrawmempool()
+
+        self.wait_until(lambda: has_invalidated_tx(mempool_tx["txid"]))
+        assert mempool_tx["txid"] not in node.getrawmempool()
+        assert another_conflicting_tx["txid"] in node.getrawmempool()
+
+        self.wait_until(lambda: has_rejected_tx(another_conflicting_tx["txid"]))
+        assert mempool_tx["txid"] not in node.getrawmempool()
+        assert another_conflicting_tx["txid"] not in node.getrawmempool()
+
+        self.wait_until(lambda: has_invalidated_tx(another_conflicting_tx["txid"]))
+        assert mempool_tx["txid"] not in node.getrawmempool()
+        assert another_conflicting_tx["txid"] not in node.getrawmempool()
 
         self.log.info("Check all conflicting txs are erased upon finalization")
 
@@ -610,6 +653,67 @@ class AvalancheTransactionVotingTest(BitcoinTestFramework):
                 expect_disconnect=False,
                 reject_reason="finalized-tx-conflict",
             )
+
+        self.log.info("Check the node drops staled transactions")
+
+        tip = self.generate(wallet, 1)[0]
+        assert_equal(node.getrawmempool(), [])
+
+        self.wait_until(lambda: has_finalized_block(tip))
+
+        stalled_tx = wallet.send_self_transfer(from_node=node)
+        stalled_txid = stalled_tx["txid"]
+
+        def stale_txid(txid):
+            with node.wait_for_debug_log(
+                [f"Avalanche stalled tx {txid}".encode()],
+                chatty_callable=lambda: can_find_inv_in_poll(
+                    quorum,
+                    int(txid, 16),
+                    response=AvalancheTxVoteError.UNKNOWN,
+                    other_response=AvalancheTxVoteError.UNKNOWN,
+                ),
+            ):
+                pass
+
+        stale_txid(stalled_txid)
+        assert stalled_txid not in node.getrawmempool()
+
+        # Exhaust the inflight polls
+        while can_find_inv_in_poll(
+            quorum,
+            int(stalled_txid, 16),
+            response=AvalancheTxVoteError.UNKNOWN,
+            other_response=AvalancheTxVoteError.UNKNOWN,
+        ):
+            pass
+
+        self.log.info("Check the node can re-download a stalled transaction")
+
+        with p2p_lock:
+            [p.last_message.clear() for p in quorum]
+
+        announcing_peer = node.add_p2p_connection(P2PDataStore())
+        announcing_peer.send_message(
+            msg_inv(
+                [
+                    CInv(MSG_TX, int(stalled_txid, 16)),
+                ]
+            )
+        )
+        announcing_peer.sync_with_ping()
+        announcing_peer.wait_for_getdata([int(stalled_txid, 16)])
+        announcing_peer.send_and_ping(
+            msg_tx(FromHex(CTransaction(), stalled_tx["hex"]))
+        )
+
+        self.wait_until(lambda: stalled_txid in node.getrawmempool())
+
+        # It is also relayed by the node
+        [p.wait_for_inv([CInv(MSG_TX, int(stalled_txid, 16))]) for p in quorum]
+
+        # It will be polled again and can now be finalized
+        self.wait_until(lambda: has_finalized_tx(stalled_txid))
 
 
 if __name__ == "__main__":

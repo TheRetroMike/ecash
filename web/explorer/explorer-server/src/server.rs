@@ -1,9 +1,14 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 use std::path::PathBuf;
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet},
 };
 
+use abc_rust_error::Result;
 use askama::Template;
 use axum::{response::Redirect, routing::get, Router};
 use bitcoinsuite_chronik_client::proto::{
@@ -11,31 +16,36 @@ use bitcoinsuite_chronik_client::proto::{
     TokenType, Tx,
 };
 use bitcoinsuite_chronik_client::{proto::OutPoint, ChronikClient};
-use bitcoinsuite_core::{CashAddress, Hashed, Sha256d};
-use bitcoinsuite_error::Result;
+use bitcoinsuite_core::{
+    address::CashAddress,
+    hash::{Hashed, Sha256d},
+};
 use chrono::{TimeZone, Utc};
 use eyre::{bail, eyre};
 use futures::future;
 
 use crate::{
     api::{
-        block_txs_to_json, calc_tx_stats, tokens_to_json, tx_history_to_json,
+        block_txs_to_json, calc_tx_stats, mempool_txs_to_json, tokens_to_json,
+        tx_history_to_json,
     },
     blockchain::{
         calculate_block_difficulty, cash_addr_to_script_type_payload,
-        from_be_hex, to_be_hex, to_legacy_address,
+        to_be_hex, to_legacy_address,
     },
     chain::Chain,
+    file_hashes::FileHashes,
     server_http::{
         address, address_qr, block, block_height, blocks, data_address_txs,
-        data_block_txs, data_blocks, search, serve_files, testnet_faucet, tx,
+        data_block_txs, data_blocks, data_mempool, mempool, search,
+        serve_files, testnet_faucet, tx,
     },
     server_primitives::{
         JsonBalance, JsonBlock, JsonBlocksResponse, JsonTxsResponse, JsonUtxo,
     },
     templating::{
-        AddressTemplate, BlockTemplate, BlocksTemplate, TestnetFaucetTemplate,
-        TokenEntryTemplate, TransactionTemplate,
+        AddressTemplate, BlockTemplate, BlocksTemplate, MempoolTemplate,
+        TestnetFaucetTemplate, TokenEntryTemplate, TransactionTemplate,
     },
 };
 
@@ -56,6 +66,7 @@ impl Server {
         chain: Chain,
         network_selector: bool,
     ) -> Result<Self> {
+        crate::file_hashes::init_base_dir(base_dir.clone())?;
         Ok(Server {
             chronik,
             base_dir,
@@ -87,6 +98,7 @@ impl Server {
                 get(data_block_txs),
             )
             .route("/api/address/:hash/transactions", get(data_address_txs))
+            .route("/api/mempool", get(data_mempool))
             .nest("/code", serve_files(&self.base_dir.join("code")))
             .nest("/assets", serve_files(&self.base_dir.join("assets")))
             .nest(
@@ -94,6 +106,7 @@ impl Server {
                 serve_files(&self.base_dir.join("assets").join("favicon.png")),
             )
             .route("/testnet-faucet", get(testnet_faucet))
+            .route("/mempool", get(mempool))
     }
 }
 
@@ -104,6 +117,7 @@ impl Server {
         let blocks_template = BlocksTemplate {
             last_block_height: blockchain_info.tip_height as u32,
             network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
         };
 
         Ok(blocks_template.render().unwrap())
@@ -114,6 +128,7 @@ impl Server {
     pub async fn testnet_faucet(&self) -> Result<String> {
         let testnet_faucet_template = TestnetFaucetTemplate {
             network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
         };
 
         Ok(testnet_faucet_template.render().unwrap())
@@ -172,7 +187,7 @@ impl Server {
         page: usize,
         page_size: usize,
     ) -> Result<JsonTxsResponse> {
-        let block_hash = Sha256d::from_hex_be(block_hex)?;
+        let block_hash = Sha256d::from_be_hex(block_hex)?;
         let block = self.chronik.block_by_hash(&block_hash).await?;
         let block_txs = self
             .chronik
@@ -188,7 +203,7 @@ impl Server {
                     return None;
                 }
                 Some(
-                    Sha256d::from_hex_be(&token_entry.token_id)
+                    Sha256d::from_be_hex(&token_entry.token_id)
                         .expect("Impossible"),
                 )
             })
@@ -206,7 +221,7 @@ impl Server {
         address: &str,
         query: HashMap<String, String>,
     ) -> Result<JsonTxsResponse> {
-        let address = CashAddress::parse_cow(address.into())?;
+        let address = address.parse()?;
         let (script_type, script_payload) =
             cash_addr_to_script_type_payload(&address);
         let script_endpoint = self.chronik.script(script_type, &script_payload);
@@ -233,7 +248,7 @@ impl Server {
                     return None;
                 }
                 Some(
-                    Sha256d::from_hex_be(&token_entry.token_id)
+                    Sha256d::from_be_hex(&token_entry.token_id)
                         .expect("Impossible"),
                 )
             })
@@ -251,7 +266,7 @@ impl Server {
 
 impl Server {
     pub async fn block(&self, block_hex: &str) -> Result<String> {
-        let block_hash = Sha256d::from_hex_be(block_hex)?;
+        let block_hash = Sha256d::from_be_hex(block_hex)?;
 
         let block = self.chronik.block_by_hash(&block_hash).await?;
         let block_txs = self
@@ -268,24 +283,23 @@ impl Server {
         let timestamp =
             Utc.timestamp_nanos(block_info.timestamp * 1_000_000_000);
         let coinbase_data = block_txs.txs[0].inputs[0].input_script.clone();
-        let confirmations = best_height - block_info.height + 1;
 
         let block_template = BlockTemplate {
             block_hex,
             block_info,
-            confirmations,
             timestamp,
             difficulty,
             coinbase_data,
             best_height,
             network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
         };
 
         Ok(block_template.render().unwrap())
     }
 
     pub async fn tx(&self, tx_hex: &str) -> Result<String> {
-        let tx_hash = Sha256d::from_hex_be(tx_hex)?;
+        let tx_hash = Sha256d::from_be_hex(tx_hex)?;
         let tx = self.chronik.tx(&tx_hash).await?;
 
         let blockchain_info = self.chronik.blockchain_info().await?;
@@ -302,7 +316,7 @@ impl Server {
         let timestamp = Utc.timestamp_nanos(timestamp * 1_000_000_000);
 
         let raw_tx = self.chronik.raw_tx(&tx_hash).await?;
-        let raw_tx = raw_tx.hex();
+        let raw_tx = hex::encode(raw_tx);
 
         let tx_stats = calc_tx_stats(&tx, None);
 
@@ -349,6 +363,7 @@ impl Server {
             timestamp,
             token_icon_url: self.token_icon_url,
             network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
         };
 
         Ok(transaction_template.render().unwrap())
@@ -359,7 +374,7 @@ impl Server {
         tx: &Tx,
         token_entry: &'a TokenEntry,
     ) -> Result<TokenEntryTemplate<'a>> {
-        let token_id = Sha256d::from_hex_be(&token_entry.token_id)?;
+        let token_id = Sha256d::from_be_hex(&token_entry.token_id)?;
         let tx_type = TokenTxType::from_i32(token_entry.tx_type)
             .ok_or_else(|| eyre!("Malformed token_entry.tx_type"))?;
         let token_data = match tx_type {
@@ -436,19 +451,19 @@ impl Server {
             .iter()
             .filter_map(|input| input.token.as_ref())
             .filter(|token| token.token_id == token_entry.token_id)
-            .map(|token| token.amount as i128)
+            .map(|token| token.atoms as i128)
             .sum();
         let token_output: i128 = tx
             .outputs
             .iter()
             .filter_map(|output| output.token.as_ref())
             .filter(|token| token.token_id == token_entry.token_id)
-            .map(|token| token.amount as i128)
+            .map(|token| token.atoms as i128)
             .sum();
 
         Ok(TokenEntryTemplate {
             token_section_title,
-            token_hex: token_id.to_string(),
+            token_hex: token_id.hex_be(),
             entry: token_entry,
             genesis_info: token_data
                 .as_ref()
@@ -464,7 +479,7 @@ impl Server {
 
 impl Server {
     pub async fn address<'a>(&'a self, address: &str) -> Result<String> {
-        let address = CashAddress::parse_cow(address.into())?;
+        let address = address.parse::<CashAddress>()?;
         let sats_address = address.with_prefix(self.satoshi_addr_prefix);
         let token_address = address.with_prefix(self.tokens_addr_prefix);
 
@@ -500,7 +515,7 @@ impl Server {
             let mut json_utxo = JsonUtxo {
                 tx_hash: to_be_hex(txid),
                 out_idx: *out_idx,
-                sats_amount: utxo.value,
+                sats_amount: utxo.sats,
                 token_amount: 0,
                 is_coinbase: utxo.is_coinbase,
                 block_height: utxo.block_height,
@@ -508,34 +523,34 @@ impl Server {
 
             match &utxo.token {
                 Some(token) => {
-                    let token_id_hash = Sha256d::from_hex_be(&token.token_id)
+                    let token_id_hash = Sha256d::from_be_hex(&token.token_id)
                         .expect("Impossible");
 
-                    json_utxo.token_amount = token.amount;
+                    json_utxo.token_amount = token.atoms;
 
                     match json_balances.entry(token.token_id.clone()) {
                         Entry::Occupied(mut entry) => {
                             let entry = entry.get_mut();
-                            entry.sats_amount += utxo.value;
-                            entry.token_amount += i128::from(token.amount);
+                            entry.sats_amount += utxo.sats;
+                            entry.token_amount += i128::from(token.atoms);
                             entry.utxos.push(json_utxo);
                         }
                         Entry::Vacant(entry) => {
                             entry.insert(JsonBalance {
                                 token_id: Some(token.token_id.clone()),
-                                sats_amount: utxo.value,
-                                token_amount: token.amount.into(),
+                                sats_amount: utxo.sats,
+                                token_amount: token.atoms.into(),
                                 utxos: vec![json_utxo],
                             });
                         }
                     }
 
                     token_ids.insert(token_id_hash);
-                    token_dust += utxo.value;
+                    token_dust += utxo.sats;
                     token_utxos.push(utxo);
                 }
                 _ => {
-                    total_xec += utxo.value;
+                    total_xec += utxo.sats;
                     main_json_balance.utxos.push(json_utxo);
                 }
             };
@@ -568,6 +583,7 @@ impl Server {
             encoded_balances,
             token_icon_url: &self.token_icon_url,
             network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
         };
 
         Ok(address_template.render().unwrap())
@@ -579,7 +595,7 @@ impl Server {
     ) -> Result<HashMap<String, TokenInfo>> {
         let mut token_calls = Vec::new();
 
-        let unknown_token = Sha256d::from_hex(
+        let unknown_token = Sha256d::from_be_hex(
             "0000000000000000000000000000000000000000000000000000000000000000",
         )?;
 
@@ -627,7 +643,7 @@ impl Server {
     }
 
     pub async fn search(&self, query: &str) -> Result<Redirect> {
-        if let Ok(address) = CashAddress::parse_cow(query.into()) {
+        if let Ok(address) = query.parse::<CashAddress>() {
             return Ok(self.redirect(format!("/address/{}", address.as_str())));
         }
 
@@ -649,8 +665,7 @@ impl Server {
             }
         }
 
-        let bytes = from_be_hex(query)?;
-        let unknown_hash = Sha256d::from_slice(&bytes)?;
+        let unknown_hash = Sha256d::from_be_hex(query)?;
 
         if self.chronik.tx(&unknown_hash).await.is_ok() {
             return Ok(self.redirect(format!("/tx/{}", query)));
@@ -664,5 +679,49 @@ impl Server {
 
     pub fn redirect(&self, url: String) -> Redirect {
         Redirect::permanent(&url)
+    }
+
+    pub async fn mempool(&self) -> Result<String> {
+        let mempool_txs = self.chronik.unconfirmed_txs().await?;
+
+        let mut total_size = 0u64;
+        for tx in mempool_txs.txs.iter() {
+            total_size += tx.size as u64;
+        }
+
+        let mempool_template = MempoolTemplate {
+            num_txs: mempool_txs.txs.len() as u32,
+            total_size,
+            network_selector: self.network_selector,
+            hashes: *FileHashes::get()?,
+        };
+
+        Ok(mempool_template.render().unwrap())
+    }
+
+    pub async fn data_mempool(&self) -> Result<JsonTxsResponse> {
+        let mempool_txs = self.chronik.unconfirmed_txs().await?;
+
+        let token_ids = mempool_txs
+            .txs
+            .iter()
+            .filter_map(|tx| {
+                let token_entry = tx.token_entries.get(0)?;
+                if Self::is_unknown_slp(&token_entry.token_type).ok()? {
+                    return None;
+                }
+                Some(
+                    Sha256d::from_be_hex(&token_entry.token_id)
+                        .expect("Impossible"),
+                )
+            })
+            .collect::<HashSet<_>>();
+
+        let tokens_by_hex = self.batch_get_chronik_tokens(token_ids).await?;
+        let json_tokens = tokens_to_json(&tokens_by_hex)?;
+
+        let json_txs = mempool_txs_to_json(mempool_txs, &json_tokens)?;
+
+        Ok(JsonTxsResponse { data: json_txs })
     }
 }

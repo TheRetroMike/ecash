@@ -27,11 +27,12 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QBrush, QColor, QFont, QIcon
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt
+from qtpy.QtGui import QBrush, QColor, QFont, QIcon
 
 import electrumabc.web as web
+from electrumabc.amount import format_amount
 from electrumabc.i18n import _
 from electrumabc.plugins import run_hook
 from electrumabc.util import Weak, profiler, timestamp_to_datetime
@@ -167,8 +168,8 @@ class HistoryList(MyTreeWidget):
             )
             has_invoice = self.wallet.invoices.paid.get(tx_hash)
             icon = self._get_icon_for_status(status)
-            v_str = self.main_window.format_amount(value, True, whitespaces=True)
-            balance_str = self.main_window.format_amount(balance, whitespaces=True)
+            v_str = format_amount(value, self.config, True, whitespaces=True)
+            balance_str = format_amount(balance, self.config, whitespaces=True)
             entry = ["", tx_hash, status_str, label, v_str, balance_str]
             if fx and fx.show_history():
                 date = timestamp_to_datetime(time.time() if conf <= 0 else timestamp)
@@ -184,7 +185,9 @@ class HistoryList(MyTreeWidget):
                 item.setIcon(3, self.invoiceIcon)
             for i in range(len(entry)):
                 if i > 3:
-                    item.setTextAlignment(i, Qt.AlignRight | Qt.AlignVCenter)
+                    item.setTextAlignment(
+                        i, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
                 if i != 2:
                     item.setFont(i, self.monospaceFont)
             if value and value < 0:

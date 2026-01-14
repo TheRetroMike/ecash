@@ -137,14 +137,14 @@ enforce Bitcoin ABC code formatting standards, and often suggests changes.
 If code formatting tools do not install automatically on your system, you
 will have to install the following:
 
-Install all the code formatting tools on Debian Bullseye/Bookworm (11/12) or
+Install all the code formatting tools on Debian Bookworm/Trixie (12/13) or
 Ubuntu 24.04:
 ```
 sudo apt-get install clang-format-16 clang-tidy-16 python3-pip php-codesniffer shellcheck yamllint
 
 # Depending on your distribution policy you might need to pass the
 # --break-system-packages to the below pip3 call
-pip3 install "black>=24.0" "isort>=5.6.4" "mypy>=0.910" "flynt>=0.78" "flake8>=5" flake8-comprehensions flake8-builtins "djlint>=1.34.1"
+pip3 install "ruff>=0.14.0" "mypy>=0.910" "djlint>=1.34.1"
 
 echo "export PATH=\"`python3 -m site --user-base`/bin:\$PATH\"" >> ~/.bashrc
 source ~/.bashrc
@@ -162,21 +162,16 @@ Standalone binaries are available for download on
 if another version is already installed, make sure the recent one is found first.
 Arcanist will tell you what version is expected and what is found when running `arc lint` against a shell script.
 
-If you are running Debian 10, it is also available in the backports repository:
-```
-sudo apt-get -t buster-backports install shellcheck
-```
-
 If you are modifying Rust files, you will need to install a stable rust version,
 plus a nightly toolchain called "abc-nightly" for formatting:
 ```bash
 # Install latest stable Rust version
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s
 source ~/.cargo/env
-rustup install nightly-2023-08-23
-rustup component add rustfmt --toolchain nightly-2023-08-23
+rustup install nightly-2023-12-29
+rustup component add rustfmt --toolchain nightly-2023-12-29
 # Name the nightly toolchain "abc-nightly"
-rustup toolchain link abc-nightly "$(rustc +nightly-2023-08-23 --print sysroot)"
+rustup toolchain link abc-nightly "$(rustc +nightly-2023-12-29 --print sysroot)"
 ```
 
 Contributing to the web projects
@@ -190,9 +185,11 @@ Then:
 
 ```
 cd bitcoin-abc
-[sudo] nvm install 20
-[sudo] npm install -g npm@latest
-npm ci
+[sudo] nvm install 22
+# Enable corepack (built into Node.js 16.9+, no installation needed)
+corepack enable
+corepack prepare pnpm@10.24.0 --activate
+pnpm install --frozen-lockfile
 ```
 
 Some repositories have a `.nvmrc` file which specifies the version of node expected.
@@ -204,12 +201,6 @@ nvm use
 ```
 
 The specified version of nodejs will be installed and used.
-
-To work on the extension, you will need `browserify`
-
-```
-[sudo] npm install -g browserify
-```
 
 Contributing to Electrum ABC
 ----------------------------

@@ -56,9 +56,9 @@ public:
     }
 
 private:
-    DstTypeChecker() : isKey(false), isScript(false) {}
-    bool isKey;
-    bool isScript;
+    DstTypeChecker() = default;
+    bool isKey{false};
+    bool isScript{false};
 };
 
 // Map all possible size bits in the version to the expected size of the
@@ -147,7 +147,7 @@ BOOST_AUTO_TEST_CASE(random_dst) {
     const auto params = CreateChainParams(*m_node.args, ChainType::MAIN);
 
     for (size_t i = 0; i < NUM_TESTS; ++i) {
-        uint160 hash = InsecureRand160();
+        uint160 hash = m_rng.rand160();
         const CTxDestination dst_key = PKHash(hash);
         const CTxDestination dst_scr = ScriptHash(hash);
 

@@ -1,9 +1,13 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 use std::collections::HashMap;
 
 use bitcoinsuite_chronik_client::proto::{
     GenesisInfo, OutPoint, Token, TokenInfo,
 };
-use bitcoinsuite_core::Script;
+use bitcoinsuite_core::script::Script;
 use chrono::DateTime;
 use chrono_humanize::HumanTime;
 use humansize::{file_size_opts as options, FileSize};
@@ -47,12 +51,12 @@ pub fn check_is_coinbase(outpoint: &OutPoint) -> askama::Result<bool> {
 pub fn cashaddr_from_script<'a>(
     script: &'a [u8],
     prefix: &'a str,
-) -> askama::Result<blockchain::Destination<'a>> {
+) -> askama::Result<blockchain::Destination> {
     Ok(blockchain::destination_from_script(prefix, script))
 }
 
 pub fn get_script(signature_script: &[u8]) -> askama::Result<String> {
-    let script = Script::from_slice(signature_script);
+    let script = Script::new(signature_script.to_vec().into());
     Ok(script.to_string())
 }
 
@@ -142,6 +146,7 @@ pub fn render_miner(coinbase_data: &[u8]) -> askama::Result<String> {
         "with Om Power",
         "nodeStratum",
         "90 01 Pte Ltd",
+        "LSoftware DMCC",
     ];
 
     for &str_to_match in &self_identified_miners {
@@ -478,6 +483,18 @@ mod tests {
         x00\x00\x00\x00\x00\x00h\x00\x00\x06a\xc4\xde\xe1\xef\n\x00\x00\
         x1690 01 Pte Ltd 6d203925";
         assert_eq!(render_miner(pteltd_coinbase_hex).unwrap(), "90 01 Pte Ltd");
+
+        // LSoftware DMCC 917134
+        let lsoftware_dmcc_coinbase_hex =
+            b"\x03\x8e\xfe\r\x04KB\xdfh\x0c\xfa\xbemm\
+        x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+        x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\
+        x00\x00\x00\x00\x00\x00\x00\x00\x00\x8d\xaf\x87\x1e\xd1\xe6-\x00\x00\
+        x17LSoftware DMCC bfc59867";
+        assert_eq!(
+            render_miner(lsoftware_dmcc_coinbase_hex).unwrap(),
+            "LSoftware DMCC"
+        );
 
         // Unknown miner
         // genesis block 0

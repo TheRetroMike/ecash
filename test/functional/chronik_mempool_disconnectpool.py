@@ -63,7 +63,7 @@ class ChronikMempoolDisconnectPool(BitcoinTestFramework):
         tx2 = CTransaction()
         tx2.vin = [
             CTxIn(
-                COutPoint(int(tx1.hash, 16), 1),
+                COutPoint(tx1.txid_int, 1),
                 SCRIPTSIG_OP_TRUE,
             )
         ]
@@ -84,7 +84,7 @@ class ChronikMempoolDisconnectPool(BitcoinTestFramework):
         reorg_block1.solve()
 
         reorg_block2 = create_block(
-            reorg_block1.sha256,
+            reorg_block1.hash_int,
             create_coinbase(node.getblockcount() + 2, b"\x03" * 33),
         )
         reorg_block2.hashMerkleRoot = reorg_block2.calc_merkle_root()
@@ -95,9 +95,10 @@ class ChronikMempoolDisconnectPool(BitcoinTestFramework):
         node.syncwithvalidationinterfacequeue()
 
         assert_equal(
-            chronik.tx(tx1.hash).ok().block.hash[::-1].hex(), reorg_block1.hash
+            chronik.tx(tx1.txid_hex).ok().block.hash[::-1].hex(),
+            reorg_block1.hash_hex,
         )
-        assert_equal(chronik.tx(tx2.hash).ok().block, pb.BlockMetadata())
+        assert_equal(chronik.tx(tx2.txid_hex).ok().block, pb.BlockMetadata())
 
 
 if __name__ == "__main__":

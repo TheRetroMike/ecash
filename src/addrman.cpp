@@ -194,9 +194,7 @@ template <typename Stream> void AddrManImpl::Serialize(Stream &s_) const {
      */
 
     // Always serialize in the latest version (FILE_FORMAT).
-
-    OverrideStream<Stream> s(&s_, s_.GetType(),
-                             s_.GetVersion() | ADDRV2_FORMAT);
+    ParamsStream s{CAddress::V2_DISK, s_};
 
     s << static_cast<uint8_t>(FILE_FORMAT);
 
@@ -265,15 +263,9 @@ template <typename Stream> void AddrManImpl::Unserialize(Stream &s_) {
     Format format;
     s_ >> Using<CustomUintFormatter<1>>(format);
 
-    int stream_version = s_.GetVersion();
-    if (format >= Format::V3_BIP155) {
-        // Add ADDRV2_FORMAT to the version so that the CNetAddr and
-        // CAddress unserialize methods know that an address in addrv2
-        // format is coming.
-        stream_version |= ADDRV2_FORMAT;
-    }
-
-    OverrideStream<Stream> s(&s_, s_.GetType(), stream_version);
+    const auto ser_params =
+        (format >= Format::V3_BIP155 ? CAddress::V2_DISK : CAddress::V1_DISK);
+    ParamsStream s{ser_params, s_};
 
     uint8_t compat;
     s >> compat;
@@ -370,7 +362,7 @@ template <typename Stream> void AddrManImpl::Unserialize(Stream &s_) {
     // serialization.
     uint256 supplied_asmap_checksum;
     if (m_asmap.size() != 0) {
-        supplied_asmap_checksum = SerializeHash(m_asmap);
+        supplied_asmap_checksum = (HashWriter{} << m_asmap).GetHash();
     }
     uint256 serialized_asmap_checksum;
     if (format >= Format::V2_ASMAP) {
@@ -815,7 +807,7 @@ std::pair<CAddress, NodeSeconds> AddrManImpl::Select_(bool newOnly) const {
             assert(it_found != mapInfo.end());
             const AddrInfo &info{it_found->second};
             // With probability GetChance() * fChanceFactor, return the entry.
-            if (insecure_rand.randbits(30) <
+            if (insecure_rand.randbits<30>() <
                 fChanceFactor * info.GetChance() * (1 << 30)) {
                 LogPrint(BCLog::ADDRMAN, "Selected %s from tried\n",
                          info.ToString());
@@ -1281,12 +1273,12 @@ template <typename Stream> void AddrMan::Unserialize(Stream &s_) {
 }
 
 // explicit instantiation
-template void AddrMan::Serialize(HashedSourceWriter<CAutoFile> &s) const;
-template void AddrMan::Serialize(CDataStream &s) const;
-template void AddrMan::Unserialize(CAutoFile &s);
-template void AddrMan::Unserialize(CHashVerifier<CAutoFile> &s);
-template void AddrMan::Unserialize(CDataStream &s);
-template void AddrMan::Unserialize(CHashVerifier<CDataStream> &s);
+template void AddrMan::Serialize(HashedSourceWriter<AutoFile> &s) const;
+template void AddrMan::Serialize(DataStream &s) const;
+template void AddrMan::Unserialize(AutoFile &s);
+template void AddrMan::Unserialize(HashVerifier<AutoFile> &s);
+template void AddrMan::Unserialize(DataStream &s);
+template void AddrMan::Unserialize(HashVerifier<DataStream> &s);
 
 size_t AddrMan::size() const {
     return m_impl->size();

@@ -175,6 +175,22 @@ export const BalanceXec = styled.div`
         scroll-snap-type: x mandatory;
         -webkit-overflow-scrolling: touch;
         flex-direction: row;
+
+        @media (pointer: fine) {
+            &::-webkit-scrollbar {
+                width: 4px;
+            }
+
+            &::-webkit-scrollbar-track {
+                -webkit-box-shadow: inset 0 0 0 rgba(0, 0, 0, 0);
+                background-color: ${props => props.theme.primaryBackground};
+            }
+
+            &::-webkit-scrollbar-thumb {
+                border-radius: 10px;
+                background-color: ${props => props.theme.accent};
+            }
+        }
     }
 `;
 
@@ -199,8 +215,8 @@ export const BalanceCard = styled.div<{
             (props.tokenLabel === 'FIRMA'
                 ? props.theme.firmaAccent
                 : props.tokenLabel === 'XECX'
-                ? props.theme.secondaryAccent
-                : props.theme.accent) + '4D'},
+                  ? props.theme.secondaryAccent
+                  : props.theme.accent) + '4D'},
         ${props => props.theme.secondaryBackground}
     );
     @media (max-width: 1100px) {
@@ -234,8 +250,8 @@ export const BalanceTitle = styled.div<{
         props.tokenLabel === 'FIRMA'
             ? props.theme.firmaAccent
             : props.tokenLabel === 'XECX'
-            ? props.theme.secondaryAccent
-            : props.theme.accent};
+              ? props.theme.secondaryAccent
+              : props.theme.accent};
 
     @media (max-width: 1100px) {
         margin-bottom: 2px;
@@ -264,8 +280,8 @@ export const BalanceRow = styled.div<{
                 props.tokenLabel === 'FIRMA'
                     ? props.theme.firmaAccent
                     : props.tokenLabel === 'XECX'
-                    ? props.theme.secondaryAccent
-                    : props.theme.accent};
+                      ? props.theme.secondaryAccent
+                      : props.theme.accent};
             text-decoration: underline;
         }
     }

@@ -198,7 +198,8 @@ struct SnapshotTestSetup : TestChain100Setup {
         {
             LOCK(::cs_main);
             BOOST_CHECK(!chainman.IsSnapshotValidated());
-            BOOST_CHECK(!node::FindSnapshotChainstateDir());
+            BOOST_CHECK(
+                !node::FindSnapshotChainstateDir(m_args.GetDataDirNet()));
         }
 
         size_t initial_size;
@@ -252,7 +253,7 @@ struct SnapshotTestSetup : TestChain100Setup {
                 auto_infile >> coin;
             }));
 
-        BOOST_CHECK(!node::FindSnapshotChainstateDir());
+        BOOST_CHECK(!node::FindSnapshotChainstateDir(m_args.GetDataDirNet()));
 
         BOOST_REQUIRE(!CreateAndActivateUTXOSnapshot(
             this, [](AutoFile &auto_infile, SnapshotMetadata &metadata) {
@@ -276,7 +277,8 @@ struct SnapshotTestSetup : TestChain100Setup {
             }));
 
         BOOST_REQUIRE(CreateAndActivateUTXOSnapshot(this));
-        BOOST_CHECK(fs::exists(*node::FindSnapshotChainstateDir()));
+        BOOST_CHECK(fs::exists(
+            *node::FindSnapshotChainstateDir(m_args.GetDataDirNet())));
 
         // Ensure our active chain is the snapshot chainstate.
         BOOST_CHECK(
@@ -290,7 +292,8 @@ struct SnapshotTestSetup : TestChain100Setup {
         {
             LOCK(::cs_main);
 
-            fs::path found = *node::FindSnapshotChainstateDir();
+            fs::path found =
+                *node::FindSnapshotChainstateDir(m_args.GetDataDirNet());
 
             // Note: WriteSnapshotBaseBlockhash() is implicitly tested above.
             BOOST_CHECK_EQUAL(*node::ReadSnapshotBaseBlockhash(found),
@@ -400,7 +403,8 @@ struct SnapshotTestSetup : TestChain100Setup {
             LOCK(::cs_main);
             chainman.ResetChainstates();
             BOOST_CHECK_EQUAL(chainman.GetAll().size(), 0);
-            m_node.notifications = std::make_unique<KernelNotifications>();
+            m_node.notifications =
+                std::make_unique<KernelNotifications>(m_node.exit_status);
             ChainstateManager::Options chainman_opts{
                 .config = chainman.GetConfig(),
                 .datadir = m_args.GetDataDirNet(),
@@ -411,12 +415,13 @@ struct SnapshotTestSetup : TestChain100Setup {
             const BlockManager::Options blockman_opts{
                 .chainparams = chainman_opts.config.GetChainParams(),
                 .blocks_dir = m_args.GetBlocksDirPath(),
+                .notifications = chainman_opts.notifications,
             };
             // For robustness, ensure the old manager is destroyed before
             // creating a new one.
             m_node.chainman.reset();
             m_node.chainman = std::make_unique<ChainstateManager>(
-                chainman_opts, blockman_opts);
+                m_node.kernel->interrupt, chainman_opts, blockman_opts);
         }
         return *Assert(m_node.chainman);
     }
@@ -588,7 +593,8 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_init, SnapshotTestSetup) {
 
     this->SetupSnapshot();
 
-    fs::path snapshot_chainstate_dir = *node::FindSnapshotChainstateDir();
+    fs::path snapshot_chainstate_dir =
+        *node::FindSnapshotChainstateDir(m_args.GetDataDirNet());
     BOOST_CHECK(fs::exists(snapshot_chainstate_dir));
     BOOST_CHECK_EQUAL(snapshot_chainstate_dir,
                       gArgs.GetDataDirNet() / "chainstate_snapshot");
@@ -664,9 +670,10 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_completion,
     auto db_cache_before_complete = active_cs.m_coinsdb_cache_size_bytes;
 
     SnapshotCompletionResult res;
-    auto mock_shutdown = [](bilingual_str msg) {};
+    m_node.notifications->m_shutdown_on_fatal_error = false;
 
-    fs::path snapshot_chainstate_dir = *node::FindSnapshotChainstateDir();
+    fs::path snapshot_chainstate_dir =
+        *node::FindSnapshotChainstateDir(m_args.GetDataDirNet());
     BOOST_CHECK(fs::exists(snapshot_chainstate_dir));
     BOOST_CHECK_EQUAL(snapshot_chainstate_dir,
                       gArgs.GetDataDirNet() / "chainstate_snapshot");
@@ -675,8 +682,8 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_completion,
     const BlockHash snapshot_tip_hash = WITH_LOCK(
         chainman.GetMutex(), return chainman.ActiveTip()->GetBlockHash());
 
-    res = WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation(
-                                   mock_shutdown));
+    res =
+        WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation());
     BOOST_CHECK_EQUAL(res, SnapshotCompletionResult::SUCCESS);
 
     WITH_LOCK(::cs_main, BOOST_CHECK(chainman.IsSnapshotValidated()));
@@ -694,8 +701,8 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_completion,
     BOOST_CHECK_EQUAL(all_chainstates[0], &active_cs);
 
     // Trying completion again should return false.
-    res = WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation(
-                                   mock_shutdown));
+    res =
+        WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation());
     BOOST_CHECK_EQUAL(res, SnapshotCompletionResult::SKIPPED);
 
     // The invalid snapshot path should not have been used.
@@ -753,25 +760,25 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_completion_hash_mismatch,
     Chainstate &validation_chainstate = *std::get<0>(chainstates);
     ChainstateManager &chainman = *Assert(m_node.chainman);
     SnapshotCompletionResult res;
-    auto mock_shutdown = [](bilingual_str msg) {};
+    m_node.notifications->m_shutdown_on_fatal_error = false;
 
     // Test tampering with the IBD UTXO set with an extra coin to ensure it
     // causes snapshot completion to fail.
     CCoinsViewCache &ibd_coins =
         WITH_LOCK(::cs_main, return validation_chainstate.CoinsTip());
     CScript script;
-    script.assign(InsecureRandBits(6), 0);
-    Coin badcoin{CTxOut{int64_t(InsecureRand32()) * SATOSHI, script},
+    script.assign(m_rng.randbits(6), 0);
+    Coin badcoin{CTxOut{int64_t(m_rng.rand32()) * SATOSHI, script},
                  /*nHeightIn=*/1, /*IsCoinbase=*/false};
-    TxId txid{InsecureRand256()};
+    TxId txid{m_rng.rand256()};
     ibd_coins.AddCoin(COutPoint(txid, 0), std::move(badcoin), false);
 
     fs::path snapshot_chainstate_dir =
         gArgs.GetDataDirNet() / "chainstate_snapshot";
     BOOST_CHECK(fs::exists(snapshot_chainstate_dir));
 
-    res = WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation(
-                                   mock_shutdown));
+    res =
+        WITH_LOCK(::cs_main, return chainman.MaybeCompleteSnapshotValidation());
     BOOST_CHECK_EQUAL(res, SnapshotCompletionResult::HASH_MISMATCH);
 
     auto all_chainstates = chainman.GetAll();

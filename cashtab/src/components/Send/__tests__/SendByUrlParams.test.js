@@ -5,7 +5,7 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { walletWithXecAndTokens } from 'components/App/fixtures/mocks';
+import { walletWithXecAndTokensActive } from 'components/App/fixtures/mocks';
 import {
     SEND_ADDRESS_VALIDATION_ERRORS,
     SEND_AMOUNT_VALIDATION_ERRORS,
@@ -71,7 +71,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -88,14 +88,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() =>
@@ -125,7 +124,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The Send button is not disabled because we have a valid amount
         expect(
-            await screen.findByRole('button', { name: 'Send' }),
+            await screen.findByRole('button', { name: 'Accept' }),
         ).not.toHaveStyle('cursor: not-allowed');
     });
     it('Legacy params. Address and value keys are set and valid. Invalid bip21 string is ignored.', async () => {
@@ -143,7 +142,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -160,14 +159,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() =>
@@ -183,7 +181,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The Send button is not disabled because we have a valid amount
         expect(
-            await screen.findByRole('button', { name: 'Send' }),
+            await screen.findByRole('button', { name: 'Accept' }),
         ).not.toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
@@ -208,7 +206,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -225,14 +223,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() =>
@@ -247,9 +244,9 @@ describe('<SendXec /> rendered with params in URL', () => {
         expect(amountInputEl).toHaveProperty('disabled', false);
 
         // The Send button is disabled because no amount is entered
-        expect(await screen.findByRole('button', { name: 'Send' })).toHaveStyle(
-            'cursor: not-allowed',
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Accept' }),
+        ).toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
         for (const addrErr of SEND_ADDRESS_VALIDATION_ERRORS) {
@@ -273,7 +270,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -290,14 +287,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = screen.getByTitle('Toggle Multisend');
+        await waitFor(() => expect(toggleMultisend).toBeDisabled());
 
         // The 'Send To' input field has this address as a value
         await waitFor(() =>
@@ -312,9 +308,9 @@ describe('<SendXec /> rendered with params in URL', () => {
         expect(amountInputEl).toHaveProperty('disabled', false);
 
         // The Send button is disabled because no amount is entered
-        expect(await screen.findByRole('button', { name: 'Send' })).toHaveStyle(
-            'cursor: not-allowed',
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Accept' }),
+        ).toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
         for (const addrErr of SEND_ADDRESS_VALIDATION_ERRORS) {
@@ -336,7 +332,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -348,7 +344,8 @@ describe('<SendXec /> rendered with params in URL', () => {
             ).not.toBeInTheDocument(),
         );
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is not disabled
@@ -368,9 +365,9 @@ describe('<SendXec /> rendered with params in URL', () => {
         expect(amountInputEl).toHaveProperty('disabled', false);
 
         // The Send button is disabled because no amount is entered
-        expect(await screen.findByRole('button', { name: 'Send' })).toHaveStyle(
-            'cursor: not-allowed',
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Accept' }),
+        ).toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
         for (const addrErr of SEND_ADDRESS_VALIDATION_ERRORS) {
@@ -394,7 +391,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -406,7 +403,8 @@ describe('<SendXec /> rendered with params in URL', () => {
             ).not.toBeInTheDocument(),
         );
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is not disabled
@@ -426,9 +424,9 @@ describe('<SendXec /> rendered with params in URL', () => {
         expect(amountInputEl).toHaveProperty('disabled', false);
 
         // The Send button is disabled because no amount is entered
-        expect(await screen.findByRole('button', { name: 'Send' })).toHaveStyle(
-            'cursor: not-allowed',
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Accept' }),
+        ).toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
         for (const addrErr of SEND_ADDRESS_VALIDATION_ERRORS) {
@@ -453,7 +451,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -470,14 +468,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() =>
@@ -493,7 +490,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The Send button is not disabled because we have a valid amount
         expect(
-            await screen.findByRole('button', { name: 'Send' }),
+            await screen.findByRole('button', { name: 'Accept' }),
         ).not.toHaveStyle('cursor: not-allowed');
 
         // No addr validation errors on load
@@ -522,7 +519,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -539,14 +536,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -606,7 +602,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The Send button is enabled as we have valid address and amount params
         expect(
-            await screen.findByRole('button', { name: 'Send' }),
+            await screen.findByRole('button', { name: 'Accept' }),
         ).not.toHaveStyle('cursor: not-allowed');
 
         // The Cashtab Msg switch is disabled because we have txInfoFromUrl
@@ -633,7 +629,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -650,14 +646,13 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        const toggleMultisend = await screen.findByTitle('Toggle Multisend');
+        expect(toggleMultisend).toHaveProperty('disabled', true);
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -687,9 +682,9 @@ describe('<SendXec /> rendered with params in URL', () => {
         ).toBeInTheDocument();
 
         // The Send button is disabled
-        expect(await screen.findByRole('button', { name: 'Send' })).toHaveStyle(
-            'cursor: not-allowed',
-        );
+        expect(
+            await screen.findByRole('button', { name: 'Accept' }),
+        ).toHaveStyle('cursor: not-allowed');
 
         // The Cashtab Msg switch is disabled because we have txInfoFromUrl
         expect(screen.getByTitle('Toggle Cashtab Msg')).toHaveProperty(
@@ -707,7 +702,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -719,7 +714,8 @@ describe('<SendXec /> rendered with params in URL', () => {
             ).not.toBeInTheDocument(),
         );
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
         const amountInputEl = screen.getByPlaceholderText('Amount');
 
         // The "Send to Many" switch is not disabled
@@ -772,7 +768,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -789,13 +785,11 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
 
         // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        expect(await screen.findByTitle('Toggle Multisend')).toBeDisabled();
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -855,7 +849,7 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The Send button is enabled as we have valid address and amount params
         expect(
-            await screen.findByRole('button', { name: 'Send' }),
+            await screen.findByRole('button', { name: 'Accept' }),
         ).not.toHaveStyle('cursor: not-allowed');
 
         // The Cashtab Msg switch is disabled because we have txInfoFromUrl
@@ -890,7 +884,7 @@ describe('<SendXec /> rendered with params in URL', () => {
         });
         // Mock the app with context at the Send screen
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
         render(<CashtabTestWrapper chronik={mockedChronik} route="/send" />);
@@ -907,13 +901,21 @@ describe('<SendXec /> rendered with params in URL', () => {
             await screen.findByTitle('Balance XEC', {}, { timeout: 10000 }),
         ).toHaveTextContent('9,513.12 XEC');
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
-
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
+        // Wait for token mode to be activated (toggle should be on "Tokens")
+        // Wait for ecashWallet to be initialized first (component renders after ecashWallet is set)
+        const tokenModeSwitch = await screen.findByTitle(
+            'Toggle XEC/Token Mode',
         );
+        await waitFor(() => {
+            expect(tokenModeSwitch).toHaveProperty('checked', true);
+        });
+
+        // The "Send to Many" switch should not be visible in token mode
+        expect(screen.queryByTitle('Toggle Multisend')).not.toBeInTheDocument();
+
+        // Get the token address input (in token mode)
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -923,23 +925,12 @@ describe('<SendXec /> rendered with params in URL', () => {
         // This is covered in SendXec.test.js
         expect(addressInputEl).toBeDisabled();
 
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
-
-        // Amount input is not displayed
-        expect(screen.queryByPlaceholderText('Amount')).not.toBeInTheDocument();
-
-        // Instead, we see the bip21 token amount input
-        const tokenInputField = screen.getByPlaceholderText(
-            'Bip21-entered token amount',
-        );
-        expect(tokenInputField).toBeInTheDocument();
-        expect(tokenInputField).toHaveValue(token_decimalized_qty);
-        // This input field is disabled, because it is controled by the bip21 string in the Address input
-        expect(tokenInputField).toBeDisabled();
+        // The token amount input is visible and populated from the BIP21 string
+        const amountInputEl = screen.getByPlaceholderText('Amount');
+        expect(amountInputEl).toBeInTheDocument();
+        expect(amountInputEl).toHaveValue(token_decimalized_qty);
+        // This input field should be disabled for URL-based transactions, because it is controlled by the bip21 string in the URL
+        expect(amountInputEl).toBeDisabled();
 
         // We do not see a token ID query error
         expect(
@@ -960,12 +951,15 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The send button is enabled as we have valid bip21 token send for a token qty supported
         // by the wallet
-        expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled();
 
-        // The Cashtab Msg switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle Cashtab Msg')).toBeDisabled();
-        // The op_return_raw switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle op_return_raw')).toBeDisabled();
+        // The Cashtab Msg and op_return_raw switches are not visible in token mode
+        expect(
+            screen.queryByTitle('Toggle Cashtab Msg'),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.queryByTitle('Toggle op_return_raw'),
+        ).not.toBeInTheDocument();
     });
     it('bip21 - ALP token send with firma param', async () => {
         const destinationAddress =
@@ -1002,20 +996,21 @@ describe('<SendXec /> rendered with params in URL', () => {
             ).not.toBeInTheDocument(),
         );
 
-        await waitFor(() =>
-            expect(screen.queryByTitle('Loading...')).not.toBeInTheDocument(),
+        // Wait for token mode to be activated (toggle should be on "Tokens")
+        // Wait for ecashWallet to be initialized first (component renders after ecashWallet is set)
+        const tokenModeSwitch = await screen.findByTitle(
+            'Toggle XEC/Token Mode',
         );
+        await waitFor(() => {
+            expect(tokenModeSwitch).toHaveProperty('checked', true);
+        });
 
-        // Wait for balance to be loaded
-        expect(await screen.findByText('9,970.81 XEC')).toBeInTheDocument();
+        // The "Send to Many" switch should not be visible in token mode
+        expect(screen.queryByTitle('Toggle Multisend')).not.toBeInTheDocument();
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
-
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        // Get the token address input (in token mode)
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -1025,23 +1020,12 @@ describe('<SendXec /> rendered with params in URL', () => {
         // This is covered in SendXec.test.js
         expect(addressInputEl).toBeDisabled();
 
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
-
-        // Amount input is not displayed
-        expect(screen.queryByPlaceholderText('Amount')).not.toBeInTheDocument();
-
-        // Instead, we see the bip21 token amount input
-        const tokenInputField = screen.getByPlaceholderText(
-            'Bip21-entered token amount',
-        );
-        expect(tokenInputField).toBeInTheDocument();
-        expect(tokenInputField).toHaveValue(token_decimalized_qty);
-        // This input field is disabled, because it is controled by the bip21 string in the Address input
-        expect(tokenInputField).toBeDisabled();
+        // The token amount input is visible and populated from the BIP21 string
+        const amountInputEl = screen.getByPlaceholderText('Amount');
+        expect(amountInputEl).toBeInTheDocument();
+        expect(amountInputEl).toHaveValue(token_decimalized_qty);
+        // This input field should be disabled for URL-based transactions, because it is controlled by the bip21 string in the URL
+        expect(amountInputEl).toBeDisabled();
 
         // We do not see a token ID query error
         expect(
@@ -1062,12 +1046,15 @@ describe('<SendXec /> rendered with params in URL', () => {
 
         // The send button is enabled as we have valid bip21 token send for a token qty supported
         // by the wallet
-        expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled();
 
-        // The Cashtab Msg switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle Cashtab Msg')).toBeDisabled();
-        // The op_return_raw switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle op_return_raw')).toBeDisabled();
+        // The Cashtab Msg and op_return_raw switches are not visible in token mode
+        expect(
+            screen.queryByTitle('Toggle Cashtab Msg'),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.queryByTitle('Toggle op_return_raw'),
+        ).not.toBeInTheDocument();
 
         // We see the parsed firma field for a valid solana address action
         expect(screen.getByText('Parsed firma')).toBeInTheDocument();
@@ -1110,20 +1097,21 @@ describe('<SendXec /> rendered with params in URL', () => {
             ).not.toBeInTheDocument(),
         );
 
-        await waitFor(() =>
-            expect(screen.queryByTitle('Loading...')).not.toBeInTheDocument(),
+        // Wait for token mode to be activated (toggle should be on "Tokens")
+        // Wait for ecashWallet to be initialized first (component renders after ecashWallet is set)
+        const tokenModeSwitch = await screen.findByTitle(
+            'Toggle XEC/Token Mode',
         );
+        await waitFor(() => {
+            expect(tokenModeSwitch).toHaveProperty('checked', true);
+        });
 
-        // Wait for balance to be loaded
-        expect(await screen.findByText('9,970.81 XEC')).toBeInTheDocument();
+        // The "Send to Many" switch should not be visible in token mode
+        expect(screen.queryByTitle('Toggle Multisend')).not.toBeInTheDocument();
 
-        const addressInputEl = screen.getByPlaceholderText('Address');
-
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
+        // Get the token address input (in token mode)
+        // Wait for ecashWallet to be initialized (component renders after ecashWallet is set)
+        const addressInputEl = await screen.findByPlaceholderText('Address');
 
         // The 'Send To' input field has this address as a value
         await waitFor(() => expect(addressInputEl).toHaveValue(bip21Str));
@@ -1133,23 +1121,12 @@ describe('<SendXec /> rendered with params in URL', () => {
         // This is covered in SendXec.test.js
         expect(addressInputEl).toBeDisabled();
 
-        // The "Send to Many" switch is disabled
-        expect(screen.getByTitle('Toggle Multisend')).toHaveProperty(
-            'disabled',
-            true,
-        );
-
-        // Amount input is not displayed
-        expect(screen.queryByPlaceholderText('Amount')).not.toBeInTheDocument();
-
-        // Instead, we see the bip21 token amount input
-        const tokenInputField = screen.getByPlaceholderText(
-            'Bip21-entered token amount',
-        );
-        expect(tokenInputField).toBeInTheDocument();
-        expect(tokenInputField).toHaveValue(token_decimalized_qty);
-        // This input field is disabled, because it is controled by the bip21 string in the Address input
-        expect(tokenInputField).toBeDisabled();
+        // The token amount input is visible and populated from the BIP21 string
+        const amountInputEl = screen.getByPlaceholderText('Amount');
+        expect(amountInputEl).toBeInTheDocument();
+        expect(amountInputEl).toHaveValue(token_decimalized_qty);
+        // This input field should be disabled for URL-based transactions, because it is controlled by the bip21 string in the URL
+        expect(amountInputEl).toBeDisabled();
 
         // We do not see a token ID query error
         expect(
@@ -1159,20 +1136,22 @@ describe('<SendXec /> rendered with params in URL', () => {
         // We see the valid firma redeem tx info, accounting for the fee
         expect(screen.getByAltText('Firma reward')).toBeInTheDocument();
         expect(screen.getByAltText('USDT Tether logo')).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                'On tx finalized, 3.0000 USDT will be sent to 6JK...EQ4',
-            ),
-        ).toBeInTheDocument();
+        // The text is split across multiple elements, so we check for parts of it
+        expect(screen.getByText(/On tx finalized/)).toBeInTheDocument();
+        expect(screen.getByText(/3\.0000/)).toBeInTheDocument();
+        expect(screen.getByText(/USDT will be sent to/)).toBeInTheDocument();
 
         // The send button is enabled as we have valid bip21 token send for a token qty supported
         // by the wallet
-        expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Accept' })).toBeEnabled();
 
-        // The Cashtab Msg switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle Cashtab Msg')).toBeDisabled();
-        // The op_return_raw switch is disabled because bip21 token tx is set
-        expect(screen.getByTitle('Toggle op_return_raw')).toBeDisabled();
+        // The Cashtab Msg and op_return_raw switches are not visible in token mode
+        expect(
+            screen.queryByTitle('Toggle Cashtab Msg'),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.queryByTitle('Toggle op_return_raw'),
+        ).not.toBeInTheDocument();
 
         // We DO NOT see the standard parsed firma field for a valid firma redeem action
         expect(screen.queryByText('Parsed firma')).not.toBeInTheDocument();

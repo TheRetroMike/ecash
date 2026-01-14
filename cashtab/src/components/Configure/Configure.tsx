@@ -93,23 +93,22 @@ const Configure: React.FC = () => {
         return null;
     }
     const { updateCashtabState, cashtabState } = ContextValue;
-    const { settings, wallets } = cashtabState;
+    const { settings, activeWallet } = cashtabState;
 
-    const wallet = wallets[0];
+    if (!activeWallet) {
+        return null;
+    }
+
+    const wallet = activeWallet;
 
     const { tokens } = wallet.state;
 
     const handleSendModalToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-        updateCashtabState('settings', {
-            ...settings,
-            sendModal: e.target.checked,
-        });
-    };
-
-    const handleMinFeesToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-        updateCashtabState('settings', {
-            ...settings,
-            minFeeSends: e.target.checked,
+        updateCashtabState({
+            settings: {
+                ...settings,
+                sendModal: e.target.checked,
+            },
         });
     };
 
@@ -128,9 +127,11 @@ const Configure: React.FC = () => {
                 name="configure-fiat-select"
                 value={cashtabState.settings.fiatCurrency}
                 handleSelect={e => {
-                    updateCashtabState('settings', {
-                        ...settings,
-                        fiatCurrency: e.target.value,
+                    updateCashtabState({
+                        settings: {
+                            ...settings,
+                            fiatCurrency: e.target.value,
+                        },
                     });
                 }}
             />
@@ -186,16 +187,8 @@ const Configure: React.FC = () => {
                                 tokenId={appConfig.vipTokens.cachet.tokenId}
                             />
                         )}
-                        <Headline>VIP Settings</Headline>
+                        <Headline>Cashtab VIP 🏆</Headline>
                     </HeadlineAndIcon>
-                    <GeneralSettingsItem>
-                        <Switch
-                            name="Toggle minimum fee sends"
-                            checked={settings.minFeeSends}
-                            handleToggle={handleMinFeesToggle}
-                        />
-                        <SettingsLabel> ABSOLUTE MINIMUM fees</SettingsLabel>
-                    </GeneralSettingsItem>
                 </>
             )}
 

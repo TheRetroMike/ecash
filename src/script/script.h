@@ -9,6 +9,7 @@
 #include <attributes.h>
 #include <crypto/common.h>
 #include <prevector.h>
+#include <script/intmath.h>
 #include <serialize.h>
 
 #include <cassert>
@@ -34,6 +35,9 @@ static const int MAX_SCRIPT_SIZE = 10000;
 
 // Maximum number of values on script interpreter stack
 static const int MAX_STACK_SIZE = 1000;
+
+// Maximum byte size of integers for arithmetic opcodes when interpreting Script
+constexpr size_t MAX_SCRIPTNUM_BYTE_SIZE = 8;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp. Thresold is Tue Nov 5 00:53:20 1985 UTC
@@ -207,9 +211,13 @@ std::string GetOpName(opcodetype opcode);
  */
 bool CheckMinimalPush(const std::vector<uint8_t> &data, opcodetype opcode);
 
-class scriptnum_error : public std::runtime_error {
-public:
-    explicit scriptnum_error(const std::string &str)
+struct scriptnum_overflow_error : public std::runtime_error {
+    explicit scriptnum_overflow_error(const std::string &str)
+        : std::runtime_error(str) {}
+};
+
+struct scriptnum_encoding_error : public std::runtime_error {
+    explicit scriptnum_encoding_error(const std::string &str)
         : std::runtime_error(str) {}
 };
 
@@ -224,24 +232,22 @@ class CScriptNum {
      * arithmetic is done or the result is interpreted as an integer.
      */
 public:
-    static const size_t MAXIMUM_ELEMENT_SIZE = 4;
-
     explicit CScriptNum(const int64_t &n) { m_value = n; }
 
     explicit CScriptNum(const std::vector<uint8_t> &vch, bool fRequireMinimal,
-                        const size_t nMaxNumSize = MAXIMUM_ELEMENT_SIZE) {
+                        const size_t nMaxNumSize) {
         if (vch.size() > nMaxNumSize) {
-            throw scriptnum_error("script number overflow");
+            throw scriptnum_overflow_error("script number overflow");
         }
         if (fRequireMinimal && !IsMinimallyEncoded(vch, nMaxNumSize)) {
-            throw scriptnum_error("non-minimally encoded script number");
+            throw scriptnum_encoding_error(
+                "non-minimally encoded script number");
         }
         m_value = set_vch(vch);
     }
 
-    static bool IsMinimallyEncoded(
-        const std::vector<uint8_t> &vch,
-        const size_t nMaxNumSize = CScriptNum::MAXIMUM_ELEMENT_SIZE);
+    static bool IsMinimallyEncoded(const std::vector<uint8_t> &vch,
+                                   const size_t nMaxNumSize);
 
     static bool MinimallyEncode(std::vector<uint8_t> &data);
 
@@ -272,10 +278,18 @@ public:
     }
 
     inline CScriptNum operator+(const int64_t &rhs) const {
-        return CScriptNum(m_value + rhs);
+        int64_t result;
+        if (AddInt63Overflow(m_value, rhs, result)) {
+            throw scriptnum_overflow_error("script number overflow");
+        }
+        return CScriptNum(result);
     }
     inline CScriptNum operator-(const int64_t &rhs) const {
-        return CScriptNum(m_value - rhs);
+        int64_t result;
+        if (SubInt63Overflow(m_value, rhs, result)) {
+            throw scriptnum_overflow_error("script number overflow");
+        }
+        return CScriptNum(result);
     }
     inline CScriptNum operator+(const CScriptNum &rhs) const {
         return operator+(rhs.m_value);
@@ -327,20 +341,14 @@ public:
     }
 
     inline CScriptNum &operator+=(const int64_t &rhs) {
-        assert(
-            rhs == 0 ||
-            (rhs > 0 && m_value <= std::numeric_limits<int64_t>::max() - rhs) ||
-            (rhs < 0 && m_value >= std::numeric_limits<int64_t>::min() - rhs));
-        m_value += rhs;
+        assert(m_value != std::numeric_limits<int64_t>::min());
+        *this = *this + CScriptNum(rhs);
         return *this;
     }
 
     inline CScriptNum &operator-=(const int64_t &rhs) {
-        assert(
-            rhs == 0 ||
-            (rhs > 0 && m_value >= std::numeric_limits<int64_t>::min() + rhs) ||
-            (rhs < 0 && m_value <= std::numeric_limits<int64_t>::max() + rhs));
-        m_value -= rhs;
+        assert(m_value != std::numeric_limits<int64_t>::min());
+        *this = *this - CScriptNum(rhs);
         return *this;
     }
 
@@ -414,7 +422,7 @@ private:
  * elements. Tests in October 2015 showed use of this reduced dbcache memory
  * usage by 23% and made an initial sync 13% faster.
  */
-typedef prevector<28, uint8_t> CScriptBase;
+using CScriptBase = prevector<28, uint8_t>;
 
 bool GetScriptOp(CScriptBase::const_iterator &pc,
                  CScriptBase::const_iterator end, opcodetype &opcodeRet,
@@ -444,7 +452,7 @@ public:
     CScript(const uint8_t *pbegin, const uint8_t *pend)
         : CScriptBase(pbegin, pend) {}
 
-    SERIALIZE_METHODS(CScript, obj) { READWRITEAS(CScriptBase, obj); }
+    SERIALIZE_METHODS(CScript, obj) { READWRITE(AsBase<CScriptBase>(obj)); }
 
     explicit CScript(int64_t b) { operator<<(b); }
     explicit CScript(opcodetype b) { operator<<(b); }

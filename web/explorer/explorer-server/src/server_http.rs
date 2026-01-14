@@ -1,3 +1,7 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
@@ -108,6 +112,18 @@ pub async fn data_address_txs(
             .await
             .map_err(to_server_error)?,
     ))
+}
+
+pub async fn mempool(
+    server: Extension<Arc<Server>>,
+) -> Result<Html<String>, ServerError> {
+    Ok(Html(server.mempool().await.map_err(to_server_error)?))
+}
+
+pub async fn data_mempool(
+    server: Extension<Arc<Server>>,
+) -> Result<Json<JsonTxsResponse>, ServerError> {
+    Ok(Json(server.data_mempool().await.map_err(to_server_error)?))
 }
 
 pub fn serve_files(path: &std::path::Path) -> MethodRouter {

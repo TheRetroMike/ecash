@@ -27,47 +27,48 @@ static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 2 * 1024 * 1024;
 /**
  * Message header.
  * (4) message start.
- * (12) command.
+ * (12) message type.
  * (4) size.
  * (4) checksum.
  */
 class CMessageHeader {
 public:
     static constexpr size_t MESSAGE_START_SIZE = 4;
-    static constexpr size_t COMMAND_SIZE = 12;
+    static constexpr size_t MESSAGE_TYPE_SIZE = 12;
     static constexpr size_t MESSAGE_SIZE_SIZE = 4;
     static constexpr size_t CHECKSUM_SIZE = 4;
     static constexpr size_t MESSAGE_SIZE_OFFSET =
-        MESSAGE_START_SIZE + COMMAND_SIZE;
+        MESSAGE_START_SIZE + MESSAGE_TYPE_SIZE;
     static constexpr size_t CHECKSUM_OFFSET =
         MESSAGE_SIZE_OFFSET + MESSAGE_SIZE_SIZE;
-    static constexpr size_t HEADER_SIZE =
-        MESSAGE_START_SIZE + COMMAND_SIZE + MESSAGE_SIZE_SIZE + CHECKSUM_SIZE;
+    static constexpr size_t HEADER_SIZE = MESSAGE_START_SIZE +
+                                          MESSAGE_TYPE_SIZE +
+                                          MESSAGE_SIZE_SIZE + CHECKSUM_SIZE;
     typedef std::array<uint8_t, MESSAGE_START_SIZE> MessageMagic;
 
     explicit CMessageHeader(const MessageMagic &pchMessageStartIn);
 
     /**
-     * Construct a P2P message header from message-start characters, a command
-     * and the size of the message.
-     * @note Passing in a `pszCommand` longer than COMMAND_SIZE will result in a
-     * run-time assertion error.
+     * Construct a P2P message header from message-start characters, a message
+     * type and the size of the message.
+     * @note Passing in a `msg_type` longer than MESSAGE_TYPE_SIZE will result
+     * in a run-time assertion error.
      */
-    CMessageHeader(const MessageMagic &pchMessageStartIn,
-                   const char *pszCommand, unsigned int nMessageSizeIn);
+    CMessageHeader(const MessageMagic &pchMessageStartIn, const char *msg_type,
+                   unsigned int nMessageSizeIn);
 
-    std::string GetCommand() const;
+    std::string GetMessageType() const;
     bool IsValid(const Config &config) const;
     bool IsValidWithoutConfig(const MessageMagic &magic) const;
     bool IsOversized(const Config &config) const;
 
     SERIALIZE_METHODS(CMessageHeader, obj) {
-        READWRITE(obj.pchMessageStart, obj.pchCommand, obj.nMessageSize,
+        READWRITE(obj.pchMessageStart, obj.m_msg_type, obj.nMessageSize,
                   obj.pchChecksum);
     }
 
     MessageMagic pchMessageStart;
-    std::array<char, COMMAND_SIZE> pchCommand;
+    std::array<char, MESSAGE_TYPE_SIZE> m_msg_type;
     uint32_t nMessageSize;
     uint8_t pchChecksum[CHECKSUM_SIZE];
 };
@@ -485,21 +486,29 @@ public:
     CAddress(CService ipIn, ServiceFlags nServicesIn, NodeSeconds time)
         : CService{ipIn}, nTime{time}, nServices{nServicesIn} {};
 
-    SERIALIZE_METHODS(CAddress, obj) {
-        // CAddress has a distinct network serialization and a disk
-        // serialization, but it should never be hashed (except through
-        // CHashWriter in addrdb.cpp, which sets SER_DISK), and it's ambiguous
-        // what that would mean. Make sure no code relying on that is
-        // introduced:
-        assert(!(s.GetType() & SER_GETHASH));
+    enum class Format {
+        Disk,
+        Network,
+    };
+    struct SerParams : CNetAddr::SerParams {
+        const Format fmt;
+    };
+    static constexpr SerParams V1_NETWORK{{CNetAddr::Encoding::V1},
+                                          Format::Network};
+    static constexpr SerParams V2_NETWORK{{CNetAddr::Encoding::V2},
+                                          Format::Network};
+    static constexpr SerParams V1_DISK{{CNetAddr::Encoding::V1}, Format::Disk};
+    static constexpr SerParams V2_DISK{{CNetAddr::Encoding::V2}, Format::Disk};
+
+    SERIALIZE_METHODS_PARAMS(CAddress, obj, SerParams, params) {
         bool use_v2;
-        if (s.GetType() & SER_DISK) {
+        if (params.fmt == Format::Disk) {
             // In the disk serialization format, the encoding (v1 or v2) is
             // determined by a flag version that's part of the serialization
             // itself. ADDRV2_FORMAT in the stream version only determines
             // whether V2 is chosen/permitted at all.
             uint32_t stored_format_version = DISK_VERSION_INIT;
-            if (s.GetVersion() & ADDRV2_FORMAT) {
+            if (params.enc == Encoding::V2) {
                 stored_format_version |= DISK_VERSION_ADDRV2;
             }
             READWRITE(stored_format_version);
@@ -508,19 +517,19 @@ public:
             if (stored_format_version == 0) {
                 use_v2 = false;
             } else if (stored_format_version == DISK_VERSION_ADDRV2 &&
-                       (s.GetVersion() & ADDRV2_FORMAT)) {
-                // Only support v2 deserialization if ADDRV2_FORMAT is set.
+                       params.enc == Encoding::V2) {
+                // Only support v2 deserialization if V2 is set.
                 use_v2 = true;
             } else {
                 throw std::ios_base::failure(
                     "Unsupported CAddress disk format version");
             }
         } else {
+            assert(params.fmt == Format::Network);
             // In the network serialization format, the encoding (v1 or v2) is
-            // determined directly by the value of ADDRV2_FORMAT in the stream
-            // version, as no explicitly encoded version exists in the stream.
-            assert(s.GetType() & SER_NETWORK);
-            use_v2 = s.GetVersion() & ADDRV2_FORMAT;
+            // determined directly by the value of enc in the stream params, as
+            // no explicitly encoded version exists in the stream.
+            use_v2 = params.enc == Encoding::V2;
         }
 
         READWRITE(Using<LossyChronoFormatter<uint32_t>>(obj.nTime));
@@ -535,8 +544,8 @@ public:
             READWRITE(Using<CustomUintFormatter<8>>(obj.nServices));
         }
         // Invoke V1/V2 serializer for CService parent object.
-        OverrideStream<Stream> os(&s, s.GetType(), use_v2 ? ADDRV2_FORMAT : 0);
-        SerReadWriteMany(os, ser_action, ReadWriteAsHelper<CService>(obj));
+        const auto ser_params{use_v2 ? CNetAddr::V2 : CNetAddr::V1};
+        READWRITE(WithParams(ser_params, AsBase<CService>(obj)));
     }
 
     //! Always included in serialization, except in the network format on
@@ -592,7 +601,7 @@ public:
         return a.type < b.type || (a.type == b.type && a.hash < b.hash);
     }
 
-    std::string GetCommand() const;
+    std::string GetMessageType() const;
     std::string ToString() const;
 
     uint32_t GetKind() const { return type & MSG_TYPE_MASK; }

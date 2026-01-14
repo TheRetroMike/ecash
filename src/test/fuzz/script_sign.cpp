@@ -35,14 +35,13 @@ FUZZ_TARGET_INIT(script_sign, initialize_script_sign) {
         ConsumeRandomLengthByteVector(fuzzed_data_provider, 128);
 
     {
-        CDataStream random_data_stream =
-            ConsumeDataStream(fuzzed_data_provider);
+        DataStream random_data_stream{ConsumeDataStream(fuzzed_data_provider)};
         std::map<CPubKey, KeyOriginInfo> hd_keypaths;
         try {
             DeserializeHDKeypaths(random_data_stream, key, hd_keypaths);
         } catch (const std::ios_base::failure &) {
         }
-        CDataStream serialized{SER_NETWORK, PROTOCOL_VERSION};
+        DataStream serialized{};
         SerializeHDKeypaths(serialized, hd_keypaths,
                             fuzzed_data_provider.ConsumeIntegral<uint8_t>());
     }
@@ -62,7 +61,7 @@ FUZZ_TARGET_INIT(script_sign, initialize_script_sign) {
             }
             hd_keypaths[*pub_key] = *key_origin_info;
         }
-        CDataStream serialized{SER_NETWORK, PROTOCOL_VERSION};
+        DataStream serialized{};
         try {
             SerializeHDKeypaths(
                 serialized, hd_keypaths,

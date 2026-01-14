@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025 The Bitcoin developers -->
+<!-- Distributed under the MIT software license, see the accompanying -->
+<!-- file COPYING or http://www.opensource.org/licenses/mit-license.php. -->
 {% extends "base.html" %}
 {% block footer_classes %}hidden{% endblock %}
 {% block content %}
@@ -145,6 +148,7 @@
                         <tr>
                             <th data-priority="1">Timestamp</th>
                             <th data-priority="1">Age</th>
+                            <th data-priority="1">Final</th>
                             <th data-priority="3">Date</th>
                             <th data-priority="1">ID</th>
                             <th data-priority="2">Block Height</th>
@@ -187,5 +191,6 @@
             window.addrBalances[identifier] = balance;
         });
     </script>
-    <script type="text/javascript" src="/code/address.js?hash=3eb5a9e"></script>
+    <script type="text/javascript"
+            src="/code/address.js?hash={{ hashes.js_address }}"></script>
 {% endblock %}

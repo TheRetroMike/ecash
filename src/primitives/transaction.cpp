@@ -46,7 +46,7 @@ CMutableTransaction::CMutableTransaction(const CTransaction &tx)
       nLockTime(tx.nLockTime) {}
 
 static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, 0);
+    return (HashWriter{} << tx).GetHash();
 }
 
 TxId CMutableTransaction::GetId() const {
@@ -58,7 +58,7 @@ TxHash CMutableTransaction::GetHash() const {
 }
 
 uint256 CTransaction::ComputeHash() const {
-    return SerializeHash(*this, SER_GETHASH, 0);
+    return (HashWriter{} << *this).GetHash();
 }
 
 /**
@@ -90,7 +90,7 @@ Amount CTransaction::GetValueOut() const {
 }
 
 unsigned int CTransaction::GetTotalSize() const {
-    return ::GetSerializeSize(*this, PROTOCOL_VERSION);
+    return ::GetSerializeSize(*this);
 }
 
 std::string CTransaction::ToString() const {

@@ -15,7 +15,8 @@ import sys
 
 FALSE_POSITIVES = [
     ("src/dbwrapper.cpp", "vsnprintf(p, limit - p, format, backup_ap)"),
-    ("src/index/base.cpp", "FatalError(const char *fmt, const Args &...args)"),
+    ("src/index/base.cpp", "FatalErrorf(const char *fmt, const Args &...args)"),
+    ("src/index/base.h", "FatalErrorf(const char *fmt, const Args &...args)"),
     (
         "src/netbase.cpp",
         (
@@ -26,6 +27,11 @@ FALSE_POSITIVES = [
     (
         "src/clientversion.cpp",
         "strprintf(_(COPYRIGHT_HOLDERS).translated, COPYRIGHT_HOLDERS_SUBSTITUTION)",
+    ),
+    (
+        "src/test/logging_tests.cpp",
+        'tfm::format( "[%s:%s] [%s] %s%s", util::RemovePrefix(loc.file_name(),'
+        '"./"), loc.line(), loc.function_name(), prefix, msg)',
     ),
     ("src/test/translation_tests.cpp", "strprintf(format, arg)"),
     (
@@ -53,12 +59,16 @@ FALSE_POSITIVES = [
 ]
 
 FUNCTION_NAMES_AND_NUMBER_OF_LEADING_ARGUMENTS = [
-    ("FatalError", 0),
+    ("FatalErrorf", 0),
     ("fprintf", 1),
     ("LogConnectFailure", 1),
+    ("LogError", 0),
+    ("LogWarning", 0),
+    ("LogInfo", 0),
+    ("LogDebug", 1),
+    ("LogTrace", 1),
     ("LogPrint", 1),
     ("LogPrintf", 0),
-    ("LogPrintfCategory", 1),
     ("printf", 0),
     ("snprintf", 2),
     ("sprintf", 1),
@@ -96,9 +106,7 @@ def parse_function_calls(function_name, source_code):
         for line in source_code.split("\n")
         if not line.strip().startswith("#")
     ]
-    return re.findall(
-        r"[^a-zA-Z_](?=({}\(.*).*)".format(function_name), f" {' '.join(lines)}"
-    )
+    return re.findall(rf"[^a-zA-Z_](?=({function_name}\(.*).*)", f" {' '.join(lines)}")
 
 
 def normalize(s):
@@ -261,6 +269,22 @@ def parse_function_call_and_arguments(function_name, function_call):
     return parts
 
 
+def replace_c99_macros(s):
+    """Replace C99 macros for format specifiers in string s with equivalent format
+    specifiers.
+
+    >>> replace_c99_macros('"%d %08" PRIx64 " %s %" PRIu64 " %11" PRId64 " foo %d"')
+    '"%d %08lx %s %lu %11ld foo %d"'
+    """
+    for mac, val in (
+        ("PRIu64", "llu"),
+        ("PRId64", "lld"),
+        ("PRIx64", "llx"),
+    ):
+        s = s.replace(f'" {mac} "', f"{val}")
+    return s
+
+
 def parse_string_content(argument):
     """Return the text within quotes in string argument.
 
@@ -284,6 +308,7 @@ def parse_string_content(argument):
     assert isinstance(argument, str)
     string_content = ""
     in_string = False
+    argument = replace_c99_macros(argument)
     for char in normalize(escape(argument)):
         if char == '"':
             in_string = not in_string
@@ -311,37 +336,55 @@ def count_format_specifiers(format_string):
     1
     >>> [count_format_specifiers(i * "%" + "u") for i in range(10)]
     [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+    >>> count_format_specifiers("foo %5$d")
+    5
+    >>> count_format_specifiers("foo %5$*7$d")
+    7
     """
     assert isinstance(format_string, str)
-    n = 0
-    in_specifier = False
     # remove any number of escaped % characters
     format_string = format_string.replace("%%", "")
-    for i, char in enumerate(format_string):
-        if char == "%":
-            in_specifier = True
+    n = max_pos = 0
+    for m in re.finditer("%(.*?)[aAcdeEfFgGinopsuxX]", format_string, re.DOTALL):
+        # Increase the max position if the argument has a position number like
+        # "5$", otherwise increment the argument count.
+        (pos_num,) = re.match(r"(?:(^\d+)\$)?", m.group(1)).groups()
+        if pos_num is not None:
+            max_pos = max(max_pos, int(pos_num))
+        else:
             n += 1
-        elif char in "aAcdeEfFgGinopsuxX":
-            in_specifier = False
-        elif in_specifier and char == "*":
+
+        # Increase the max position if there is a "*" width argument with a
+        # position like "*7$", and increment the argument count if there is a
+        # "*" width argument with no position.
+        star, star_pos_num = re.match(r"(?:.*?(\*(?:(\d+)\$)?)|)", m.group(1)).groups()
+        if star_pos_num is not None:
+            max_pos = max(max_pos, int(star_pos_num))
+        elif star is not None:
             n += 1
-    return n
+    return max(n, max_pos)
 
 
 def main(args_in):
     """Return a string output with information on string format errors
 
     >>> main(["test/lint/lint-format-strings-tests.txt"])
+    test/lint/lint-format-strings-tests.txt: Expected 2 argument(s) after format string but found 3 argument(s): LogError("%d%s", 1, some_path, spam)
+    test/lint/lint-format-strings-tests.txt: Expected 3 argument(s) after format string but found 2 argument(s): LogWarning("%d%s%f", 1, some_path)
     test/lint/lint-format-strings-tests.txt: Expected 1 argument(s) after format string but found 2 argument(s): printf("%d", 1, 2)
-    test/lint/lint-format-strings-tests.txt: Expected 2 argument(s) after format string but found 3 argument(s): printf("%a %b", 1, 2, "anything")
+    test/lint/lint-format-strings-tests.txt: Expected 2 argument(s) after format string but found 3 argument(s): printf("%a %f", 1, 2, "anything")
+    test/lint/lint-format-strings-tests.txt: Expected 2 argument(s) after format string but found 3 argument(s): printf("%1$d%2$d%1$d", 1, 2, 3)
     test/lint/lint-format-strings-tests.txt: Expected 1 argument(s) after format string but found 0 argument(s): printf("%d")
-    test/lint/lint-format-strings-tests.txt: Expected 3 argument(s) after format string but found 2 argument(s): printf("%a%b%z", 1, "anything")
+    test/lint/lint-format-strings-tests.txt: Expected 3 argument(s) after format string but found 2 argument(s): printf("%a%s%f", 1, "anything")
+    test/lint/lint-format-strings-tests.txt: Expected 5 argument(s) after format string but found 1 argument(s): printf("%5$d", 1)
     test/lint/lint-format-strings-tests.txt: Expected 0 argument(s) after format string but found 1 argument(s): strprintf("%%%%u", scope_id)
     test/lint/lint-format-strings-tests.txt: Expected 1 argument(s) after format string but found 0 argument(s): strprintf("%%%u")
 
     >>> main(["test/lint/lint-format-strings-tests-skip-arguments.txt"])
     test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 1 argument(s) after format string but found 2 argument(s): fprintf(skipped, "%d", 1, 2)
     test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 1 argument(s) after format string but found 0 argument(s): fprintf(skipped, "%d")
+    test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 1 argument(s) after format string but found 2 argument(s): LogDebug(skipped, "%d", 1, 2)
+    test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 2 argument(s) after format string but found 1 argument(s): LogTrace(skipped, "%d%f", 1)
     test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 1 argument(s) after format string but found 2 argument(s): snprintf(skip1, skip2, "%d", 1, 2)
     test/lint/lint-format-strings-tests-skip-arguments.txt: Expected 1 argument(s) after format string but found 0 argument(s): snprintf(skip1, skip2, "%d")
     test/lint/lint-format-strings-tests-skip-arguments.txt: Could not parse function call string "snprintf(...)": snprintf(skip1, "%d")
@@ -376,9 +419,7 @@ def main(args_in):
                     continue
                 if len(parts) < 3 + skip_arguments:
                     print(
-                        '{}: Could not parse function call string "{}(...)": {}'.format(
-                            f.name, function_name, relevant_function_call_str
-                        )
+                        f'{f.name}: Could not parse function call string "{function_name}(...)": {relevant_function_call_str}'
                     )
                     continue
                 argument_count = len(parts) - 3 - skip_arguments
@@ -386,13 +427,8 @@ def main(args_in):
                 format_specifier_count = count_format_specifiers(format_str)
                 if format_specifier_count != argument_count:
                     print(
-                        "{}: Expected {} argument(s) after format string but found {}"
-                        " argument(s): {}".format(
-                            f.name,
-                            format_specifier_count,
-                            argument_count,
-                            relevant_function_call_str,
-                        )
+                        f"{f.name}: Expected {format_specifier_count} argument(s) after format string but found {argument_count}"
+                        f" argument(s): {relevant_function_call_str}"
                     )
                     continue
 

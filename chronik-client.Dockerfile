@@ -4,17 +4,32 @@
 
 # Node image for running npm publish
 
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
-# Build chronik-client
-WORKDIR /app/modules/chronik-client
+# Install pnpm
+RUN npm install -g pnpm
 
-# Copy all project files as they are required for building
-COPY modules/chronik-client .
+# Set CI environment variable to avoid pnpm TTY prompts
+ENV CI=true
+
+# Set working directory to monorepo root
+WORKDIR /app
+
+# Copy workspace files (required for pnpm workspace)
+COPY pnpm-workspace.yaml .
+COPY pnpm-lock.yaml .
+COPY package.json .
+
+# Copy module source files
+COPY modules/chronik-client/ ./modules/chronik-client/
+
 # Install ecashaddrjs from npm, so that module users install it automatically
-RUN npm install ecashaddrjs@latest
-RUN npm ci
+RUN pnpm add ecashaddrjs@latest --filter chronik-client
+# Install dependencies (no --frozen-lockfile since pnpm add modified package.json)
+RUN pnpm install --filter chronik-client...
 
-# Publish the module
-# Note this will also npm run build, as this is the prepublish script
-CMD [ "npm", "publish" ]
+# Build the module
+RUN pnpm --filter chronik-client run build
+
+# Publish the module (from monorepo root using filter)
+CMD [ "pnpm", "--filter", "chronik-client", "publish" ]

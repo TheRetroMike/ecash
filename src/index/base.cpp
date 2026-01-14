@@ -9,6 +9,7 @@
 #include <index/base.h>
 #include <interfaces/chain.h>
 #include <logging.h>
+#include <node/abort.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/database_args.h>
@@ -30,12 +31,9 @@ constexpr int64_t SYNC_LOG_INTERVAL = 30;           // secon
 constexpr int64_t SYNC_LOCATOR_WRITE_INTERVAL = 30; // seconds
 
 template <typename... Args>
-static void FatalError(const char *fmt, const Args &...args) {
-    std::string strMessage = tfm::format(fmt, args...);
-    SetMiscWarning(Untranslated(strMessage));
-    LogPrintf("*** %s\n", strMessage);
-    AbortError(_("A fatal internal error occurred, see debug.log for details"));
-    StartShutdown();
+void BaseIndex::FatalErrorf(const char *fmt, const Args &...args) {
+    auto message = tfm::format(fmt, args...);
+    node::AbortNode(m_chain->context()->exit_status, message);
 }
 
 CBlockLocator GetLocator(interfaces::Chain &chain,
@@ -186,7 +184,7 @@ void BaseIndex::ThreadSync() {
                 }
                 if (pindex_next->pprev != pindex &&
                     !Rewind(pindex, pindex_next->pprev)) {
-                    FatalError(
+                    FatalErrorf(
                         "%s: Failed to rewind index %s to a previous chain tip",
                         __func__, GetName());
                     return;
@@ -195,14 +193,14 @@ void BaseIndex::ThreadSync() {
             }
 
             CBlock block;
-            if (!m_chainstate->m_blockman.ReadBlockFromDisk(block, *pindex)) {
-                FatalError("%s: Failed to read block %s from disk", __func__,
-                           pindex->GetBlockHash().ToString());
+            if (!m_chainstate->m_blockman.ReadBlock(block, *pindex)) {
+                FatalErrorf("%s: Failed to read block %s from disk", __func__,
+                            pindex->GetBlockHash().ToString());
                 return;
             }
             if (!WriteBlock(block, pindex)) {
-                FatalError("%s: Failed to write block %s to index database",
-                           __func__, pindex->GetBlockHash().ToString());
+                FatalErrorf("%s: Failed to write block %s to index database",
+                            __func__, pindex->GetBlockHash().ToString());
                 return;
             }
 
@@ -245,8 +243,8 @@ bool BaseIndex::Commit() {
         }
     }
     if (!ok) {
-        return error("%s: Failed to commit latest %s state", __func__,
-                     GetName());
+        LogError("%s: Failed to commit latest %s state\n", __func__, GetName());
+        return false;
     }
     return true;
 }
@@ -256,18 +254,14 @@ bool BaseIndex::Rewind(const CBlockIndex *current_tip,
     assert(current_tip == m_best_block_index);
     assert(current_tip->GetAncestor(new_tip->nHeight) == new_tip);
 
-    // In the case of a reorg, ensure persisted block locator is not stale.
+    // Don't commit here - the committed index state must never be ahead of the
+    // flushed chainstate, otherwise unclean restarts would lead to index
+    // corruption.
     // Pruning has a minimum of 288 blocks-to-keep and getting the index
     // out of sync may be possible but a users fault.
-    // In case we reorg beyond the pruned depth, ReadBlockFromDisk would
+    // In case we reorg beyond the pruned depth, ReadBlock would
     // throw and lead to a graceful shutdown
     SetBestBlockIndex(new_tip);
-    if (!Commit()) {
-        // If commit fails, revert the best block index to avoid corruption.
-        SetBestBlockIndex(current_tip);
-        return false;
-    }
-
     return true;
 }
 
@@ -292,9 +286,9 @@ void BaseIndex::BlockConnected(ChainstateRole role,
     const CBlockIndex *best_block_index = m_best_block_index.load();
     if (!best_block_index) {
         if (pindex->nHeight != 0) {
-            FatalError("%s: First block connected is not the genesis block "
-                       "(height=%d)",
-                       __func__, pindex->nHeight);
+            FatalErrorf("%s: First block connected is not the genesis block "
+                        "(height=%d)",
+                        __func__, pindex->nHeight);
             return;
         }
     } else {
@@ -315,8 +309,8 @@ void BaseIndex::BlockConnected(ChainstateRole role,
         }
         if (best_block_index != pindex->pprev &&
             !Rewind(best_block_index, pindex->pprev)) {
-            FatalError("%s: Failed to rewind index %s to a previous chain tip",
-                       __func__, GetName());
+            FatalErrorf("%s: Failed to rewind index %s to a previous chain tip",
+                        __func__, GetName());
             return;
         }
     }
@@ -328,8 +322,8 @@ void BaseIndex::BlockConnected(ChainstateRole role,
         // processed, and the index object being safe to delete.
         SetBestBlockIndex(pindex);
     } else {
-        FatalError("%s: Failed to write block %s to index", __func__,
-                   pindex->GetBlockHash().ToString());
+        FatalErrorf("%s: Failed to write block %s to index", __func__,
+                    pindex->GetBlockHash().ToString());
         return;
     }
 }
@@ -355,8 +349,8 @@ void BaseIndex::ChainStateFlushed(ChainstateRole role,
     }
 
     if (!locator_tip_index) {
-        FatalError("%s: First block (hash=%s) in locator was not found",
-                   __func__, locator_tip_hash.ToString());
+        FatalErrorf("%s: First block (hash=%s) in locator was not found",
+                    __func__, locator_tip_hash.ToString());
         return;
     }
 

@@ -31,17 +31,14 @@ import {
     PayButtonOffSpec,
     PayButtonEmpty,
     PayButtonYesDataNoNonce,
+    NFToaAuthYesNonce,
+    NFToaMsgNoNonce,
+    NFToaOffSpec,
     MsgFromElectrum,
     MsgFromEcashChat,
     offSpecEcashChat,
     eCashChatAuthenticationTx,
     unknownAppTx,
-    mockFlatTxHistoryNoUnconfirmed,
-    mockSortedTxHistoryNoUnconfirmed,
-    mockFlatTxHistoryWithUnconfirmed,
-    mockSortedFlatTxHistoryWithUnconfirmed,
-    mockFlatTxHistoryWithAllUnconfirmed,
-    mockSortedFlatTxHistoryWithAllUnconfirmed,
     AlpTx,
     SlpV1Mint,
     SlpNftParentFanTx,
@@ -80,6 +77,33 @@ import { getHashes } from 'wallet';
 export default {
     getTxNotificationMsg: {
         expectedReturns: [
+            {
+                description: 'NFToa Authentication TX (Proof of Access)',
+                parsedTx: NFToaAuthYesNonce.parsed,
+                fiatPrice: null,
+                userLocale: 'en-US',
+                selectedFiatTicker: 'USD',
+                genesisInfo: undefined,
+                returned: 'NFToa | Received 5.50 XEC | Login to Gaudio App',
+            },
+            {
+                description: 'NFToa Regular Message TX',
+                parsedTx: NFToaMsgNoNonce.parsed,
+                fiatPrice: null,
+                userLocale: 'en-US',
+                selectedFiatTicker: 'USD',
+                genesisInfo: undefined,
+                returned: 'NFToa | Received 5.50 XEC | Hello World from NFToa',
+            },
+            {
+                description: 'Off-spec NFToa TX',
+                parsedTx: NFToaOffSpec.parsed,
+                fiatPrice: null,
+                userLocale: 'en-US',
+                selectedFiatTicker: 'USD',
+                genesisInfo: undefined,
+                returned: 'Received 5.50 XEC | Invalid NFToa',
+            },
             {
                 description: 'Staking rewards coinbase tx',
                 parsedTx: stakingRwd.parsed,
@@ -121,7 +145,7 @@ export default {
                 fiatPrice: null,
                 userLocale: 'en-US',
                 selectedFiatTicker: 'USD',
-                returned: 'Received 42.00 XEC from qp89x...nhgg6',
+                returned: 'Received 42.00 XEC from qp8...gg6',
             },
             {
                 description: 'Outgoing XEC tx',
@@ -129,7 +153,7 @@ export default {
                 fiatPrice: null,
                 userLocale: 'en-US',
                 selectedFiatTicker: 'USD',
-                returned: 'Sent 222.00 XEC to qp89x...nhgg6',
+                returned: 'Sent 222.00 XEC to qp8...gg6',
             },
             {
                 description: 'Incoming eToken',
@@ -553,10 +577,45 @@ export default {
                 },
                 returned: 'Received 0.0195 FIRMA',
             },
+            {
+                description: 'Firma redeem tx (send)',
+                parsedTx: firmaRedeemTx.parsedSend,
+                fiatPrice: null,
+                userLocale: 'en-US',
+                selectedFiatTicker: 'USD',
+                genesisInfo: {
+                    tokenTicker: 'FIRMA',
+                    tokenName: 'Firma',
+                    url: 'firma.cash',
+                    decimals: 4,
+                    data: '',
+                    authPubkey:
+                        '03fba49912622cf8bb5b3729b1b5da3e72c6b57d369c8647f6cc7c6cbed510d105',
+                },
+                returned: 'Sent 1.0000 FIRMA',
+            },
         ],
     },
     parseTx: {
         expectedReturns: [
+            {
+                description: 'NFToa Authentication TX (Proof of Access)',
+                tx: NFToaAuthYesNonce.tx,
+                hashes: ['c73d119dede21aca5b3f1d959634bb6fee878996'],
+                parsed: NFToaAuthYesNonce.parsed,
+            },
+            {
+                description: 'NFToa Regular Message TX (Proof of Access)',
+                tx: NFToaMsgNoNonce.tx,
+                hashes: ['c73d119dede21aca5b3f1d959634bb6fee878996'],
+                parsed: NFToaMsgNoNonce.parsed,
+            },
+            {
+                description: 'Off-spec NFToa TX',
+                tx: NFToaOffSpec.tx,
+                hashes: ['c73d119dede21aca5b3f1d959634bb6fee878996'],
+                parsed: NFToaOffSpec.parsed,
+            },
             {
                 description: 'Staking rewards coinbase tx',
                 tx: stakingRwd.tx,
@@ -921,31 +980,6 @@ export default {
                 tx: firmaRedeemTx.tx,
                 hashes: [firmaRedeemTx.sendingHash],
                 parsed: firmaRedeemTx.parsedSend,
-            },
-        ],
-    },
-    sortAndTrimChronikTxHistory: {
-        expectedReturns: [
-            {
-                description:
-                    'successfully orders the result of flattenChronikTxHistory by blockheight and firstSeenTime if all txs are confirmed',
-                flatTxHistoryArray: mockFlatTxHistoryNoUnconfirmed,
-                txHistoryCount: 10,
-                returned: mockSortedTxHistoryNoUnconfirmed,
-            },
-            {
-                description:
-                    'orders the result of flattenChronikTxHistory by blockheight and firstSeenTime if some txs are confirmed and others unconfirmed',
-                flatTxHistoryArray: mockFlatTxHistoryWithUnconfirmed,
-                txHistoryCount: 10,
-                returned: mockSortedFlatTxHistoryWithUnconfirmed,
-            },
-            {
-                description:
-                    'orders the result of flattenChronikTxHistory by blockheight and firstSeenTime if all txs are unconfirmed,',
-                flatTxHistoryArray: mockFlatTxHistoryWithAllUnconfirmed,
-                txHistoryCount: 10,
-                returned: mockSortedFlatTxHistoryWithAllUnconfirmed,
             },
         ],
     },

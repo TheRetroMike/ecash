@@ -43,3 +43,11 @@ Go to http://localhost:3035 and you should see the homepage
 3. It is recommended to run `cargo clean` in both `bitcoinsuite` and `explorer` afterwards (will delete `explorer/target/release/explorer-exe` executable), as compilation artifacts can take up a lot of space.
 
 Now you can run the project with `./explorer/explorer-exe/explorer-exe`
+
+## 4. Caching
+
+If any .js or .css fils is created that would be fetched from a `/code/` URL,
+you need to update the `FileHashes` structure from `file_hashes.rs` and update
+the templates that include your file accordingly. Doing so will ensure that the
+file hash is appended to the URL and updated as the file changes to prevent
+caching issues.

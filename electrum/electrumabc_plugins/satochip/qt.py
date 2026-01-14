@@ -1,9 +1,6 @@
 from functools import partial
 from os import urandom
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
-
 # pysatochip
 from pysatochip.CardConnector import CardError, CardNotPresentError, UnexpectedSW12Error
 from pysatochip.Satochip2FA import Satochip2FA
@@ -11,6 +8,8 @@ from pysatochip.version import (
     SATOCHIP_PROTOCOL_MAJOR_VERSION,
     SATOCHIP_PROTOCOL_MINOR_VERSION,
 )
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt
 
 from electrumabc.i18n import _
 from electrumabc.printerror import print_error
@@ -119,7 +118,7 @@ class SatochipSettingsDialog(WindowModalDialog):
         )
         title.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
 
-        grid.addWidget(title, 0, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(title, 0, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y = 3
 
         rows = [
@@ -136,8 +135,10 @@ class SatochipSettingsDialog(WindowModalDialog):
                 Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
             )
 
-            grid.addWidget(QtWidgets.QLabel(label), y, 0, 1, 1, Qt.AlignRight)
-            grid.addWidget(widget, y, 1, 1, 1, Qt.AlignLeft)
+            grid.addWidget(
+                QtWidgets.QLabel(label), y, 0, 1, 1, Qt.AlignmentFlag.AlignRight
+            )
+            grid.addWidget(widget, y, 1, 1, 1, Qt.AlignmentFlag.AlignLeft)
             setattr(self, member_name, widget)
             y += 1
 
@@ -189,19 +190,19 @@ class SatochipSettingsDialog(WindowModalDialog):
         change_card_label_btn.clicked.connect(_change_card_label)
 
         y += 3
-        grid.addWidget(pin_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(pin_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(seed_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(seed_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(set_2FA_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(set_2FA_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(reset_2FA_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(reset_2FA_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(verify_card_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(verify_card_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(change_card_label_btn, y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(change_card_label_btn, y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
         y += 2
-        grid.addWidget(CloseButton(self), y, 0, 1, 2, Qt.AlignHCenter)
+        grid.addWidget(CloseButton(self), y, 0, 1, 2, Qt.AlignmentFlag.AlignHCenter)
 
         dialog_vbox = QtWidgets.QVBoxLayout(self)
         dialog_vbox.addWidget(body)
@@ -505,17 +506,12 @@ class SatochipSettingsDialog(WindowModalDialog):
             txt_result += "\n\n" + text_cert_chain
             client.handler.show_message(txt_result)
         else:
-            txt_result = "".join(
-                [
-                    "Error: could not authenticate the issuer of this card! \n",
-                    "Reason: ",
-                    txt_error,
-                    "\n\n",
-                    "If you did not load the card yourself, be extremely careful! \n",
-                    "Contact support(at)satochip.io to report a suspicious device.",
-                ]
-            )
-            txt_result += "\n\n" + text_cert_chain
+            txt_result = (
+                f"Error: could not authenticate the issuer of this card! \n"
+                f"Reason: {txt_error}\n\nIf you did not load the card yourself, "
+                f"be extremely careful! \nContact support(at)satochip.io to "
+                f"report a suspicious device.\n\n"
+            ) + text_cert_chain
             client.handler.show_error(txt_result)
 
     def card_verify_authenticity(self, client):  # todo: add this function in pysatochip
@@ -524,14 +520,10 @@ class SatochipSettingsDialog(WindowModalDialog):
             cert_pem = client.cc.card_export_perso_certificate()
             print_error("Cert PEM: " + str(cert_pem))
         except CardError:
-            txt_error = "".join(
-                [
-                    "Unable to get device certificate: feature unsupported! \n",
-                    (
-                        "Authenticity validation is only available starting with"
-                        " Satochip v0.12 and higher"
-                    ),
-                ]
+            txt_error = (
+                "Unable to get device certificate: feature unsupported! \n"
+                "Authenticity validation is only available starting with Satochip "
+                "v0.12 and higher"
             )
         except CardNotPresentError:
             txt_error = "No card found! Please insert card."

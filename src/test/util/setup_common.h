@@ -5,11 +5,14 @@
 #ifndef BITCOIN_TEST_UTIL_SETUP_COMMON_H
 #define BITCOIN_TEST_UTIL_SETUP_COMMON_H
 
+#include <avalanche/processor.h>
 #include <blockindex.h>
 #include <common/args.h>
 #include <config.h>
 #include <consensus/amount.h>
+#include <kernel/caches.h>
 #include <key.h>
+#include <net_processing.h>
 #include <node/caches.h>
 #include <node/context.h>
 #include <primitives/transaction.h>
@@ -20,22 +23,23 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/string.h>
+#include <util/translation.h>
 #include <util/vector.h>
 
+#include <test/util/net.h>
+#include <test/util/random.h>
+
+#include <optional>
+#include <ostream>
 #include <type_traits>
 #include <vector>
 
+class arith_uint256;
 class CFeeRate;
 class Config;
 class FastRandomContext;
-
-// Enable BOOST_CHECK_EQUAL for enum class types
-template <typename T>
-std::ostream &operator<<(
-    typename std::enable_if<std::is_enum<T>::value, std::ostream>::type &stream,
-    const T &e) {
-    return stream << static_cast<typename std::underlying_type<T>::type>(e);
-}
+class uint160;
+class uint256;
 
 static constexpr Amount CENT(COIN / 100);
 
@@ -48,6 +52,16 @@ extern std::vector<const char *> fixture_extra_args;
 struct BasicTestingSetup {
     // keep as first member to be destructed last
     node::NodeContext m_node;
+
+    FastRandomContext m_rng;
+    /**
+     * Seed the global RNG state and m_rng for testing and log the seed value.
+     * This affects all randomness, except GetStrongRandBytes().
+     */
+    void SeedRandomForTest(SeedRand seed = SeedRand::SEED) {
+        SeedRandomStateForTest(seed);
+        m_rng.Reseed(GetRandHash());
+    }
 
     explicit BasicTestingSetup(
         const ChainType chainType = ChainType::MAIN,
@@ -66,7 +80,8 @@ CTxMemPool::Options MemPoolOptionsForTest(const node::NodeContext &node);
  * initialization behaviour.
  */
 struct ChainTestingSetup : public BasicTestingSetup {
-    node::CacheSizes m_cache_sizes{};
+    kernel::CacheSizes m_kernel_cache_sizes{
+        node::CalculateCacheSizes(m_args).kernel};
 
     explicit ChainTestingSetup(
         const ChainType chainType = ChainType::MAIN,
@@ -184,6 +199,66 @@ struct TestChain100Setup : public TestingSetup {
     CKey coinbaseKey;
 };
 
+template <class T> struct WithAvalanche : public T {
+    const ::Config &config;
+    ConnmanTestMsg *m_connman;
+
+    // The master private key we delegate to.
+    CKey masterpriv;
+
+    std::unordered_set<std::string> m_overridden_args;
+
+    WithAvalanche(const ChainType chain_type = ChainType::REGTEST,
+                  const std::vector<const char *> &extra_args = {})
+        : T(chain_type, extra_args), config(GetConfig()),
+          masterpriv(CKey::MakeCompressedKey()) {
+        // Deterministic randomness for tests.
+        auto connman = std::make_unique<ConnmanTestMsg>(config, 0x1337, 0x1337,
+                                                        *T::m_node.addrman);
+        m_connman = connman.get();
+        T::m_node.connman = std::move(connman);
+
+        // Get the processor ready.
+        setArg("-avaminquorumstake", "0");
+        setArg("-avaminquorumconnectedstakeratio", "0");
+        setArg("-avaminavaproofsnodecount", "0");
+        setArg("-avaproofstakeutxoconfirmations", "1");
+        bilingual_str error;
+        T::m_node.avalanche = avalanche::Processor::MakeProcessor(
+            *T::m_node.args, *T::m_node.chain, T::m_node.connman.get(),
+            *Assert(T::m_node.chainman), T::m_node.mempool.get(),
+            *T::m_node.scheduler, error);
+        assert(T::m_node.avalanche);
+
+        T::m_node.peerman = PeerManager::make(
+            *m_connman, *T::m_node.addrman, T::m_node.banman.get(),
+            *T::m_node.chainman, *T::m_node.mempool, T::m_node.avalanche.get(),
+            {});
+        T::m_node.chain =
+            interfaces::MakeChain(T::m_node, config.GetChainParams());
+    }
+
+    ~WithAvalanche() {
+        m_connman->ClearTestNodes();
+        SyncWithValidationInterfaceQueue();
+
+        ArgsManager &argsman = *Assert(T::m_node.args);
+        for (const std::string &key : m_overridden_args) {
+            argsman.ClearForcedArg(key);
+        }
+        m_overridden_args.clear();
+    }
+
+    void setArg(std::string key, const std::string &value) {
+        ArgsManager &argsman = *Assert(T::m_node.args);
+        argsman.ForceSetArg(key, value);
+        m_overridden_args.emplace(std::move(key));
+    }
+};
+
+using AvalancheTestingSetup = WithAvalanche<TestingSetup>;
+using AvalancheTestChain100Setup = WithAvalanche<TestChain100Setup>;
+
 /**
  * Make a test setup that has disk access to the debug.log file disabled. Can
  * be used in "hot loops", for example fuzzing or benchmarking.
@@ -240,10 +315,25 @@ struct TestMemPoolEntryHelper {
 
 enum class ScriptError;
 
-// define implicit conversions here so that these types may be used in
-// BOOST_*_EQUAL
+// Make types usable in BOOST_CHECK_* @{
+namespace std {
+template <typename T>
+    requires std::is_enum_v<T>
+inline std::ostream &operator<<(std::ostream &os, const T &e) {
+    return os << static_cast<std::underlying_type_t<T>>(e);
+}
+
+template <typename T>
+inline std::ostream &operator<<(std::ostream &os, const std::optional<T> &v) {
+    return v ? os << *v : os << "std::nullopt";
+}
+} // namespace std
+
+std::ostream &operator<<(std::ostream &os, const arith_uint256 &num);
+std::ostream &operator<<(std::ostream &os, const uint160 &num);
 std::ostream &operator<<(std::ostream &os, const uint256 &num);
 std::ostream &operator<<(std::ostream &os, const ScriptError &err);
+// @}
 
 CBlock getBlock13b8a();
 

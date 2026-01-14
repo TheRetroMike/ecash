@@ -61,7 +61,7 @@ class MutatedBlocksTest(BitcoinTestFramework):
 
             get_block_txn = honest_relayer.last_message["getblocktxn"]
             return (
-                get_block_txn.block_txn_request.blockhash == block.sha256
+                get_block_txn.block_txn_request.blockhash == block.hash_int
                 and get_block_txn.block_txn_request.indexes == [1]
             )
 
@@ -91,10 +91,10 @@ class MutatedBlocksTest(BitcoinTestFramework):
         # sending the blocktxn that was requested.
         block_txn = msg_blocktxn()
         block_txn.block_transactions = BlockTransactions(
-            blockhash=block.sha256, transactions=[tx]
+            blockhash=block.hash_int, transactions=[tx]
         )
         honest_relayer.send_and_ping(block_txn)
-        assert_equal(self.nodes[0].getbestblockhash(), block.hash)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
         # Note that the following test is a bit out of place in this suite, due to a
         # non-applicable backport (core#29524). We keep it anyway because this is

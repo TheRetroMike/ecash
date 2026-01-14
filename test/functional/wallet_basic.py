@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the wallet."""
+
 from decimal import Decimal
 
 from test_framework.blocktools import COINBASE_MATURITY
@@ -623,13 +624,16 @@ class WalletTest(BitcoinTestFramework):
         destination = self.nodes[1].getnewaddress()
         txid = self.nodes[0].sendtoaddress(destination, 123000)
         tx = self.nodes[0].gettransaction(txid=txid, verbose=True)["decoded"]
-        output_addresses = [vout["scriptPubKey"]["addresses"][0] for vout in tx["vout"]]
-        assert len(output_addresses) > 1
-        for address in output_addresses:
+        assert len(tx["vout"]) > 1
+        for vout in tx["vout"]:
+            address = vout["scriptPubKey"]["addresses"][0]
             ischange = self.nodes[0].getaddressinfo(address)["ischange"]
             assert_equal(ischange, address != destination)
             if ischange:
                 change = address
+                assert vout["ischange"]
+            else:
+                assert "ischange" not in vout
         self.nodes[0].setlabel(change, "foobar")
         assert_equal(self.nodes[0].getaddressinfo(change)["ischange"], False)
 

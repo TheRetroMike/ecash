@@ -15,6 +15,7 @@ import {
     calcTxFee,
     EccDummy,
 } from 'ecash-lib';
+import { ChronikClient } from 'chronik-client';
 import appConfig from 'config/app';
 
 const DUMMY_SK = fromHex(
@@ -32,7 +33,7 @@ const DUMMY_P2PKH = Script.p2pkh(
  * @param {Ecc} ecc
  * @param {object} wallet
  * @param {array} targetOutputs
- * @param {bigint} satsPerKb integer, fee in satoshis per kb
+ * @param {number} satsPerKb integer, fee in satoshis per kb
  * @param {number} chaintipBlockheight
  * @param {array} requiredInputs inputs that must be included in this tx
  * e.g. token utxos for token txs, or p2sh scripts with lokadid for ecash-agora ad txs
@@ -49,6 +50,7 @@ export const sendXec = async (
     chaintipBlockheight,
     requiredInputs = [],
     isBurn = false,
+    isPaybutton = false,
 ) => {
     // Add change address to token dust change outputs, if present
     const outputs = [];
@@ -64,7 +66,7 @@ export const sendXec = async (
             // wallet
             const tokenChangeTargetOutput = {
                 sats: BigInt(appConfig.dustSats),
-                script: Script.p2pkh(fromHex(wallet.paths.get(1899).hash)),
+                script: Script.p2pkh(fromHex(wallet.hash)),
             };
             outputs.push(tokenChangeTargetOutput);
             continue;
@@ -85,7 +87,7 @@ export const sendXec = async (
     // Add a change output
     // Note: ecash-lib expects this added as simply a script
     // Note: if a change output is not needed, ecash-lib will omit
-    outputs.push(Script.p2pkh(fromHex(wallet.paths.get(1899).hash)));
+    outputs.push(Script.p2pkh(fromHex(wallet.hash)));
 
     // Collect input utxos using accumulative algorithm
 
@@ -107,8 +109,7 @@ export const sendXec = async (
             inputs.push(requiredInput);
             inputSatoshis += requiredInput.input.signData.sats;
         } else {
-            const pathInfo = wallet.paths.get(requiredInput.path);
-            const { sk, pk, hash } = pathInfo;
+            const { sk, pk, hash } = wallet;
             inputs.push({
                 input: {
                     prevOut: requiredInput.outpoint,
@@ -118,21 +119,25 @@ export const sendXec = async (
                         outputScript: Script.p2pkh(fromHex(hash)),
                     },
                 },
-                signatory: P2PKHSignatory(sk, pk, ALL_BIP143),
+                signatory: P2PKHSignatory(fromHex(sk), fromHex(pk), ALL_BIP143),
             });
             inputSatoshis += requiredInput.sats;
         }
     }
 
-    let needsAnotherUtxo = inputSatoshis <= satoshisToSend;
-
     // Add and sign required inputUtxos to create tx with specified targetOutputs
-    for (const utxo of spendableUtxos) {
+    for (let i = 0; i < spendableUtxos.length + 1; i++) {
+        const needsAnotherUtxo = inputSatoshis <= satoshisToSend;
+        const utxo = i === spendableUtxos.length ? null : spendableUtxos[i];
+
         if (needsAnotherUtxo) {
+            // If we have already iterated through all utxos, we cannot add any more
+            if (utxo === null) {
+                break;
+            }
             // If inputSatoshis is less than or equal to satoshisToSend, we know we need
             // to add another input
-            const pathInfo = wallet.paths.get(utxo.path);
-            const { sk, pk, hash } = pathInfo;
+            const { sk, pk, hash } = wallet;
             inputs.push({
                 input: {
                     prevOut: utxo.outpoint,
@@ -142,17 +147,13 @@ export const sendXec = async (
                         outputScript: Script.p2pkh(fromHex(hash)),
                     },
                 },
-                signatory: P2PKHSignatory(sk, pk, ALL_BIP143),
+                signatory: P2PKHSignatory(fromHex(sk), fromHex(pk), ALL_BIP143),
             });
             inputSatoshis += utxo.sats;
 
-            needsAnotherUtxo = inputSatoshis <= satoshisToSend;
-
-            if (needsAnotherUtxo) {
-                // Do not bother trying to build and broadcast the tx unless
-                // we probably have enough inputSatoshis to cover satoshisToSend + fee
-                continue;
-            }
+            // Do not bother trying to build and broadcast the tx unless
+            // we probably have enough inputSatoshis to cover satoshisToSend + fee
+            continue;
         }
 
         // If value of inputs exceeds value of outputs, we check to see if we also cover the fee
@@ -164,7 +165,7 @@ export const sendXec = async (
         let tx;
         try {
             tx = txBuilder.sign({
-                feePerKb: satsPerKb,
+                feePerKb: BigInt(satsPerKb),
                 dustSats: appConfig.dustSats,
             });
         } catch (err) {
@@ -172,9 +173,27 @@ export const sendXec = async (
                 typeof err.message !== 'undefined' &&
                 err.message.startsWith('Insufficient input sats')
             ) {
-                // If we have insufficient funds to cover satoshisToSend + fee
-                // we need to add another input
-                needsAnotherUtxo = true;
+                // If we have already iterated through all utxos, we cannot add any more
+                if (utxo === null) {
+                    break;
+                }
+                const { sk, pk, hash } = wallet;
+                inputs.push({
+                    input: {
+                        prevOut: utxo.outpoint,
+                        signData: {
+                            sats: utxo.sats,
+                            // Cashtab inputs will always be p2pkh utxos
+                            outputScript: Script.p2pkh(fromHex(hash)),
+                        },
+                    },
+                    signatory: P2PKHSignatory(
+                        fromHex(sk),
+                        fromHex(pk),
+                        ALL_BIP143,
+                    ),
+                });
+                inputSatoshis += utxo.sats;
                 continue;
             }
 
@@ -189,6 +208,22 @@ export const sendXec = async (
         // e.g. 'txn-mempool-conflict (code 18)'
         const response = await chronik.broadcastTx(hex, isBurn);
 
+        if (isPaybutton === true) {
+            try {
+                const paybuttonChronik = new ChronikClient([
+                    'https://xec.paybutton.io',
+                ]);
+                // We don't care about the result, it's a best effort to lower
+                // the tx relay time
+                await paybuttonChronik.broadcastTx(hex, isBurn);
+            } catch (err) {
+                console.log(
+                    'Error broadcasting to paybutton node (ignored): ',
+                    err.message,
+                );
+            }
+        }
+
         return { hex, response };
     }
     // If we go over all input utxos but do not have enough to send the tx, throw Insufficient funds error
@@ -199,7 +234,7 @@ export const sendXec = async (
  * Determine the max amount a wallet can send
  * @param {object} wallet Cashtab wallet
  * @param {[] or [{script: <script>}]} scriptOutputs other output e.g. a Cashtab Msg to be sent in a max send tx
- * @param {bigint} satsPerKb
+ * @param {number} satsPerKb
  * @returns {integer} max amount of satoshis that a Cashtab wallet can send
  */
 export const getMaxSendAmountSatoshis = (
@@ -252,12 +287,12 @@ export const getMaxSendAmountSatoshis = (
     });
 
     const tx = txBuilder.sign({
-        feePerKb: satsPerKb,
+        feePerKb: BigInt(satsPerKb),
         dustSats: BigInt(appConfig.dustSats),
         ecc: eccDummy,
     });
     // Calculate the tx fee
-    const txFeeInSatoshis = calcTxFee(tx.serSize(), satsPerKb);
+    const txFeeInSatoshis = calcTxFee(tx.serSize(), BigInt(satsPerKb));
     // The max send amount is totalSatsInWallet less txFeeInSatoshis
     const maxSendAmountSatoshis = totalSatsInWallet - txFeeInSatoshis;
     return Number(maxSendAmountSatoshis);

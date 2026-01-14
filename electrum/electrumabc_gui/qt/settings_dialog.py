@@ -5,9 +5,10 @@ import sys
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
+import qtpy
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QIcon
 
 from electrumabc import networks, paymentrequest, web
 from electrumabc.address import Address
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 from . import exception_window
 from .amountedit import XECSatsByteEdit
+from .qrreader.camera_dialog import get_camera_path
 from .util import Buttons, CloseButton, ColorScheme, HelpLabel, WindowModalDialog
 
 
@@ -61,16 +63,16 @@ def set_windows_qt_use_freetype(config, b):
 
 
 class SettingsDialog(WindowModalDialog):
-    shown_signal = pyqtSignal()
-    num_zeros_changed = pyqtSignal()
-    custom_fee_changed = pyqtSignal()
-    show_fee_changed = pyqtSignal(bool)
-    alias_changed = pyqtSignal()
-    unit_changed = pyqtSignal()
-    enable_opreturn_changed = pyqtSignal(bool)
-    currency_changed = pyqtSignal()
-    show_history_rates_toggled = pyqtSignal(bool)
-    show_fiat_balance_toggled = pyqtSignal()
+    shown_signal = Signal()
+    num_zeros_changed = Signal()
+    custom_fee_changed = Signal()
+    show_fee_changed = Signal(bool)
+    alias_changed = Signal()
+    unit_changed = Signal(int)
+    enable_opreturn_changed = Signal(bool)
+    currency_changed = Signal()
+    show_history_rates_toggled = Signal(bool)
+    show_fiat_balance_toggled = Signal()
 
     def __init__(
         self,
@@ -89,7 +91,6 @@ class SettingsDialog(WindowModalDialog):
         self.wallet = wallet
         self.fx = fx
         self.gui_object = gui_object
-        self.base_unit = base_unit
 
         self.need_restart = False
         self.need_wallet_reopen = False
@@ -145,8 +146,8 @@ class SettingsDialog(WindowModalDialog):
         nz_label = HelpLabel(_("Zeros after decimal point") + ":", nz_help)
         self.nz = QtWidgets.QSpinBox()
         self.nz.setMinimum(0)
-        self.nz.setMaximum(self.config.get("decimal_point", 2))
-        self.nz.setValue(int(self.config.get("num_zeros", 2)))
+        self.nz.setMaximum(self.config.get_decimal_point())
+        self.nz.setValue(self.config.get_num_zeros())
         if not self.config.is_modifiable("num_zeros"):
             for w in [self.nz, nz_label]:
                 w.setEnabled(False)
@@ -167,15 +168,15 @@ class SettingsDialog(WindowModalDialog):
         customfee_label = HelpLabel(
             _("Custom fee rate:"), _("Custom Fee Rate in Satoshis per byte")
         )
-        fee_lo.addWidget(customfee_label, 0, 0, 1, 1, Qt.AlignRight)
-        fee_lo.addWidget(self.customfee_e, 0, 1, 1, 1, Qt.AlignLeft)
+        fee_lo.addWidget(customfee_label, 0, 0, 1, 1, Qt.AlignmentFlag.AlignRight)
+        fee_lo.addWidget(self.customfee_e, 0, 1, 1, 1, Qt.AlignmentFlag.AlignLeft)
 
         feebox_cb = QtWidgets.QCheckBox(_("Edit fees manually"))
         feebox_cb.setChecked(self.config.get("show_fee", False))
         feebox_cb.setToolTip(_("Show fee edit box in send tab."))
 
         feebox_cb.stateChanged.connect(self.on_feebox)
-        fee_lo.addWidget(feebox_cb, 1, 0, 1, 2, Qt.AlignJustify)
+        fee_lo.addWidget(feebox_cb, 1, 0, 1, 2, Qt.AlignmentFlag.AlignJustify)
 
         # Fees box up top
         misc_widgets.append((fee_gb, None))
@@ -185,7 +186,9 @@ class SettingsDialog(WindowModalDialog):
             + "\n\n"
             + _("The following alias providers are available:")
             + "\n"
-            + "\n".join(["https://cryptoname.co/", "http://xmr.link/"])
+            + "https://cryptoname.co/"
+            + "\n"
+            + "http://xmr.link/"
             + "\n\n"
             + _("For more information, see http://openalias.org")
         )
@@ -250,8 +253,8 @@ class SettingsDialog(WindowModalDialog):
         )
         # The below dance ensures the checkbox is horizontally centered in the widget
         cr_grid.addWidget(QtWidgets.QWidget(), 0, 0, 1, 1)  # dummy spacer
-        cr_grid.addWidget(cr_chk, 0, 1, 1, 1, Qt.AlignRight)
-        cr_grid.addWidget(cr_help, 0, 2, 1, 1, Qt.AlignLeft)
+        cr_grid.addWidget(cr_chk, 0, 1, 1, 1, Qt.AlignmentFlag.AlignRight)
+        cr_grid.addWidget(cr_help, 0, 2, 1, 1, Qt.AlignmentFlag.AlignLeft)
         cr_grid.addWidget(QtWidgets.QWidget(), 0, 3, 1, 1)  # dummy spacer
         cr_grid.setColumnStretch(0, 1)
         cr_grid.setColumnStretch(3, 1)
@@ -270,7 +273,7 @@ class SettingsDialog(WindowModalDialog):
         unit_label = HelpLabel(_("Base unit") + ":", msg)
         self.unit_combo = QtWidgets.QComboBox()
         self.unit_combo.addItems(units_for_menu)
-        self.unit_combo.setCurrentIndex(self.unit_names.index(self.base_unit))
+        self.unit_combo.setCurrentIndex(self.unit_names.index(base_unit))
         self.unit_combo.currentIndexChanged.connect(self.on_unit)
         gui_widgets.append((unit_label, self.unit_combo))
 
@@ -729,19 +732,16 @@ class SettingsDialog(WindowModalDialog):
 
     def on_nz(self):
         value = self.nz.value()
-        if self.config.get("num_zeros", 2) != value:
+        if self.config.get_num_zeros() != value:
             self.config.set_key("num_zeros", value, True)
             self.num_zeros_changed.emit()
 
     def on_unit(self, x):
         unit_index = self.unit_combo.currentIndex()
-        unit_result = self.unit_names[unit_index]
-        if self.base_unit == unit_result:
-            return
         dp = BASE_UNITS[unit_index].decimals
         self.config.set_key("decimal_point", dp, True)
         self.nz.setMaximum(dp)
-        self.unit_changed.emit()
+        self.unit_changed.emit(dp)
         self.need_restart = True
 
     def on_customfee(self, x):
@@ -787,11 +787,16 @@ class SettingsDialog(WindowModalDialog):
             return
         self.qr_did_scan = True
         try:
-            from PyQt5.QtMultimedia import QCameraInfo
+            if qtpy.QT5:
+                from qtpy.QtMultimedia import QCameraInfo
+            else:
+                from qtpy.QtMultimedia import QMediaDevices
         except ImportError as e:
             self.set_no_camera(e)
             return
-        system_cameras = QCameraInfo.availableCameras()
+        system_cameras = (
+            QCameraInfo.availableCameras() if qtpy.QT5 else QMediaDevices.videoInputs()
+        )
         self.qr_combo.clear()
         self.qr_combo.addItem(_("Default"), "default")
         self.qr_label.setText(_("Video device") + ":")
@@ -799,7 +804,7 @@ class SettingsDialog(WindowModalDialog):
         self.qr_combo.setToolTip(self.qr_label.help_text)
         self.qr_label.setToolTip(self.qr_label.help_text)
         for cam in system_cameras:
-            self.qr_combo.addItem(cam.description(), cam.deviceName())
+            self.qr_combo.addItem(cam.description(), get_camera_path(cam))
         video_device = self.config.get("video_device")
         video_device_index = 0
         if video_device:

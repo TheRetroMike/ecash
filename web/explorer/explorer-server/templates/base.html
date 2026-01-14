@@ -1,3 +1,6 @@
+<!-- Copyright (c) 2025 The Bitcoin developers -->
+<!-- Distributed under the MIT software license, see the accompanying -->
+<!-- file COPYING or http://www.opensource.org/licenses/mit-license.php. -->
 <!DOCTYPE html>
 <html class="no-js" lang="en">
     <head>
@@ -35,7 +38,8 @@
               integrity="sha512-8bHTC73gkZ7rZ7vpqUQThUDhqcNFyYi2xgDgPDHc+GXVGHXq+xPjynxIopALmOPqzo9JZj0k6OqqewdGO3EsrQ=="
               crossorigin="anonymous"
               referrerpolicy="no-referrer" />
-        <link rel="stylesheet" href="/code/styles/index.css?v=1.7" />
+        <link rel="stylesheet"
+              href="/code/styles/index.css?hash={{ hashes.css_index }}" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=Poppins:wght@400;600&display=swap"
@@ -63,7 +67,10 @@
                 integrity="sha512-42PE0rd+wZ2hNXftlM78BSehIGzezNeQuzihiBCvUEB3CVxHvsShF86wBWwQORNxNINlBPuq7rG4WWhNiTVHFg=="
                 crossorigin="anonymous"
                 referrerpolicy="no-referrer"></script>
-        <script type="text/javascript" src="/code/common.js?hash=25f20a9"></script>
+        <script type="text/javascript"
+                src="/code/common.js?hash={{ hashes.js_common }}"></script>
+        <script type="text/javascript"
+                src="/code/txsRender.js?hash={{ hashes.js_txs_render }}"></script>
         <script type="text/javascript"
                 src="https://cdn.datatables.net/buttons/3.1.1/js/dataTables.buttons.min.js"></script>
         <script type="text/javascript"
@@ -77,9 +84,10 @@
                         <img class="logo" src="/assets/logo.png" />
                     </a>
                     {% if network_selector %}<div id="network-select-container"></div>{% endif %}
+                    <div class="mempool-select-container desktop-mempool-selector"></div>
                 </div>
                 <div class="search-ctn">
-                    <div id="nav-message-container"></div>
+                    <div class="nav-message-container desktop-nav-message"></div>
                     <div id="search-box" class="ui transparent icon input">
                         <input id="search-bar"
                                type="text"
@@ -88,7 +96,19 @@
                                onkeyup="searchBarChange()" />
                         <i id="#search-button" class="search link icon" onclick="searchButton()"></i>
                     </div>
+                    <button class="mobile-menu-toggle"
+                            id="mobile-menu-toggle"
+                            onclick="toggleMobileMenu()"
+                            aria-label="Toggle menu">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </button>
                 </div>
+            </div>
+            <div class="mobile-menu" id="mobile-menu">
+                <div class="mempool-select-container"></div>
+                <div class="nav-message-container"></div>
             </div>
             {% block content %}{% endblock %}
         </div>
@@ -146,23 +166,54 @@
         `;
         }
 
+        function renderMempoolSelector() {
+            const mempoolSelectContainers = document.querySelectorAll('.mempool-select-container');
+
+            let switchToText = '';
+            let switchToLink = '';
+
+            const baseUrl = window.location.protocol + '//' + window.location.host;
+
+            let html = '';
+            if (window.location.pathname === '/mempool') {
+                html = `<a href="${baseUrl}">Block Explorer</a>`;
+            } else {
+                html = `<a href="${baseUrl}/mempool">Mempool Explorer</a>`;
+            }
+
+            mempoolSelectContainers.forEach(container => {
+                container.innerHTML = html;
+            });
+        }
+
         function renderNavMessage() {
-            const navMessageContainer = document.getElementById('nav-message-container');
+            const navMessageContainers = document.querySelectorAll('.nav-message-container');
             const currentHostName = window.location.hostname;
 
+            let html = '';
             if (currentHostName === 'texplorer.e.cash') {
-                navMessageContainer.innerHTML = `
-            <a href="/testnet-faucet">Get testnet tokens</a>
-        `;
+                html = `<a href="/testnet-faucet">Get testnet tokens</a>`;
             } else {
-                navMessageContainer.innerHTML = `
-            <a href="https://e.cash" target="_blank">Learn more about e.Cash</a>
-        `;
+                html = `<a href="https://e.cash" target="_blank">Learn more about e.Cash</a>`;
+            }
+
+            navMessageContainers.forEach(container => {
+                container.innerHTML = html;
+            });
+        }
+
+        function toggleMobileMenu() {
+            const mobileMenu = document.getElementById('mobile-menu');
+            const toggleButton = document.getElementById('mobile-menu-toggle');
+            if (mobileMenu && toggleButton) {
+                mobileMenu.classList.toggle('active');
+                toggleButton.classList.toggle('active');
             }
         }
 
         window.onload = function() {
             renderNetworkSelector();
+            renderMempoolSelector();
             renderNavMessage();
         };
     </script>

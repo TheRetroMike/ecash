@@ -419,6 +419,10 @@ message BroadcastTxRequest {
     bytes raw_tx = 1;
     // Whether to skip token checks and broadcast even if tokens are unintentionally burned
     bool skip_token_checks = 2;
+    // Waits for finalization of the transaction before returning the request,
+    // for up to the given seconds.
+    // Set to 0 to not wait at all and return right after broadcast.
+    uint64 finalization_timeout_secs = 3;
 }
 
 // Response of broadcasting the tx
@@ -433,6 +437,10 @@ message BroadcastTxsRequest {
     repeated bytes raw_txs = 1;
     // Whether to skip token checks and broadcast even if tokens are unintentionally burned
     bool skip_token_checks = 2;
+    // Waits for finalization of the transaction before returning the request,
+    // for up to the given seconds.
+    // Set to 0 to not wait at all and return right after broadcast.
+    uint64 finalization_timeout_secs = 3;
 }
 
 // Response of broadcasting txs
@@ -455,6 +463,8 @@ message WsSub {
     oneof sub_type {
         // Subscription to block updates
         WsSubBlocks blocks = 2;
+        // Subscription to all txs
+        WsSubTxs txs = 8;
         // Subscription to a script
         WsSubScript script = 3;
         // Subscription to a token ID
@@ -463,12 +473,17 @@ message WsSub {
         WsSubLokadId lokad_id = 5;
         // Subscription to a plugin group
         WsPlugin plugin = 6;
+        // Subscription to a txid
+        WsSubTxId txid = 7;
     }
 }
 
 // Subscription to blocks. They will be sent any time a block got connected,
 // disconnected or finalized.
 message WsSubBlocks {}
+
+// Subscription to all txs.
+message WsSubTxs {}
 
 // Subscription to a script. They will be sent every time a tx spending the
 // given script or sending to the given script has been added to/removed from
@@ -505,6 +520,12 @@ message WsPlugin {
     string plugin_name = 1;
     // Group assigned by the plugin to subscribe to
     bytes group = 2;
+}
+
+// Subscription to a txid. They will be sent every time a tx status confirmation changes.
+message WsSubTxId {
+    // Hex txid to subscribe to.
+    string txid = 1;
 }
 
 // Message coming from the WebSocket
@@ -555,12 +576,29 @@ enum BlockMsgType {
     BLK_INVALIDATED = 3;
 }
 
+// Type of tx finalization
+enum TxFinalizationReasonType {
+    // The transaction is finalized by post-consensus
+    TX_FINALIZATION_REASON_POST_CONSENSUS = 0;
+    // The transaction is finalized by pre-consensus
+    TX_FINALIZATION_REASON_PRE_CONSENSUS = 1;
+}
+
+// The reason that caused a tx to finalize
+message TxFinalizationReason {
+    // What kind of finalization occured
+    TxFinalizationReasonType finalization_type = 1;
+}
+
 // Tx got added to/removed from mempool, or confirmed in a block, etc.
 message MsgTx {
     // What happened to the tx
     TxMsgType msg_type = 1;
     // Txid of the tx (little-endian)
     bytes txid = 2;
+    // If the transaction is finalized, whether it's from pre-consensus or
+    // post-consensus
+    TxFinalizationReason finalization_reason = 3;
 }
 
 // Type of message for a tx
@@ -573,6 +611,8 @@ enum TxMsgType {
     TX_CONFIRMED = 2;
     // Tx finalized by Avalanche
     TX_FINALIZED = 3;
+    // Tx invalidated by Avalanche
+    TX_INVALIDATED = 4;
 }
 
 // Empty msg without any data

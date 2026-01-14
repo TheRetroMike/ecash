@@ -10,9 +10,10 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QEventLoop, QRect, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QIcon, QPainter, QPalette, QPen
+import qtpy
+from qtpy import QtWidgets
+from qtpy.QtCore import QEventLoop, QRect, Qt, QThread, Signal
+from qtpy.QtGui import QIcon, QPainter, QPalette, QPen
 
 from electrumabc import keystore
 from electrumabc.base_wizard import HWD_SETUP_DECRYPT_WALLET, BaseWizard, GoBack
@@ -91,7 +92,10 @@ class CosignWidget(QtWidgets.QWidget):
         self.update()
 
     def paintEvent(self, event):
-        bgcolor = self.palette().color(QPalette.Background)
+        if qtpy.QT5:
+            bgcolor = self.palette().color(QPalette.Background)
+        else:
+            bgcolor = self.palette().color(QPalette.ColorRole.Window)
         pen = QPen(bgcolor, 7, Qt.SolidLine)
         qp = QPainter()
         qp.begin(self)
@@ -135,7 +139,7 @@ class WalletAlreadyOpenInMemory(Exception):
 
 # WindowModalDialog must come first as it overrides show_error
 class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
-    accept_signal = pyqtSignal()
+    accept_signal = Signal()
 
     def __init__(
         self,
@@ -163,7 +167,7 @@ class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
         self.next_button.setDefault(True)
         self.logo = QtWidgets.QLabel()
         self.please_wait = QtWidgets.QLabel(_("Please wait..."))
-        self.please_wait.setAlignment(Qt.AlignCenter)
+        self.please_wait.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_filename = None
         self.loop = QEventLoop()
         self.rejected.connect(lambda: self.loop.exit(0))
@@ -465,7 +469,11 @@ class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
 
     def text_input(self, title, message, is_valid, allow_multi=False):
         slayout = KeysLayout(
-            parent=self, title=message, is_valid=is_valid, allow_multi=allow_multi
+            self.config,
+            parent=self,
+            title=message,
+            is_valid=is_valid,
+            allow_multi=allow_multi,
         )
         self.exec_layout(slayout, title, next_enabled=False)
         return slayout.get_text()
@@ -610,9 +618,9 @@ class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
         self.accept_signal.emit()
 
     def run_task_without_blocking_gui(self, task, *, msg=None):
-        assert (
-            self.gui_thread == threading.current_thread()
-        ), "must be called from GUI thread"
+        assert self.gui_thread == threading.current_thread(), (
+            "must be called from GUI thread"
+        )
         if msg is None:
             msg = _("Please wait...")
 
@@ -638,7 +646,7 @@ class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
         vbox = QtWidgets.QVBoxLayout()
         vbox.addSpacing(100)
         label.setMinimumWidth(300)
-        label.setAlignment(Qt.AlignCenter)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(label)
         self.set_layout(vbox, next_enabled=False)
         self.back_button.setEnabled(False)
@@ -846,11 +854,19 @@ class InstallWizard(QtWidgets.QDialog, MessageBoxMixin, BaseWizard):
 
 class DerivationPathScanner(QThread):
     DERIVATION_PATHS = [
-        keystore.bip44_derivation_xec(0),
-        keystore.bip44_derivation_xec_tokens(0),
-        keystore.bip44_derivation_bch(0),
-        keystore.bip44_derivation_btc(0),
-        keystore.bip44_derivation_bch_tokens(0),
+        # XEC
+        "m/44'/899'/0'",
+        # XEC token aware
+        "m/44'/1899'/0'",
+        # BCH
+        "m/44'/145'/0'",
+        # BTC
+        "m/44'/0'/0'",
+        # BCH token aware
+        "m/44'/245'/0'",
+        # Testnet
+        "m/44'/1'/0'",
+        # Weird paths used by various BCH wallets in the past
         "m/144'/44'/0'",
         "m/144'/0'/0'",
         "m/44'/0'/0'/0",
@@ -927,7 +943,7 @@ class DerivationPathScanner(QThread):
 
 
 class DerivationDialog(QtWidgets.QDialog):
-    scan_result_signal = pyqtSignal(object, object)
+    scan_result_signal = Signal(object, object)
 
     def __init__(self, parent, bip32_seed: bytes, paths):
         QtWidgets.QDialog.__init__(self, parent)

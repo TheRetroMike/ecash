@@ -29,13 +29,14 @@ from enum import IntEnum
 from functools import partial
 from typing import TYPE_CHECKING, List
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QKeySequence
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QFont, QKeySequence
 
 import electrumabc.web as web
 from electrumabc import networks
 from electrumabc.address import Address
+from electrumabc.amount import format_amount
 from electrumabc.i18n import _
 from electrumabc.plugins import run_hook
 from electrumabc.util import profiler
@@ -48,6 +49,7 @@ from .util import (
     MONOSPACE_FONT,
     ColorScheme,
     SortableTreeWidgetItem,
+    copy_to_clipboard,
     rate_limited,
     webopen,
 )
@@ -65,8 +67,8 @@ class AddressList(MyTreeWidget):
         can_edit_label = Qt.UserRole + 1
 
     # Emits the total number of satoshis for coins on selected addresses.
-    selected_amount_changed = pyqtSignal("quint64")
-    selection_cleared = pyqtSignal()
+    selected_amount_changed = Signal("quint64")
+    selection_cleared = Signal()
 
     def __init__(self, main_window: ElectrumWindow, *, picker=False):
         super().__init__(
@@ -223,17 +225,21 @@ class AddressList(MyTreeWidget):
                 balance = sum(self.wallet.get_addr_balance(address))
                 address_text = address.to_ui_string()
                 label = self.wallet.labels.get(address.to_storage_string(), "")
-                balance_text = self.main_window.format_amount(balance, whitespaces=True)
+                balance_text = format_amount(balance, self.config, whitespaces=True)
                 columns = [address_text, str(n), label, balance_text, str(num)]
                 if fx:
                     rate = fx.exchange_rate()
                     fiat_balance = fx.value_str(balance, rate)
                     columns.insert(4, fiat_balance)
                 address_item = SortableTreeWidgetItem(columns)
-                address_item.setTextAlignment(3, Qt.AlignRight | Qt.AlignVCenter)
+                address_item.setTextAlignment(
+                    3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
                 address_item.setFont(3, self.monospace_font)
                 if fx:
-                    address_item.setTextAlignment(4, Qt.AlignRight | Qt.AlignVCenter)
+                    address_item.setTextAlignment(
+                        4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
                     address_item.setFont(4, self.monospace_font)
 
                 # Set col0 address font to monospace
@@ -294,7 +300,7 @@ class AddressList(MyTreeWidget):
 
         def doCopy(txt):
             txt = txt.strip()
-            self.main_window.copy_to_clipboard(txt)
+            copy_to_clipboard(txt, widget=self)
 
         col = self.currentColumn()
         column_title = self.headerItem().text(col)
@@ -312,13 +318,15 @@ class AddressList(MyTreeWidget):
             if col == 0:
                 copy_text = addr.to_ui_string()
                 if Address.FMT_UI == Address.FMT_LEGACY:
-                    alt_copy_text, alt_column_title = addr.to_full_string(
-                        Address.FMT_CASHADDR
-                    ), _("Cash Address")
+                    alt_copy_text, alt_column_title = (
+                        addr.to_full_string(Address.FMT_CASHADDR),
+                        _("Cash Address"),
+                    )
                 else:
-                    alt_copy_text, alt_column_title = addr.to_full_string(
-                        Address.FMT_LEGACY
-                    ), _("Legacy Address")
+                    alt_copy_text, alt_column_title = (
+                        addr.to_full_string(Address.FMT_LEGACY),
+                        _("Legacy Address"),
+                    )
             else:
                 copy_text = item.text(col)
             menu.addAction(_("Copy {}").format(column_title), lambda: doCopy(copy_text))
@@ -392,8 +400,8 @@ class AddressList(MyTreeWidget):
                     [
                         a.to_ui_string()
                         + ", "
-                        + self.main_window.format_amount(
-                            sum(self.wallet.get_addr_balance(a))
+                        + format_amount(
+                            sum(self.wallet.get_addr_balance(a)), self.config
                         )
                         for a in addrs
                     ]
@@ -420,7 +428,7 @@ class AddressList(MyTreeWidget):
         coins = self.wallet.get_spendable_coins(domain=addrs, config=self.config)
         if coins:
             menu.addAction(
-                _("Spend from"), partial(self.main_window.spend_coins, coins)
+                _("Spend from"), partial(self.main_window.send_tab.spend_coins, coins)
             )
 
         run_hook("address_list_context_menu_setup", self, menu, addrs)

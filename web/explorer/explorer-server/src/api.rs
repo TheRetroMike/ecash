@@ -1,10 +1,14 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 use std::collections::HashMap;
 
+use abc_rust_error::Result;
 use bitcoinsuite_chronik_client::proto::{
     token_type, Block, GenesisInfo, TokenInfo, TokenType, Tx, TxHistoryPage,
 };
-use bitcoinsuite_core::CashAddress;
-use bitcoinsuite_error::Result;
+use bitcoinsuite_core::address::CashAddress;
 use eyre::eyre;
 
 use crate::{
@@ -102,6 +106,7 @@ pub fn tx_history_to_json(
             stats,
             token_id,
             token,
+            is_final: tx.is_final,
         });
     }
 
@@ -173,6 +178,49 @@ pub fn block_txs_to_json(
             stats,
             token_id,
             token,
+            is_final: tx.is_final,
+        });
+    }
+
+    Ok(json_txs)
+}
+
+pub fn mempool_txs_to_json(
+    mempool_txs: TxHistoryPage,
+    json_tokens: &HashMap<String, JsonToken>,
+) -> Result<Vec<JsonTx>> {
+    let mut json_txs = Vec::new();
+
+    for tx in mempool_txs.txs.iter() {
+        let stats = calc_tx_stats(tx, None);
+
+        let (token_id, token) = match &tx.token_entries.get(0) {
+            Some(token_entry) => {
+                let token_id = token_entry.token_id.clone();
+                let json_token = json_tokens.get(&token_id);
+
+                match json_token {
+                    Some(json_token) => {
+                        (Some(token_id.clone()), Some(json_token.clone()))
+                    }
+                    None => (Some(token_id.clone()), None),
+                }
+            }
+            None => (None, None),
+        };
+
+        json_txs.push(JsonTx {
+            tx_hash: to_be_hex(&tx.txid),
+            block_height: None,
+            timestamp: tx.time_first_seen,
+            is_coinbase: tx.is_coinbase,
+            size: tx.size as i32,
+            num_inputs: tx.inputs.len() as u32,
+            num_outputs: tx.outputs.len() as u32,
+            stats,
+            token_id,
+            token,
+            is_final: tx.is_final,
         });
     }
 
@@ -180,25 +228,25 @@ pub fn block_txs_to_json(
 }
 
 pub fn calc_tx_stats(tx: &Tx, address_bytes: Option<&[u8]>) -> JsonTxStats {
-    let sats_input = tx.inputs.iter().map(|input| input.value).sum();
-    let sats_output = tx.outputs.iter().map(|output| output.value).sum();
+    let sats_input = tx.inputs.iter().map(|input| input.sats).sum();
+    let sats_output = tx.outputs.iter().map(|output| output.sats).sum();
 
     let token_input: i128 = tx
         .inputs
         .iter()
         .filter_map(|input| input.token.as_ref())
-        .map(|token| token.amount as i128)
+        .map(|token| token.atoms as i128)
         .sum();
     let token_output: i128 = tx
         .outputs
         .iter()
         .filter_map(|output| output.token.as_ref())
-        .map(|token| token.amount as i128)
+        .map(|token| token.atoms as i128)
         .sum();
     let does_burn_slp = tx
         .token_entries
         .iter()
-        .any(|entry| entry.actual_burn_amount.parse::<i128>().unwrap() > 0);
+        .any(|entry| entry.actual_burn_atoms.parse::<i128>().unwrap() > 0);
 
     let mut delta_sats: i64 = 0;
     let mut delta_tokens: i64 = 0;
@@ -209,9 +257,9 @@ pub fn calc_tx_stats(tx: &Tx, address_bytes: Option<&[u8]>) -> JsonTxStats {
                 continue;
             }
         }
-        delta_sats -= input.value;
+        delta_sats -= input.sats;
         if let Some(slp) = &input.token {
-            delta_tokens -= slp.amount as i64;
+            delta_tokens -= slp.atoms as i64;
         }
     }
 
@@ -221,9 +269,9 @@ pub fn calc_tx_stats(tx: &Tx, address_bytes: Option<&[u8]>) -> JsonTxStats {
                 continue;
             }
         }
-        delta_sats += output.value;
+        delta_sats += output.sats;
         if let Some(slp) = &output.token {
-            delta_tokens += slp.amount as i64;
+            delta_tokens += slp.atoms as i64;
         }
     }
 

@@ -11,6 +11,7 @@ import http.client
 import json
 import logging
 import os
+import platform
 import pprint
 import re
 import shlex
@@ -142,6 +143,8 @@ class TestNode:
             "-logtimemicros",
             "-logthreadnames",
             "-logsourcelocations",
+            "-loglevel=trace",
+            "-nologratelimit",
             "-debug",
             "-debugexclude=libevent",
             "-debugexclude=leveldb",
@@ -310,7 +313,9 @@ class TestNode:
                 if rm_arg != def_arg and not def_arg.startswith(rm_arg + "=")
             ]
 
-    def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, **kwargs):
+    def start(
+        self, extra_args=None, *, cwd=None, stdout=None, stderr=None, env=None, **kwargs
+    ):
         """Start the node."""
         if extra_args is None:
             extra_args = self.extra_args
@@ -347,6 +352,8 @@ class TestNode:
         # add environment variable LIBC_FATAL_STDERR_=1 so that libc errors are
         # written to stderr and not the terminal
         subp_env = dict(os.environ, LIBC_FATAL_STDERR_="1")
+        if env is not None:
+            subp_env.update(env)
 
         p_args = [self.binary] + self.default_args + extra_args
         if self.emulator is not None:
@@ -538,21 +545,14 @@ class TestNode:
         for profile_name in tuple(self.perf_subprocesses.keys()):
             self._stop_perf(profile_name)
 
-        # Check that stderr is as expected
-        self.stderr.seek(0)
-        stderr = self.stderr.read().decode("utf-8").strip()
-        if stderr != expected_stderr:
-            raise AssertionError(f"Unexpected stderr {stderr} != {expected_stderr}")
-
-        self.stdout.close()
-        self.stderr.close()
-
         del self.p2ps[:]
 
+        # Must wait to check stderr
+        assert (not expected_stderr) or wait_until_stopped
         if wait_until_stopped:
-            self.wait_until_stopped()
+            self.wait_until_stopped(expected_stderr=expected_stderr)
 
-    def is_node_stopped(self):
+    def is_node_stopped(self, *, expected_stderr="", expected_ret_code=0):
         """Checks whether the node has stopped.
 
         Returns True if the node has stopped. False otherwise.
@@ -564,9 +564,18 @@ class TestNode:
             return False
 
         # process has stopped. Assert that it didn't return an error code.
-        assert return_code == 0, self._node_msg(
-            f"Node returned non-zero exit code ({return_code}) when stopping"
+        assert return_code == expected_ret_code, self._node_msg(
+            f"Node returned unexpected exit code ({return_code}) vs ({expected_ret_code}) when stopping"
         )
+        # Check that stderr is as expected
+        self.stderr.seek(0)
+        stderr = self.stderr.read().decode("utf-8").strip()
+        if stderr != expected_stderr:
+            raise AssertionError(f"Unexpected stderr {stderr} != {expected_stderr}")
+
+        self.stdout.close()
+        self.stderr.close()
+
         self.running = False
         self.process = None
         self.rpc_connected = False
@@ -574,10 +583,24 @@ class TestNode:
         self.log.debug("Node stopped")
         return True
 
-    def wait_until_stopped(self, timeout=BITCOIND_PROC_WAIT_TIMEOUT):
+    def wait_until_stopped(
+        self, *, timeout=BITCOIND_PROC_WAIT_TIMEOUT, expect_error=False, **kwargs
+    ):
+        if "expected_ret_code" not in kwargs:
+            # Whether node shutdown return EXIT_FAILURE or EXIT_SUCCESS
+            kwargs["expected_ret_code"] = 1 if expect_error else 0
         wait_until_helper(
-            self.is_node_stopped, timeout=timeout, timeout_factor=self.timeout_factor
+            lambda: self.is_node_stopped(**kwargs),
+            timeout=timeout,
+            timeout_factor=self.timeout_factor,
         )
+
+    def kill_process(self):
+        self.process.kill()
+        self.wait_until_stopped(
+            expected_ret_code=1 if platform.system() == "Windows" else -9
+        )
+        assert self.is_node_stopped()
 
     @property
     def chain_path(self) -> Path:
@@ -808,6 +831,7 @@ class TestNode:
         extra_args=None,
         expected_msg=None,
         match=ErrorMatch.FULL_TEXT,
+        timeout=None,
         *args,
         **kwargs,
     ):
@@ -820,16 +844,19 @@ class TestNode:
         Will throw if an expected_msg is provided and it does not match bitcoind's stdout.
         """
         assert not self.running
-        with tempfile.NamedTemporaryFile(
-            dir=self.stderr_dir, delete=False
-        ) as log_stderr, tempfile.NamedTemporaryFile(
-            dir=self.stdout_dir, delete=False
-        ) as log_stdout:
+        with (
+            tempfile.NamedTemporaryFile(
+                dir=self.stderr_dir, delete=False
+            ) as log_stderr,
+            tempfile.NamedTemporaryFile(
+                dir=self.stdout_dir, delete=False
+            ) as log_stdout,
+        ):
             try:
                 self.start(
                     extra_args, stdout=log_stdout, stderr=log_stderr, *args, **kwargs
                 )
-                ret = self.process.wait(timeout=self.rpc_timeout)
+                ret = self.process.wait(timeout=timeout or self.rpc_timeout)
                 self.log.debug(
                     self._node_msg(
                         f"bitcoind exited with status {ret} during initialization"

@@ -17,34 +17,39 @@
 
 #include <boost/test/unit_test.hpp>
 
-static std::vector<std::pair<TxHash, CTransactionRef>> extra_txn;
+static const std::vector<CTransactionRef> empty_extra_txn;
 
 BOOST_FIXTURE_TEST_SUITE(blockencodings_tests, RegTestingSetup)
 
-static COutPoint InsecureRandOutPoint() {
-    return COutPoint(TxId(InsecureRand256()), 0);
+static COutPoint InsecureRandOutPoint(FastRandomContext &ctx) {
+    return COutPoint(TxId(ctx.rand256()), 0);
 }
 
-static CBlock BuildBlockTestCase() {
-    CBlock block;
+static CMutableTransaction BuildTransactionTestCase() {
     CMutableTransaction tx;
     tx.vin.resize(1);
     tx.vin[0].scriptSig.resize(10);
     tx.vout.resize(1);
     tx.vout[0].nValue = 42 * SATOSHI;
+    return tx;
+}
+
+static CBlock BuildBlockTestCase(FastRandomContext &ctx) {
+    CBlock block;
+    CMutableTransaction tx = BuildTransactionTestCase();
 
     block.vtx.resize(3);
     block.vtx[0] = MakeTransactionRef(tx);
     block.nVersion = 42;
-    block.hashPrevBlock = BlockHash(InsecureRand256());
+    block.hashPrevBlock = BlockHash(ctx.rand256());
     block.nBits = 0x207fffff;
 
-    tx.vin[0].prevout = InsecureRandOutPoint();
+    tx.vin[0].prevout = InsecureRandOutPoint(ctx);
     block.vtx[1] = MakeTransactionRef(tx);
 
     tx.vin.resize(10);
     for (size_t i = 0; i < tx.vin.size(); i++) {
-        tx.vin[i].prevout = InsecureRandOutPoint();
+        tx.vin[i].prevout = InsecureRandOutPoint(ctx);
     }
     block.vtx[2] = MakeTransactionRef(tx);
 
@@ -80,7 +85,8 @@ static void expectUseCount(const CTxMemPool &pool, const CTransaction *tx,
 BOOST_AUTO_TEST_CASE(SimpleRoundTripTest) {
     CTxMemPool &pool = *Assert(m_node.mempool);
     TestMemPoolEntryHelper entry;
-    CBlock block(BuildBlockTestCase());
+    auto rand_ctx(FastRandomContext(uint256{42}));
+    CBlock block(BuildBlockTestCase(rand_ctx));
 
     LOCK2(cs_main, pool.cs);
     pool.addUnchecked(entry.FromTx(block.vtx[2]));
@@ -90,9 +96,9 @@ BOOST_AUTO_TEST_CASE(SimpleRoundTripTest) {
 
     // Do a simple ShortTxIDs RT
     {
-        CBlockHeaderAndShortTxIDs shortIDs(block);
+        CBlockHeaderAndShortTxIDs shortIDs(block, rand_ctx.rand64());
 
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << shortIDs;
 
         CBlockHeaderAndShortTxIDs shortIDs2;
@@ -100,7 +106,7 @@ BOOST_AUTO_TEST_CASE(SimpleRoundTripTest) {
 
         PartiallyDownloadedBlock partialBlock(m_node.chainman->GetConfig(),
                                               &pool);
-        BOOST_CHECK(partialBlock.InitData(shortIDs2, extra_txn) ==
+        BOOST_CHECK(partialBlock.InitData(shortIDs2, empty_extra_txn) ==
                     READ_STATUS_OK);
         BOOST_CHECK(partialBlock.IsTxAvailable(0));
         BOOST_CHECK(!partialBlock.IsTxAvailable(1));
@@ -152,15 +158,16 @@ public:
     std::vector<PrefilledTransaction> prefilledtxn;
 
     explicit TestHeaderAndShortIDs(const CBlockHeaderAndShortTxIDs &orig) {
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << orig;
         stream >> *this;
     }
-    explicit TestHeaderAndShortIDs(const CBlock &block)
-        : TestHeaderAndShortIDs(CBlockHeaderAndShortTxIDs(block)) {}
+    explicit TestHeaderAndShortIDs(const CBlock &block, FastRandomContext &ctx)
+        : TestHeaderAndShortIDs(
+              CBlockHeaderAndShortTxIDs{block, ctx.rand64()}) {}
 
     uint64_t GetShortID(const TxHash &txhash) const {
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << *this;
         CBlockHeaderAndShortTxIDs base;
         stream >> base;
@@ -180,7 +187,8 @@ public:
 BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest) {
     CTxMemPool &pool = *Assert(m_node.mempool);
     TestMemPoolEntryHelper entry;
-    CBlock block(BuildBlockTestCase());
+    auto rand_ctx(FastRandomContext(uint256{42}));
+    CBlock block(BuildBlockTestCase(rand_ctx));
 
     LOCK2(cs_main, pool.cs);
     pool.addUnchecked(entry.FromTx(block.vtx[2]));
@@ -190,14 +198,14 @@ BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest) {
 
     // Test with pre-forwarding tx 1, but not coinbase
     {
-        TestHeaderAndShortIDs shortIDs(block);
+        TestHeaderAndShortIDs shortIDs(block, rand_ctx);
         shortIDs.prefilledtxn.resize(1);
         shortIDs.prefilledtxn[0] = {1, block.vtx[1]};
         shortIDs.shorttxids.resize(2);
         shortIDs.shorttxids[0] = shortIDs.GetShortID(block.vtx[0]->GetHash());
         shortIDs.shorttxids[1] = shortIDs.GetShortID(block.vtx[2]->GetHash());
 
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << shortIDs;
 
         CBlockHeaderAndShortTxIDs shortIDs2;
@@ -205,7 +213,7 @@ BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest) {
 
         PartiallyDownloadedBlock partialBlock(m_node.chainman->GetConfig(),
                                               &pool);
-        BOOST_CHECK(partialBlock.InitData(shortIDs2, extra_txn) ==
+        BOOST_CHECK(partialBlock.InitData(shortIDs2, empty_extra_txn) ==
                     READ_STATUS_OK);
         BOOST_CHECK(!partialBlock.IsTxAvailable(0));
         BOOST_CHECK(partialBlock.IsTxAvailable(1));
@@ -264,7 +272,8 @@ BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest) {
 BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest) {
     CTxMemPool &pool = *Assert(m_node.mempool);
     TestMemPoolEntryHelper entry;
-    CBlock block(BuildBlockTestCase());
+    auto rand_ctx(FastRandomContext(uint256{42}));
+    CBlock block(BuildBlockTestCase(rand_ctx));
 
     LOCK2(cs_main, pool.cs);
     pool.addUnchecked(entry.FromTx(block.vtx[1]));
@@ -274,14 +283,14 @@ BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest) {
 
     // Test with pre-forwarding coinbase + tx 2 with tx 1 in mempool
     {
-        TestHeaderAndShortIDs shortIDs(block);
+        TestHeaderAndShortIDs shortIDs(block, rand_ctx);
         shortIDs.prefilledtxn.resize(2);
         shortIDs.prefilledtxn[0] = {0, block.vtx[0]};
         shortIDs.prefilledtxn[1] = {2, block.vtx[2]};
         shortIDs.shorttxids.resize(1);
         shortIDs.shorttxids[0] = shortIDs.GetShortID(block.vtx[1]->GetHash());
 
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << shortIDs;
 
         CBlockHeaderAndShortTxIDs shortIDs2;
@@ -289,7 +298,7 @@ BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest) {
 
         PartiallyDownloadedBlock partialBlock(m_node.chainman->GetConfig(),
                                               &pool);
-        BOOST_CHECK(partialBlock.InitData(shortIDs2, extra_txn) ==
+        BOOST_CHECK(partialBlock.InitData(shortIDs2, empty_extra_txn) ==
                     READ_STATUS_OK);
         BOOST_CHECK(partialBlock.IsTxAvailable(0));
         BOOST_CHECK(partialBlock.IsTxAvailable(1));
@@ -320,17 +329,14 @@ BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest) {
 
 BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest) {
     CTxMemPool &pool = *Assert(m_node.mempool);
-    CMutableTransaction coinbase;
-    coinbase.vin.resize(1);
-    coinbase.vin[0].scriptSig.resize(10);
-    coinbase.vout.resize(1);
-    coinbase.vout[0].nValue = 42 * SATOSHI;
+    CMutableTransaction coinbase = BuildTransactionTestCase();
 
     CBlock block;
+    auto rand_ctx(FastRandomContext(uint256{42}));
     block.vtx.resize(1);
     block.vtx[0] = MakeTransactionRef(std::move(coinbase));
     block.nVersion = 42;
-    block.hashPrevBlock = BlockHash(InsecureRand256());
+    block.hashPrevBlock = BlockHash(rand_ctx.rand256());
     block.nBits = 0x207fffff;
 
     bool mutated;
@@ -345,9 +351,9 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest) {
 
     // Test simple header round-trip with only coinbase
     {
-        CBlockHeaderAndShortTxIDs shortIDs(block);
+        CBlockHeaderAndShortTxIDs shortIDs{block, rand_ctx.rand64()};
 
-        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream stream{};
         stream << shortIDs;
 
         CBlockHeaderAndShortTxIDs shortIDs2;
@@ -355,7 +361,7 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest) {
 
         PartiallyDownloadedBlock partialBlock(m_node.chainman->GetConfig(),
                                               &pool);
-        BOOST_CHECK(partialBlock.InitData(shortIDs2, extra_txn) ==
+        BOOST_CHECK(partialBlock.InitData(shortIDs2, empty_extra_txn) ==
                     READ_STATUS_OK);
         BOOST_CHECK(partialBlock.IsTxAvailable(0));
 
@@ -371,16 +377,68 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(ReceiveWithExtraTransactions) {
+    CTxMemPool &pool = *Assert(m_node.mempool);
+    TestMemPoolEntryHelper entry;
+    auto rand_ctx(FastRandomContext(uint256{42}));
+
+    CMutableTransaction mtx = BuildTransactionTestCase();
+    mtx.vin[0].prevout = InsecureRandOutPoint(rand_ctx);
+    const CTransactionRef non_block_tx = MakeTransactionRef(std::move(mtx));
+
+    CBlock block(BuildBlockTestCase(rand_ctx));
+    std::vector<CTransactionRef> extra_txn;
+    extra_txn.resize(10);
+
+    LOCK2(cs_main, pool.cs);
+    pool.addUnchecked(entry.FromTx(block.vtx[2]));
+
+    const CTransaction *block_tx2 = block.vtx[2].get();
+    expectUseCount(pool, block_tx2, 0);
+    // Ensure the non_block_tx is actually not in the block
+    for (const auto &block_tx : block.vtx) {
+        BOOST_CHECK_NE(block_tx->GetHash(), non_block_tx->GetHash());
+    }
+    // Ensure block.vtx[1] is not in pool
+    BOOST_CHECK_EQUAL(pool.get(block.vtx[1]->GetId()), nullptr);
+
+    {
+        const CBlockHeaderAndShortTxIDs cmpctblock{block, rand_ctx.rand64()};
+        PartiallyDownloadedBlock partial_block(m_node.chainman->GetConfig(),
+                                               &pool);
+        PartiallyDownloadedBlock partial_block_with_extra(
+            m_node.chainman->GetConfig(), &pool);
+
+        BOOST_CHECK(partial_block.InitData(cmpctblock, extra_txn) ==
+                    READ_STATUS_OK);
+        BOOST_CHECK(partial_block.IsTxAvailable(0));
+        BOOST_CHECK(!partial_block.IsTxAvailable(1));
+        BOOST_CHECK(partial_block.IsTxAvailable(2));
+
+        // Add an unrelated tx to extra_txn:
+        extra_txn[0] = non_block_tx;
+        // and a tx from the block that's not in the mempool:
+        extra_txn[1] = block.vtx[1];
+
+        BOOST_CHECK(partial_block_with_extra.InitData(cmpctblock, extra_txn) ==
+                    READ_STATUS_OK);
+        BOOST_CHECK(partial_block_with_extra.IsTxAvailable(0));
+        // This transaction is now available via extra_txn:
+        BOOST_CHECK(partial_block_with_extra.IsTxAvailable(1));
+        BOOST_CHECK(partial_block_with_extra.IsTxAvailable(2));
+    }
+}
+
 BOOST_AUTO_TEST_CASE(TransactionsRequestSerializationTest) {
     BlockTransactionsRequest req1;
-    req1.blockhash = BlockHash(InsecureRand256());
+    req1.blockhash = BlockHash(m_rng.rand256());
     req1.indices.resize(4);
     req1.indices[0] = 0;
     req1.indices[1] = 1;
     req1.indices[2] = 3;
     req1.indices[3] = 4;
 
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << req1;
 
     BlockTransactionsRequest req2;
@@ -397,7 +455,7 @@ BOOST_AUTO_TEST_CASE(TransactionsRequestSerializationTest) {
 BOOST_AUTO_TEST_CASE(TransactionsRequestDeserializationMaxTest) {
     // Check that the highest legal index is decoded correctly
     BlockTransactionsRequest req0;
-    req0.blockhash = BlockHash(InsecureRand256());
+    req0.blockhash = BlockHash(m_rng.rand256());
     req0.indices.resize(1);
 
     using indiceType = decltype(req0.indices)::value_type;
@@ -406,7 +464,7 @@ BOOST_AUTO_TEST_CASE(TransactionsRequestDeserializationMaxTest) {
 
     req0.indices[0] = MAX_SIZE;
 
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << req0;
 
     BlockTransactionsRequest req1;
@@ -429,7 +487,7 @@ BOOST_AUTO_TEST_CASE(TransactionsRequestDeserializationOverflowTest) {
     // from raw deltas. This can only occur if MAX_SIZE is greater than the
     // maximum value for that the indice type can handle.
     BlockTransactionsRequest req0;
-    req0.blockhash = BlockHash(InsecureRand256());
+    req0.blockhash = BlockHash(m_rng.rand256());
     req0.indices.resize(3);
 
     using indiceType = decltype(req0.indices)::value_type;
@@ -439,7 +497,7 @@ BOOST_AUTO_TEST_CASE(TransactionsRequestDeserializationOverflowTest) {
     req0.indices[0] = 0x7000;
     req0.indices[1] = 0x100000000 - 0x7000 - 2;
     req0.indices[2] = 0;
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << req0.blockhash;
     WriteCompactSize(stream, req0.indices.size());
     WriteCompactSize(stream, req0.indices[0]);
@@ -462,14 +520,14 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
         cb.prefilledtxn.push_back({firstIndex, MakeTransactionRef()});
         cb.prefilledtxn.push_back({0u, MakeTransactionRef()});
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_EXCEPTION(ss << cb, std::ios_base::failure,
                               HasReason("differential value overflow"));
     }
 
     auto checkShortdTxIdsSizeException = [&](size_t compactSize,
                                              const std::string &reason) {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()
@@ -484,13 +542,13 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
     // We just check the stream expects more data as a matter of verifying that
     // the overflow check did not trigger while saving test time and memory by
     // not constructing the large object.
-    checkShortdTxIdsSizeException(MAX_SIZE, "CDataStream::read(): end of data");
+    checkShortdTxIdsSizeException(MAX_SIZE, "DataStream::read(): end of data");
     checkShortdTxIdsSizeException(MAX_SIZE + 1,
                                   "ReadCompactSize(): size too large");
 
     auto checkPrefilledTxnSizeException = [&](size_t compactSize,
                                               const std::string &reason) {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()
@@ -507,14 +565,13 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
     // We just check the stream expects more data as a matter of verifying that
     // the overflow check did not trigger while saving test time and memory by
     // not constructing the large object.
-    checkPrefilledTxnSizeException(MAX_SIZE,
-                                   "CDataStream::read(): end of data");
+    checkPrefilledTxnSizeException(MAX_SIZE, "DataStream::read(): end of data");
     checkPrefilledTxnSizeException(MAX_SIZE + 1,
                                    "ReadCompactSize(): size too large");
 
     auto checkPrefilledTxnIndexSizeException = [&](size_t compactSize,
                                                    const std::string &reason) {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()
@@ -553,7 +610,7 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
     uint32_t remainder = uint32_t(overflow - ((MAX_SIZE + 1) * overflowIter));
 
     {
-        CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()
@@ -576,7 +633,7 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
     }
 
     {
-        CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()
@@ -604,7 +661,7 @@ BOOST_AUTO_TEST_CASE(compactblock_overflow) {
     }
 
     {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // header, nonce
         ss << CBlockHeader() << uint64_t(0);
         // shorttxids.size()

@@ -4,13 +4,20 @@
 
 import config from '../config';
 import opReturn from '../constants/op_return';
-import { consume, consumeNextPush, swapEndianness } from 'ecash-script';
+import {
+    fromHex,
+    consume,
+    consumeNextPush,
+    swapEndianness,
+    Script,
+    OP_0,
+} from 'ecash-lib';
 import knownMinersJson, { KnownMiners, MinerInfo } from '../constants/miners';
 import cachedTokenInfoMap from '../constants/tokens';
 import {
     jsonReviver,
     bigNumberAmountToLocaleString,
-    CoinGeckoPrice,
+    FetchedPrice,
     toXec,
 } from '../src/utils';
 import {
@@ -22,11 +29,11 @@ import BigNumber from 'bignumber.js';
 import {
     TOKEN_SERVER_OUTPUTSCRIPT,
     BINANCE_OUTPUTSCRIPT,
+    COINEX_OUTPUTSCRIPT,
 } from '../constants/senders';
 import { prepareStringForTelegramHTML, splitOverflowTgMsg } from './telegram';
 import { OutputscriptInfo } from './chronik';
 import {
-    formatPrice,
     satsToFormattedValue,
     returnAddressPreview,
     containsOnlyPrintableAscii,
@@ -34,7 +41,6 @@ import {
 import { CoinDanceStaker } from './events';
 import lokadMap from '../constants/lokad';
 import { scriptOps } from 'ecash-agora';
-import { Script, fromHex, OP_0 } from 'ecash-lib';
 import {
     ChronikClient,
     CoinbaseData,
@@ -45,6 +51,7 @@ import {
     AlpTokenType_Type,
 } from 'chronik-client';
 import { MemoryCache } from 'cache-manager';
+import { CryptoTicker, Fiat, formatPrice, Statistics } from 'ecash-price';
 
 const miners: KnownMiners = JSON.parse(
     JSON.stringify(knownMinersJson),
@@ -60,12 +67,6 @@ const SLP_1_NFT_PROTOCOL_NUMBER = 65;
 export const IFP_OUTPUTSCRIPT =
     'a914d37c4c809fe9840e7bfa77b86bd47163f6fb6c6087';
 
-interface PriceInfo {
-    usd: number;
-    usd_market_cap: number;
-    usd_24h_vol: number;
-    usd_24h_change: number;
-}
 interface HeraldStaker {
     staker: string;
     reward: bigint;
@@ -398,7 +399,7 @@ export const parseSlpTwo = (slpTwoPush: string): string => {
                     : prepareStringForTelegramHTML(cachedTokenInfo.tokenTicker)
             }</a>`;
 
-            const numOutputs = consume(stack, 1);
+            const numOutputs = parseInt(consume(stack, 1), 16);
             // Iterate over number of outputs to get total amount sent
             // Note: this should be handled with an indexer, as we are not parsing for validity here
             // However, it's still useful information for the herald
@@ -459,10 +460,9 @@ export const parseMultipushStack = (
             // Since we don't know any spec or parsing rules for other types of EMPP pushes,
             // Just add an ASCII decode of the whole thing if you see one
             msgs.push(
-                `${'Unknown App:'}${Buffer.from(
-                    emppStackArray[i],
-                    'hex',
-                ).toString('ascii')}`,
+                `${'Unknown App:'}${prepareStringForTelegramHTML(
+                    Buffer.from(emppStackArray[i], 'hex').toString('ascii'),
+                )}`,
             );
         }
         // Do not parse any other empp (haven't seen any in the wild, no existing specs to follow)
@@ -1552,13 +1552,13 @@ export const getSwapTgMsg = (
 /**
  * Build a string formatted for Telegram's API using HTML encoding
  * @param parsedBlock
- * @param coingeckoPrices if no coingecko API error
+ * @param fetchedPrices if no coingecko API error
  * @param tokenInfoMap if no chronik API error
  * @param addressInfoMap if no chronik API error
  */
 export const getBlockTgMessage = (
     parsedBlock: HeraldParsedBlock,
-    coingeckoPrices: false | CoinGeckoPrice[],
+    fetchedPrices: FetchedPrice[],
     tokenInfoMap: false | Map<string, GenesisInfo>,
     outputScriptInfoMap: false | Map<string, OutputscriptInfo>,
     activeStakers?: CoinDanceStaker[],
@@ -1566,8 +1566,10 @@ export const getBlockTgMessage = (
     const { hash, height, miner, staker, numTxs, parsedTxs } = parsedBlock;
     const { emojis } = config;
 
-    const xecPrice =
-        coingeckoPrices !== false ? coingeckoPrices[0].price : undefined;
+    const xecPrice = fetchedPrices.find(
+        fetchedPrice =>
+            fetchedPrice.ticker.toString() === CryptoTicker.XEC.toString(),
+    )?.price;
 
     // Define newsworthy types of txs in parsedTxs
     // These arrays will be used to present txs in batches by type
@@ -1579,6 +1581,7 @@ export const getBlockTgMessage = (
     const tokenBurnTxTgMsgLines = [];
     const opReturnTxTgMsgLines = [];
     let xecSendTxTgMsgLines = [];
+    let payButtonTxCount = 0;
 
     // We do not get that much newsworthy value from a long list of individual token send txs
     // So, we organize token send txs by tokenId
@@ -1633,8 +1636,10 @@ export const getBlockTgMessage = (
                     break;
                 }
                 case opReturn.knownApps.payButton.app: {
-                    appEmoji = emojis.payButton;
-                    break;
+                    // Count PayButton transactions instead of displaying individually
+                    payButtonTxCount += 1;
+                    // Skip adding to opReturnTxTgMsgLines, continue to next tx
+                    continue;
                 }
                 case opReturn.knownApps.paywall.app: {
                     appEmoji = emojis.paywall;
@@ -1711,6 +1716,9 @@ export const getBlockTgMessage = (
                 }
                 default: {
                     appEmoji = emojis.unknown;
+                    // For unknown apps, msg might contain unescaped user content
+                    // Escape it to prevent HTML parsing errors
+                    msg = prepareStringForTelegramHTML(msg);
                     break;
                 }
             }
@@ -2018,14 +2026,14 @@ export const getBlockTgMessage = (
         );
     }
 
-    // Display prices as set in config.js
-    if (coingeckoPrices) {
+    if (fetchedPrices.length > 0) {
         // Iterate over prices and add a line for each price in the object
-
-        for (let i = 0; i < coingeckoPrices.length; i += 1) {
-            const { fiat, ticker, price } = coingeckoPrices[i];
+        for (let i = 0; i < fetchedPrices.length; i += 1) {
+            const { fiat, ticker, price } = fetchedPrices[i];
             const thisFormattedPrice = formatPrice(price, fiat);
-            tgMsg.push(`1 ${ticker} = ${thisFormattedPrice}`);
+            tgMsg.push(
+                `1 ${ticker.toString().toUpperCase()} = ${thisFormattedPrice}`,
+            );
         }
     }
 
@@ -2126,6 +2134,16 @@ export const getBlockTgMessage = (
         );
 
         tgMsg = tgMsg.concat(tokenBurnTxTgMsgLines);
+    }
+
+    if (payButtonTxCount > 0) {
+        tgMsg.push('');
+
+        tgMsg.push(
+            `${emojis.payButton} <b>${payButtonTxCount.toLocaleString('en-US')} Paybutton tx${
+                payButtonTxCount > 1 ? 's' : ''
+            }</b>`,
+        );
     }
 
     // OP_RETURN txs
@@ -2365,7 +2383,7 @@ export const initializeOrIncrementTokenData = (
  * @param tokenInfoMap tokenId => genesisInfo
  * @param agoraTokensMaxRender how many agora tokens to render, useful for showing more or less info
  * @param nonAgoraTokensMaxRender same for non-agora token actions. this info is less interesting in the summary.
- * @param priceInfo { usd, usd_market_cap, usd_24h_vol, usd_24h_change }
+ * @param statistics Statistics from PriceFetcher.stats
  * @param activeStakers
  */
 export const summarizeTxHistory = (
@@ -2374,11 +2392,12 @@ export const summarizeTxHistory = (
     tokenInfoMap: false | Map<string, GenesisInfo>,
     agoraTokensMaxRender: number,
     nonAgoraTokensMaxRender: number,
-    priceInfo?: PriceInfo,
+    statistics: Statistics | null,
     activeStakers?: CoinDanceStaker[],
 ): string[] => {
     const xecPriceUsd =
-        typeof priceInfo !== 'undefined' ? priceInfo.usd : undefined;
+        statistics !== null ? statistics.currentPrice : undefined;
+
     // Throw out any unconfirmed txs
     txs.filter(tx => typeof tx.block !== 'undefined');
 
@@ -2424,6 +2443,8 @@ export const summarizeTxHistory = (
     let cashtabCachetRewardCount = 0;
     let binanceWithdrawalCount = 0;
     let binanceWithdrawalSats = 0n;
+    let coinexWithdrawalCount = 0;
+    let coinexWithdrawalSats = 0n;
 
     let fungibleTokenTxs = 0;
     let appTxs = 0;
@@ -2541,6 +2562,21 @@ export const summarizeTxHistory = (
                     // We also call this a withdrawal
                     // Note that 1 tx from the hot wallet may include more than 1 withdrawal
                     binanceWithdrawalCount += 1;
+                }
+            }
+        }
+        if (senderOutputScript === COINEX_OUTPUTSCRIPT) {
+            // Tx sent by CoinEx
+            // Make sure it's not just a utxo consolidation
+            for (const output of outputs) {
+                const { sats, outputScript } = output;
+                if (outputScript !== COINEX_OUTPUTSCRIPT) {
+                    // If we have an output that is not sending to the coinex hot wallet
+                    // Increment total value amount withdrawn
+                    coinexWithdrawalSats += sats;
+                    // We also call this a withdrawal
+                    // Note that 1 tx from the hot wallet may include more than 1 withdrawal
+                    coinexWithdrawalCount += 1;
                 }
             }
         }
@@ -3287,8 +3323,8 @@ export const summarizeTxHistory = (
         operatingCapacity < 10
             ? config.emojis.capacityLow
             : operatingCapacity < 50
-            ? config.emojis.capacityMed
-            : config.emojis.capacityHigh;
+              ? config.emojis.capacityMed
+              : config.emojis.capacityHigh;
 
     // Add ViaBTC as a single entity to minerMap
     minerMap.set(`ViaBTC`, viaBtcBlocks);
@@ -3333,25 +3369,24 @@ export const summarizeTxHistory = (
     tgMsg.push('');
 
     // Market summary
-    if (typeof priceInfo !== 'undefined') {
-        const { usd_market_cap, usd_24h_vol, usd_24h_change } = priceInfo;
+    if (statistics !== null) {
         tgMsg.push(
             `${
-                usd_24h_change > 0
+                statistics.priceChangePercent > 0
                     ? config.emojis.priceUp
                     : config.emojis.priceDown
             }<b>1 XEC = ${formatPrice(
                 xecPriceUsd!,
-                'usd',
-            )}</b> <i>(${usd_24h_change.toFixed(2)}%)</i>`,
+                Fiat.USD,
+            )}</b> <i>(${(statistics.priceChangePercent * 100).toFixed(2)}%)</i>`,
         );
         tgMsg.push(
-            `Trading volume: $${usd_24h_vol.toLocaleString('en-US', {
+            `Trading volume: $${statistics.volume.toLocaleString('en-US', {
                 maximumFractionDigits: 0,
             })}`,
         );
         tgMsg.push(
-            `Market cap: $${usd_market_cap.toLocaleString('en-US', {
+            `Market cap: $${statistics.marketCap.toLocaleString('en-US', {
                 maximumFractionDigits: 0,
             })}`,
         );
@@ -3568,8 +3603,8 @@ export const summarizeTxHistory = (
                     typeof genesisInfo === 'undefined'
                         ? ''
                         : genesisInfo.tokenTicker !== ''
-                        ? ` (${genesisInfo.tokenTicker})`
-                        : ''
+                          ? ` (${genesisInfo.tokenTicker})`
+                          : ''
                 }: ${
                     typeof buy !== 'undefined'
                         ? `${config.emojis.agoraBuy}${
@@ -3669,8 +3704,8 @@ export const summarizeTxHistory = (
                     typeof genesisInfo === 'undefined'
                         ? ''
                         : genesisInfo.tokenTicker !== ''
-                        ? ` (${genesisInfo.tokenTicker})`
-                        : ''
+                          ? ` (${genesisInfo.tokenTicker})`
+                          : ''
                 }: ${
                     typeof buy !== 'undefined'
                         ? `${config.emojis.agoraBuy}${
@@ -3763,8 +3798,8 @@ export const summarizeTxHistory = (
                     typeof genesisInfo === 'undefined'
                         ? ''
                         : genesisInfo.tokenTicker !== ''
-                        ? ` (${genesisInfo.tokenTicker})`
-                        : ''
+                          ? ` (${genesisInfo.tokenTicker})`
+                          : ''
                 }: ${
                     typeof genesis !== 'undefined'
                         ? config.emojis.tokenGenesis
@@ -3861,8 +3896,8 @@ export const summarizeTxHistory = (
                     typeof genesisInfo === 'undefined'
                         ? ''
                         : genesisInfo.tokenTicker !== ''
-                        ? ` (${genesisInfo.tokenTicker})`
-                        : ''
+                          ? ` (${genesisInfo.tokenTicker})`
+                          : ''
                 }: ${
                     typeof genesis !== 'undefined'
                         ? `${config.emojis.tokenGenesis}${
@@ -4008,6 +4043,20 @@ export const summarizeTxHistory = (
         );
     }
 
+    if (coinexWithdrawalCount > 0) {
+        // CoinEx hot wallet
+        const renderedCoinexWithdrawalQty = satsToFormattedValue(
+            coinexWithdrawalSats,
+            xecPriceUsd,
+        );
+        tgMsg.push(`${config.emojis.bank} <b><i>CoinEx</i></b>`);
+        tgMsg.push(
+            `<b>${coinexWithdrawalCount}</b> withdrawal${
+                coinexWithdrawalCount > 1 ? 's' : ''
+            }, ${renderedCoinexWithdrawalQty}`,
+        );
+    }
+
     return splitOverflowTgMsg(tgMsg);
 };
 
@@ -4035,20 +4084,21 @@ export const parseStaker = (
         // Nothing to do
         return;
     }
-    // Find thisStaker in activeStakers
-    const thisStaker = activeStakers.find(
+    // Find all the matching stakers in activeStakers
+    const matchingStakers = activeStakers.filter(
         activeStaker => activeStaker.payoutAddress === staker.staker,
     );
 
-    // If we can't find thisStaker, do not return a parsedStaker
-    // Should never happen. Could happen in edge cases of API errors,
-    // race conditions
-    // So, if we hit such a condition, we do not report on stakers
-    if (typeof thisStaker === 'undefined') {
+    // If we can't find any matching staker, do not return a parsedStaker.
+    // Should never happen. Could happen in edge cases of API errors, race
+    // conditions, ...
+    // So, if we hit such a condition, we do not report on stakers.
+    if (typeof matchingStakers === 'undefined' || matchingStakers.length == 0) {
         return;
     }
 
-    const totalSatsStaked = activeStakers.reduce((acc, current) => {
+    // Compute the stakers total from all matching payouts
+    const stakerTotal = matchingStakers.reduce((acc, current) => {
         // Parse the stake string to float for addition.
         // Note: Assuming stake is always a string with 2 decimal places
         // Cursory review shows values like "stake": "22000000000.00",
@@ -4056,17 +4106,20 @@ export const parseStaker = (
         return acc + BigInt(current.stake.replace('.', ''));
     }, 0n);
 
+    // Compute the network staked total
+    const totalSatsStaked = activeStakers.reduce((acc, current) => {
+        return acc + BigInt(current.stake.replace('.', ''));
+    }, 0n);
+
     // This staker's percent of all staked
     // Also the staker's odds of winning any given block staking reward
     const thisTakerPercentStake =
-        (
-            (100 * parseFloat(thisStaker.stake)) /
-            (Number(totalSatsStaked) / 100)
-        ).toFixed(2) + '%';
+        ((100 * Number(stakerTotal)) / Number(totalSatsStaked)).toFixed(2) +
+        '%';
 
     return {
         oddsThisWinner: thisTakerPercentStake,
-        stakedSatoshisThisWinner: BigInt(thisStaker.stake.replace('.', '')),
+        stakedSatoshisThisWinner: stakerTotal,
         stakedSatoshisTotal: totalSatsStaked,
     };
 };

@@ -7,7 +7,7 @@
 use std::{
     cmp,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use abc_rust_error::Result;
@@ -31,6 +31,7 @@ use chronik_util::log_chronik;
 use futures::future;
 use itertools::izip;
 use karyon_jsonrpc::{
+    client::ClientBuilder,
     error::RPCError,
     message,
     net::{Addr, Endpoint},
@@ -40,12 +41,17 @@ use karyon_jsonrpc::{
         ServerBuilder,
     },
 };
-use rustls::pki_types::{
-    pem::PemObject,
-    {CertificateDer, PrivateKeyDer},
+use rustls::{
+    pki_types::{
+        pem::PemObject,
+        {CertificateDer, PrivateKeyDer},
+    },
+    RootCertStore,
 };
 use serde_json::{json, Map, Value};
+use sha2::Digest;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use versions::Versioning;
 
 use crate::{
@@ -65,6 +71,10 @@ pub enum ChronikElectrumProtocol {
     Tcp,
     /// TLS
     Tls,
+    /// WS
+    Ws,
+    /// WSS
+    Wss,
 }
 
 /// Params defining what and where to serve for [`ChronikElectrumServer`].
@@ -88,6 +98,8 @@ pub struct ChronikElectrumServerParams {
     pub max_history: u32,
     /// Server donation address
     pub donation_address: String,
+    /// Peers validation interval in seconds
+    pub peers_validation_interval: u32,
 }
 
 /// Chronik Electrum server, holding all the data/handles required to serve an
@@ -102,6 +114,7 @@ pub struct ChronikElectrumServer {
     tls_privkey_path: String,
     max_history: u32,
     donation_address: String,
+    peers_validation_interval: u32,
 }
 
 /// Errors for [`ChronikElectrumServer`].
@@ -172,6 +185,7 @@ impl ChronikElectrumServer {
             tls_privkey_path: params.tls_privkey_path,
             max_history: params.max_history,
             donation_address: params.donation_address,
+            peers_validation_interval: params.peers_validation_interval,
         })
     }
 
@@ -190,12 +204,43 @@ impl ChronikElectrumServer {
             peers: Mutex::new(Vec::new()),
         });
 
+        // Validate peers periodically in the background unless validation is
+        // disabled (i.e. validation interval is set to 0)
+        if self.peers_validation_interval > 0 {
+            let moved_endpoint = server_endpoint.clone();
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(tokio::time::Duration::from_secs(
+                        self.peers_validation_interval as u64,
+                    ));
+
+                loop {
+                    interval.tick().await;
+                    let Ok(_) = moved_endpoint.validate_peers().await else {
+                        // This might fail, in this case we just wait for the
+                        // next interval and retry
+                        continue;
+                    };
+                }
+            });
+        } else {
+            log_chronik!(
+                "Electrum peers validation is disabled, \
+                 server.peers.subscribe will not share any peer\n"
+            );
+        }
+
         let blockchain_endpoint =
             Arc::new(ChronikElectrumRPCBlockchainEndpoint {
-                indexer: self.indexer,
-                node: self.node,
+                indexer: self.indexer.clone(),
+                node: self.node.clone(),
                 max_history: self.max_history,
             });
+
+        let mempool_endpoint = Arc::new(ChronikElectrumRPCMempoolEndpoint {
+            indexer: self.indexer,
+            node: self.node,
+        });
 
         let tls_cert_path = self.tls_cert_path.clone();
         let tls_privkey_path = self.tls_privkey_path.clone();
@@ -204,6 +249,7 @@ impl ChronikElectrumServer {
             self.hosts,
             std::iter::repeat(server_endpoint),
             std::iter::repeat(blockchain_endpoint),
+            std::iter::repeat(mempool_endpoint),
             std::iter::repeat(tls_cert_path),
             std::iter::repeat(tls_privkey_path)
         )
@@ -212,6 +258,7 @@ impl ChronikElectrumServer {
                 (host, protocol),
                 server_endpoint,
                 blockchain_endpoint,
+                mempool_endpoint,
                 tls_cert_path,
                 tls_privkey_path,
             )| {
@@ -226,6 +273,13 @@ impl ChronikElectrumServer {
                         ChronikElectrumProtocol::Tls => {
                             require_tls_config = true;
                             Endpoint::Tls(Addr::Ip(host.ip()), host.port())
+                        }
+                        ChronikElectrumProtocol::Ws => {
+                            Endpoint::Ws(Addr::Ip(host.ip()), host.port())
+                        }
+                        ChronikElectrumProtocol::Wss => {
+                            require_tls_config = true;
+                            Endpoint::Wss(Addr::Ip(host.ip()), host.port())
                         }
                     };
 
@@ -285,6 +339,7 @@ impl ChronikElectrumServer {
                     let server = builder
                         .service(server_endpoint)
                         .service(blockchain_endpoint.clone())
+                        .service(mempool_endpoint)
                         .pubsub_service(blockchain_endpoint)
                         .build()
                         .await
@@ -424,9 +479,140 @@ struct ChronikElectrumRPCBlockchainEndpoint {
     max_history: u32,
 }
 
+struct ChronikElectrumRPCMempoolEndpoint {
+    indexer: ChronikIndexerRef,
+    node: NodeRef,
+}
+
 fn get_version() -> String {
+    let client_name = ffi::client_name();
     let version_number = ffi::format_full_version();
-    format!("Bitcoin ABC {version_number}")
+    format!("{client_name} {version_number}")
+}
+
+impl ChronikElectrumRPCServerEndpoint {
+    async fn validate_peers(&self) -> Result<(), RPCError> {
+        let mut peers = self.peers.lock().await;
+
+        let check_protocol_features = async |peer: &ElectrumPeer,
+                                             feature_field: &str,
+                                             scheme: &str,
+                                             expected_port: i64|
+               -> bool {
+            let endpoint =
+                format!("{}://{}:{}", scheme, peer.ip_addr, expected_port);
+            let Ok(client) = (match ClientBuilder::new_with_codec(
+                endpoint,
+                ElectrumCodec {},
+            ) {
+                Ok(client) => {
+                    let client = match scheme {
+                        "tls" => {
+                            let root_store = RootCertStore {
+                                roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+                            };
+                            let tls_config = rustls::ClientConfig::builder()
+                                .with_root_certificates(root_store)
+                                .with_no_client_auth();
+                            let Ok(client) =
+                                client.tls_config(tls_config, &peer.url)
+                            else {
+                                return false;
+                            };
+                            client
+                        }
+                        _ => client,
+                    };
+                    client.build().await
+                }
+                Err(_) => {
+                    return false;
+                }
+            }) else {
+                return false;
+            };
+
+            let Ok(features): Result<Value, _> =
+                client.call("server.features", ()).await
+            else {
+                return false;
+            };
+
+            if !features.get("genesis_hash").is_some_and(|genesis| {
+                genesis
+                    .as_str()
+                    .is_some_and(|genesis| genesis == self.genesis_hash)
+            }) {
+                // The genesis doesn't match, the peer might be on another
+                // chain
+                return false;
+            };
+
+            features.get("hosts").is_some_and(|hosts| {
+                hosts.get(&peer.url).is_some_and(|host| {
+                    host.get(feature_field).is_some_and(|port| {
+                        if !port.is_i64() {
+                            return false;
+                        }
+                        port.as_i64().unwrap() == expected_port
+                    })
+                })
+            })
+        };
+
+        for peer in (*peers).as_mut_slice() {
+            if peer.tcp_port.is_none() && peer.ssl_port.is_none() {
+                // No tcp nor ssl, nothing to validate
+                continue;
+            }
+
+            // Check the ip is within the resolved url ips
+            let mut ip_found = false;
+            if let Ok(addrs) = format!("{}:0", peer.url).to_socket_addrs() {
+                for addr in addrs {
+                    ip_found |= addr.ip() == peer.ip_addr;
+                }
+            }
+            if !ip_found {
+                continue;
+            }
+
+            // Validate the tcp port is reachable and advertised properly
+            if let Some(port) = peer.tcp_port {
+                if !check_protocol_features(
+                    peer,
+                    "tcp_port",
+                    "tcp",
+                    port as i64,
+                )
+                .await
+                {
+                    peer.validated = false;
+                    continue;
+                }
+            }
+
+            // Repeat with the ssl port
+            if let Some(port) = peer.ssl_port {
+                if !check_protocol_features(
+                    peer,
+                    "ssl_port",
+                    "tls",
+                    port as i64,
+                )
+                .await
+                {
+                    peer.validated = false;
+                    continue;
+                }
+            }
+
+            // Everything was correct, validate the peer
+            peer.validated = true;
+        }
+
+        Ok(())
+    }
 }
 
 #[rpc_impl(name = "server")]
@@ -505,7 +691,15 @@ impl ChronikElectrumRPCServerEndpoint {
                 }
                 ChronikElectrumProtocol::Tls => {
                     protocol_ports
-                        .insert("tls_port".to_owned(), host.port().into());
+                        .insert("ssl_port".to_owned(), host.port().into());
+                }
+                ChronikElectrumProtocol::Ws => {
+                    protocol_ports
+                        .insert("ws_port".to_owned(), host.port().into());
+                }
+                ChronikElectrumProtocol::Wss => {
+                    protocol_ports
+                        .insert("wss_port".to_owned(), host.port().into());
                 }
             };
         }
@@ -527,8 +721,7 @@ impl ChronikElectrumRPCServerEndpoint {
     }
 
     async fn add_peer(&self, params: Value) -> Result<Value, RPCError> {
-        let mut peers =
-            self.peers.lock().map_err(|_| RPCError::InternalError)?;
+        let mut peers = self.peers.lock().await;
 
         // Limit the number of peers we can store. If the peers list is full
         // already, bail early
@@ -548,7 +741,7 @@ impl ChronikElectrumRPCServerEndpoint {
 
         // Mandatory params
         let Some(max_protocol_version) = features.remove("protocol_max") else {
-            return Ok(json!(false))
+            return Ok(json!(false));
         };
         let max_protocol_version: String = match max_protocol_version.as_str() {
             Some(max_protocol_version) => max_protocol_version.into(),
@@ -558,10 +751,10 @@ impl ChronikElectrumRPCServerEndpoint {
         };
 
         let Some(hosts) = features.remove("hosts") else {
-            return Ok(json!(false))
+            return Ok(json!(false));
         };
         let Some(hosts) = hosts.as_object() else {
-            return Ok(json!(false))
+            return Ok(json!(false));
         };
 
         if hosts.is_empty() {
@@ -584,7 +777,7 @@ impl ChronikElectrumRPCServerEndpoint {
 
             // We need a port to resolve the url, just use 0
             let Ok(mut addrs) = format!("{url}:0").to_socket_addrs() else {
-                return Ok(json!(false))
+                return Ok(json!(false));
             };
             // Use the first IPv4 if several are available, the first address
             // otherwise
@@ -597,7 +790,7 @@ impl ChronikElectrumRPCServerEndpoint {
             let tcp_port = match protocols.get("tcp_port") {
                 Some(tcp_port) => {
                     let Some(tcp_port) = tcp_port.as_i64() else {
-                        return Ok(json!(false))
+                        return Ok(json!(false));
                     };
                     match u16::try_from(tcp_port) {
                         Ok(tcp_port) => Some(tcp_port),
@@ -609,7 +802,7 @@ impl ChronikElectrumRPCServerEndpoint {
             let ssl_port = match protocols.get("ssl_port") {
                 Some(ssl_port) => {
                     let Some(ssl_port) = ssl_port.as_i64() else {
-                        return Ok(json!(false))
+                        return Ok(json!(false));
                     };
                     match u16::try_from(ssl_port) {
                         Ok(ssl_port) => Some(ssl_port),
@@ -642,7 +835,7 @@ impl ChronikElectrumRPCServerEndpoint {
     // must send no notifications.
     #[rpc_method(name = "peers.subscribe")]
     async fn peers_subscribe(&self, _params: Value) -> Result<Value, RPCError> {
-        let peers = self.peers.lock().map_err(|_| RPCError::InternalError)?;
+        let peers = self.peers.lock().await;
 
         let mut peers_data = Vec::new();
         for peer in &*peers {
@@ -750,7 +943,7 @@ async fn get_scripthash_history(
         // Return the confirmed txs in ascending block height order, with txs
         // ordered as they appear in the block
         let history = script_history
-            .confirmed_txs(
+            .confirmed_txs_no_spent_by(
                 GroupMember::MemberHash(script_hash).as_ref(),
                 page as usize,
                 MAX_HISTORY_PAGE_SIZE,
@@ -886,18 +1079,16 @@ async fn get_scripthash_status(
     }
 
     // Then compute the status
-    let mut status_parts = Vec::<String>::new();
+    let mut hasher = sha2::Sha256::new();
 
     for tx in tx_history {
         let tx_hash =
-            hex::encode(tx.txid.iter().copied().rev().collect::<Vec<u8>>());
+            hex::encode(tx.txid.into_iter().rev().collect::<Vec<u8>>());
         let height = tx.block.as_ref().unwrap().height;
-        status_parts.push(format!("{tx_hash}:{height}:"));
+        hasher.update(format!("{tx_hash}:{height}:"));
     }
 
-    let status_string = status_parts.join("");
-
-    Ok(Some(Sha256::digest(status_string.as_bytes()).hex_le()))
+    Ok(Some(Sha256(hasher.finalize().into()).hex_le()))
 }
 
 fn get_tx_fee(tx: &Tx) -> i64 {
@@ -925,9 +1116,8 @@ async fn header_hex_from_height(
     Ok(hex::encode(header.raw_header))
 }
 
-fn script_hash_to_sub_id(script_hash: Sha256) -> u32 {
-    let script_hash_bytes: [u8; 32] = script_hash.into();
-    let id_bytes: [u8; 4] = script_hash_bytes[..4].try_into().unwrap();
+fn hash_to_sub_id(hash_bytes: &[u8; 32]) -> u32 {
+    let id_bytes: [u8; 4] = hash_bytes[..4].try_into().unwrap();
 
     u32::from_le_bytes(id_bytes)
 }
@@ -970,6 +1160,15 @@ impl ChronikElectrumRPCBlockchainEndpoint {
         script_hash: Sha256,
         formatted_subscription: String,
     ) -> Result<Value, RPCError> {
+        let max_history = self.max_history;
+        let status = get_scripthash_status(
+            script_hash,
+            self.indexer.clone(),
+            self.node.clone(),
+            max_history,
+        )
+        .await?;
+
         let indexer = self.indexer.read().await;
         let mut subs: tokio::sync::RwLockWriteGuard<
             '_,
@@ -982,9 +1181,8 @@ impl ChronikElectrumRPCBlockchainEndpoint {
 
         let indexer_clone = self.indexer.clone();
         let node_clone = self.node.clone();
-        let max_history = self.max_history;
 
-        let sub_id = script_hash_to_sub_id(script_hash);
+        let sub_id = hash_to_sub_id(&script_hash.into());
         if let Ok(sub) = chan.new_subscription(&method, Some(sub_id)).await {
             tokio::spawn(async move {
                 log_chronik!("Subscription to electrum scripthash\n");
@@ -1002,7 +1200,7 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                     // - added to mempool
                     // - removed from mempool
                     // - confirmed
-                    if tx_msg.msg_type == TxMsgType::Finalized {
+                    if let TxMsgType::Finalized(_) = tx_msg.msg_type {
                         continue;
                     }
 
@@ -1036,14 +1234,6 @@ impl ChronikElectrumRPCBlockchainEndpoint {
             });
         }
 
-        let status = get_scripthash_status(
-            script_hash,
-            self.indexer.clone(),
-            self.node.clone(),
-            max_history,
-        )
-        .await?;
-
         Ok(serde_json::json!(status))
     }
 
@@ -1052,14 +1242,15 @@ impl ChronikElectrumRPCBlockchainEndpoint {
         indexer: &tokio::sync::RwLockReadGuard<'_, ChronikIndexer>,
         block_hash: Vec<u8>,
     ) -> Result<Vec<Sha256d>, RPCError> {
-        let bridge = &self.node.bridge;
-        let bindex = bridge
+        let bindex = self
+            .node
+            .bridge
             .lookup_block_index(
                 block_hash.try_into().map_err(|_| RPCError::InternalError)?,
             )
             .map_err(|_| RPCError::InternalError)?;
         let block = indexer
-            .load_chronik_block(bridge, bindex)
+            .load_chronik_block(&self.node, bindex)
             .map_err(|_| RPCError::InternalError)?;
 
         let txids: Vec<Sha256d> = block
@@ -1105,8 +1296,11 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                         break;
                     };
 
-                    if block_msg.msg_type != BlockMsgType::Connected {
-                        // We're only sending headers upon block connection.
+                    if !matches!(
+                        block_msg.msg_type,
+                        BlockMsgType::Connected | BlockMsgType::Disconnected
+                    ) {
+                        // We're only sending headers upon block dis/connection.
                         // At some point we might want to wait for block
                         // finalization instead, but this behavior would differ
                         // from Fulcrum.
@@ -1117,17 +1311,27 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                     let blocks: chronik_indexer::query::QueryBlocks<'_> =
                         indexer.blocks(&node_clone);
 
-                    match header_hex_from_height(&blocks, block_msg.height)
-                        .await
-                    {
+                    let height =
+                        if block_msg.msg_type == BlockMsgType::Disconnected {
+                            // Send the tip, so upon disconnection it's the
+                            // previous block
+                            block_msg.height - 1
+                        } else {
+                            block_msg.height
+                        };
+
+                    match header_hex_from_height(&blocks, height).await {
                         Err(err) => {
                             log_chronik!("{err}\n");
-                            break;
+                            // Under deep reorg conditions, the header might be
+                            // missing. In this case we simply skip sending it
+                            // so only the actual tip will be sent.
+                            continue;
                         }
                         Ok(header_hex) => {
                             if sub
                                 .notify(json!([{
-                                            "height": block_msg.height,
+                                            "height": height,
                                             "hex": header_hex,
                                 }]))
                                 .await
@@ -1218,6 +1422,82 @@ impl ChronikElectrumRPCBlockchainEndpoint {
             .await
     }
 
+    #[rpc_method(name = "transaction.subscribe")]
+    async fn transaction_subscribe(
+        &self,
+        chan: Arc<Channel>,
+        method: String,
+        params: Value,
+    ) -> Result<Value, RPCError> {
+        let txid_hex = get_param!(params, 0, "tx_hash")?;
+        let txid = TxId::try_from(&txid_hex)
+            .map_err(|err| RPCError::CustomError(1, err.to_string()))?;
+
+        let indexer = self.indexer.read().await;
+
+        // Subscribe
+        let mut subs: tokio::sync::RwLockWriteGuard<
+            '_,
+            chronik_indexer::subs::Subs,
+        > = indexer.subs().write().await;
+        let txid_subs = subs.subs_txid_mut();
+
+        let mut recv = txid_subs.subscribe_to_member(&txid);
+
+        let indexer_clone = self.indexer.clone();
+        let node_clone = self.node.clone();
+
+        let sub_id = hash_to_sub_id(txid.as_bytes());
+        if let Ok(sub) = chan.new_subscription(&method, Some(sub_id)).await {
+            tokio::spawn(async move {
+                log_chronik!("Subscription to electrum txid {txid_hex}\n");
+
+                loop {
+                    let Ok(tx_msg) = recv.recv().await else {
+                        // Error, disconnect
+                        break;
+                    };
+
+                    // We want all the events except finalization (this might
+                    // change in the future):
+                    // - added to mempool
+                    // - removed from mempool
+                    // - confirmed
+                    if let TxMsgType::Finalized(_) = tx_msg.msg_type {
+                        continue;
+                    }
+
+                    let indexer = indexer_clone.read().await;
+                    let txs = indexer.txs(&node_clone);
+                    let height = txs.tx_by_id(txid).ok().map(|tx| {
+                        if let Some(block) = tx.block {
+                            return block.height;
+                        }
+                        0
+                    });
+
+                    if sub.notify(json!([txid_hex, height,])).await.is_err() {
+                        // Don't log, it's likely a client unsubscription or
+                        // disconnection
+                        break;
+                    }
+                }
+
+                log_chronik!("Unsubscription from electrum txid {txid_hex}\n");
+            });
+        }
+
+        let txs = indexer.txs(&self.node);
+        let height = txs.tx_by_id(txid).ok().map(|tx| {
+            if let Some(block) = tx.block {
+                return block.height;
+            }
+            0
+        });
+
+        Ok(json!(height))
+    }
+
     #[rpc_method(name = "scripthash.unsubscribe")]
     async fn scripthash_unsubscribe(
         &self,
@@ -1237,7 +1517,7 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                 RPCError::CustomError(1, "Invalid scripthash".to_string())
             })?;
 
-        let sub_id = script_hash_to_sub_id(script_hash);
+        let sub_id = hash_to_sub_id(&script_hash.into());
         let success = chan.remove_subscription(&sub_id).await.is_ok();
         Ok(serde_json::json!(success))
     }
@@ -1258,7 +1538,25 @@ impl ChronikElectrumRPCBlockchainEndpoint {
 
         let script_hash = address_to_scripthash(&address)?;
 
-        let sub_id = script_hash_to_sub_id(script_hash);
+        let sub_id = hash_to_sub_id(&script_hash.into());
+        let success = chan.remove_subscription(&sub_id).await.is_ok();
+        Ok(serde_json::json!(success))
+    }
+
+    #[rpc_method(name = "transaction.unsubscribe")]
+    async fn transaction_unsubscribe(
+        &self,
+        chan: Arc<Channel>,
+        _method: String,
+        params: Value,
+    ) -> Result<Value, RPCError> {
+        check_max_number_of_params!(params, 1);
+
+        let txid_hex = get_param!(params, 0, "tx_hash")?;
+        let txid = TxId::try_from(&txid_hex)
+            .map_err(|err| RPCError::CustomError(1, err.to_string()))?;
+
+        let sub_id = hash_to_sub_id(txid.as_bytes());
         let success = chan.remove_subscription(&sub_id).await.is_ok();
         Ok(serde_json::json!(success))
     }
@@ -1373,6 +1671,7 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                 start_height,
                 start_height + count - 1,
                 checkpoint_height,
+                false,
             )
             .await
             .map_err(|_| RPCError::InternalError)?;
@@ -1421,12 +1720,14 @@ impl ChronikElectrumRPCBlockchainEndpoint {
                 "Invalid raw_tx argument; expected hex string".to_string(),
             )),
         }?;
-        let raw_tx = Bytes::from(hex::decode(raw_tx).map_err(|_err| {
-            RPCError::CustomError(
-                1,
-                "Failed to decode raw_tx as a hex string".to_string(),
-            )
-        })?);
+        let raw_tx = Bytes::from(hex::decode(raw_tx).map_err(
+            |_err: hex::FromHexError| {
+                RPCError::CustomError(
+                    1,
+                    "Failed to decode raw_tx as a hex string".to_string(),
+                )
+            },
+        )?);
 
         let max_fee = ffi::calc_fee(
             raw_tx.len(),
@@ -1480,27 +1781,89 @@ impl ChronikElectrumRPCBlockchainEndpoint {
         if blockchaininfo.is_err() {
             return Err(RPCError::InternalError);
         }
+
+        // Some of the verbose fields are not directly accessible via chronik
+        // and are not implemented. They are annotated as comments in the code
+        // below.
+        let inputs: Vec<Value> = tx
+            .inputs
+            .iter()
+            .map(|input| {
+                if tx.is_coinbase {
+                    json!({
+                        "coinbase": hex::encode(&input.input_script),
+                        "sequence": input.sequence_no,
+                    })
+                } else {
+                    let prev_out = input.prev_out.clone().unwrap_or_default();
+                    let prev_txid = TxId::try_from(prev_out.txid.as_slice())
+                        .unwrap_or_default()
+                        .to_string();
+                    json!({
+                        "txid": prev_txid,
+                        "vout": prev_out.out_idx,
+                        "scriptSig": json!({
+                            // "asm": ,
+                            "hex": hex::encode(&input.input_script),
+                        }),
+                        "sequence": input.sequence_no,
+                    })
+                }
+            })
+            .collect();
+        let outputs: Vec<Value> = tx
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                json!({
+                    "value": output.sats as f64 / 100.0,
+                    "n": index,
+                    "scriptPubKey": json!({
+                        // "asm": ,
+                        "hex": hex::encode(&output.output_script),
+                        // "reqSigs": ,
+                        // "type": ,
+                        // "addresses": ,
+                    }),
+                })
+            })
+            .collect();
+
+        // The tx is in the mempool, there is no block info
         if tx.block.is_none() {
             // mempool transaction
             return Ok(json!({
-                "confirmations": 0,
-                "hash": txid.to_string(),
                 "hex": raw_tx,
+                "txid": txid.to_string(),
+                "hash": txid.to_string(),
+                "size": tx.size,
+                "version": tx.version,
+                "locktime": tx.lock_time,
+                "vin": inputs,
+                "vout": outputs,
+                "confirmations": 0,
                 "time": tx.time_first_seen,
             }));
         }
+
         let block = tx.block.unwrap();
         let blockhash = Sha256::from_le_slice(block.hash.as_ref()).unwrap();
         let confirmations =
             blockchaininfo.ok().unwrap().tip_height - block.height + 1;
-        // TODO: more verbose fields, inputs, outputs
-        //      (but for now only "confirmations" is used in Electrum ABC)
+
         Ok(json!({
-            "blockhash": blockhash.hex_be(),
-            "blocktime": block.timestamp,
-            "confirmations": confirmations,
-            "hash": txid.to_string(),
             "hex": raw_tx,
+            "txid": txid.to_string(),
+            "hash": txid.to_string(),
+            "size": tx.size,
+            "version": tx.version,
+            "locktime": tx.lock_time,
+            "vin": inputs,
+            "vout": outputs,
+            "blockhash": blockhash.hex_be(),
+            "confirmations": confirmations,
+            "blocktime": block.timestamp,
             "time": tx.time_first_seen,
         }))
     }
@@ -1860,7 +2223,7 @@ impl ChronikElectrumRPCBlockchainEndpoint {
 
         let indexer = self.indexer.read().await;
         let script_utxos = indexer
-            .script_utxos()
+            .script_utxos(&self.node)
             .map_err(|_| RPCError::InternalError)?;
         let script = match script_utxos.script(
             GroupMember::MemberHash(script_hash),
@@ -2229,5 +2592,130 @@ impl ChronikElectrumRPCBlockchainEndpoint {
             .tip_height;
 
         self.header_get(json!([tip_height.to_string()])).await
+    }
+
+    #[rpc_method(name = "utxo.get_info")]
+    async fn utxo_get_info(&self, params: Value) -> Result<Value, RPCError> {
+        check_max_number_of_params!(params, 2);
+
+        let txid_hex = get_param!(params, 0, "tx_hash")?;
+        let txid = TxId::try_from(&txid_hex)
+            .map_err(|err| RPCError::CustomError(1, err.to_string()))?;
+
+        let out_n_err_msg = "Invalid tx out number: expected a value >= 0 and \
+                             <= 4294967295"
+            .to_string();
+        let out_n = match get_param!(params, 1, "out_n")? {
+            Value::Number(n) => match n.as_i64() {
+                Some(n) if (0..=4294967295).contains(&n) => usize::try_from(n)
+                    .map_err(|_| RPCError::CustomError(1, out_n_err_msg)),
+                _ => Err(RPCError::CustomError(1, out_n_err_msg)),
+            },
+            _ => Err(RPCError::CustomError(1, out_n_err_msg)),
+        }?;
+
+        let indexer = self.indexer.read().await;
+        let txs = indexer.txs(&self.node);
+        let tx = match txs.tx_by_id(txid) {
+            Ok(tx) => tx,
+            // The txid doesn't exist
+            Err(_) => return Ok(Value::Null),
+        };
+
+        if out_n >= tx.outputs.len() {
+            // No such output in that transaction
+            return Ok(Value::Null);
+        }
+
+        let output = &tx.outputs[out_n];
+        if output.spent_by.is_some() {
+            // This output is spent
+            return Ok(Value::Null);
+        }
+
+        let script_hash = Sha256::digest(&output.output_script).hex_be();
+
+        match tx.block {
+            // The tx is confirmed
+            Some(block) => Ok(json!({
+                "confirmed_height": block.height,
+                "scripthash": script_hash,
+                "value": output.sats,
+            })),
+            None => Ok(json!({
+                "scripthash": script_hash,
+                "value": output.sats,
+            })),
+        }
+    }
+}
+
+#[rpc_impl(name = "mempool")]
+impl ChronikElectrumRPCMempoolEndpoint {
+    async fn get_fee_histogram(
+        &self,
+        params: Value,
+    ) -> Result<Value, RPCError> {
+        check_max_number_of_params!(params, 0);
+
+        let indexer = self.indexer.read().await;
+        let mempool_txs = indexer.mempool().txs();
+
+        let mut feerate_info: Vec<(u64, u64)> =
+            Vec::with_capacity(mempool_txs.len());
+        for txid in mempool_txs.keys() {
+            let mut feerate: i64 = 0;
+            let mut vsize: u32 = 0;
+
+            if self.node.bridge.get_feerate_info(
+                *txid.as_bytes(),
+                &mut feerate,
+                &mut vsize,
+            ) {
+                if feerate < 0 {
+                    // Clamp the feerate lowest bound to 0.
+                    feerate = 0;
+                }
+                // Convert the feerate to sat/B
+                feerate_info.push(((feerate / 1000) as u64, vsize as u64));
+            }
+        }
+
+        if feerate_info.is_empty() {
+            return Ok(json!([]));
+        }
+
+        // Sort by decreasing feerate
+        feerate_info.sort_by(|a: &(u64, u64), b| b.0.cmp(&a.0));
+
+        // Find the lowest power of 2 that is greater than the max fee rate,
+        // with 1 as a minimum.
+        let mut max_feerate =
+            cmp::max(1, feerate_info[0].0.next_power_of_two());
+
+        // Build the intervals from highest fee rate to lowest, by using powers
+        // of 2 down to 1. Initialze with zero as a cumulative vsize.
+        let mut histogram = vec![[max_feerate, 0]];
+        while max_feerate > 1 {
+            max_feerate /= 2;
+            histogram.push([max_feerate, 0]);
+        }
+
+        // Fill up the histogram with txs cumulative vsize
+        let mut histo_index = histogram.len() - 1;
+        for (feerate, vsize) in feerate_info.into_iter().rev() {
+            // Because the vector is sorted and the first interval is guaranteed
+            // greater or equal to the max feerate, the histo_index > 0 check is
+            // actually redundant and only here for good measure.
+            while feerate > histogram[histo_index][0] && histo_index > 0 {
+                histo_index -= 1;
+            }
+            histogram[histo_index][1] += vsize;
+        }
+
+        // Remove the empty intervals
+        histogram.retain(|interval| interval[1] > 0);
+
+        Ok(json!(histogram))
     }
 }

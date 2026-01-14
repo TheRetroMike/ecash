@@ -13,7 +13,6 @@
 #include <streams.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <version.h>
 
 #include <univalue.h>
 
@@ -88,18 +87,20 @@ CScript ParseScript(const std::string &s) {
             (w.front() == '-' && w.size() > 1 &&
              std::all_of(w.begin() + 1, w.end(), ::IsDigit))) {
             // Number
-            int64_t n = atoi64(w);
+            const auto num{ToIntegral<int64_t>(w)};
 
-            // limit the range of numbers ParseScript accepts in decimal
-            // since numbers outside -0xFFFFFFFF...0xFFFFFFFF are illegal in
-            // scripts
-            if (n > int64_t{0xffffffff} || n < -1 * int64_t{0xffffffff}) {
-                throw std::runtime_error("script parse error: decimal numeric "
-                                         "value only allowed in the "
-                                         "range -0xFFFFFFFF...0xFFFFFFFF");
+            // Limit the range of numbers ParseScript accepts in decimal
+            // since numbers outside -0x7FFFFFFFFFFFFFFF...0x7FFFFFFFFFFFFFFF
+            // are illegal in scripts.
+            // This means, only the int64_t -0x8000000000000000 is illegal.
+            if (!num.has_value() ||
+                num == std::numeric_limits<int64_t>::min()) {
+                throw std::runtime_error(
+                    "script parse error: decimal numeric value only allowed in "
+                    "the range -0x7FFFFFFFFFFFFFFF...0x7FFFFFFFFFFFFFFF");
             }
 
-            result << n;
+            result << num.value();
             goto next;
         }
 
@@ -201,7 +202,7 @@ bool DecodeHexTx(CMutableTransaction &tx, const std::string &strHexTx) {
 
     std::vector<uint8_t> txData(ParseHex(strHexTx));
 
-    CDataStream ssData(txData, SER_NETWORK, PROTOCOL_VERSION);
+    DataStream ssData{txData};
     try {
         ssData >> tx;
         if (ssData.eof()) {
@@ -220,7 +221,7 @@ bool DecodeHexBlockHeader(CBlockHeader &header, const std::string &hex_header) {
     }
 
     const std::vector<uint8_t> header_data{ParseHex(hex_header)};
-    CDataStream ser_header(header_data, SER_NETWORK, PROTOCOL_VERSION);
+    DataStream ser_header{header_data};
     try {
         ser_header >> header;
     } catch (const std::exception &) {
@@ -235,7 +236,7 @@ bool DecodeHexBlk(CBlock &block, const std::string &strHexBlk) {
     }
 
     std::vector<uint8_t> blockData(ParseHex(strHexBlk));
-    CDataStream ssBlock(blockData, SER_NETWORK, PROTOCOL_VERSION);
+    DataStream ssBlock{blockData};
     try {
         ssBlock >> block;
     } catch (const std::exception &) {

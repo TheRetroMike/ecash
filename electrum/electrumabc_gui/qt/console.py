@@ -5,7 +5,7 @@ import re
 import sys
 import traceback
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from qtpy import QtCore, QtGui, QtWidgets
 
 from electrumabc import util
 from electrumabc.i18n import _
@@ -45,13 +45,11 @@ class ConsoleWarningOverlay(QtWidgets.QWidget):
     QLabel, QLabel link {{
         border-radius: {0}px;
     }}
-    """.format(
-        BORDER_RADIUS
-    )
+    """.format(BORDER_RADIUS)
 
     CONFIRM_TEXT = _("I UNDERSTAND THE RISK").upper()
 
-    acknowledged = QtCore.pyqtSignal(bool)
+    acknowledged = QtCore.Signal(bool)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -91,7 +89,8 @@ class ConsoleWarningOverlay(QtWidgets.QWidget):
 
         warning_label = QtWidgets.QLabel(warning_text)
         warning_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.MinimumExpanding
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
         )
         warning_label.setWordWrap(True)
         warning_label.setOpenExternalLinks(True)
@@ -109,7 +108,7 @@ class ConsoleWarningOverlay(QtWidgets.QWidget):
         hbox_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(hbox_layout)
 
-        fixed = QtWidgets.QSizePolicy.Fixed
+        fixed = QtWidgets.QSizePolicy.Policy.Fixed
         hbox_layout.addSpacerItem(
             QtWidgets.QSpacerItem(self.BORDER_RADIUS, 0, fixed, fixed)
         )
@@ -137,14 +136,14 @@ class ConsoleWarningOverlay(QtWidgets.QWidget):
         """
         return self.input_edit.text().strip().upper() == self.CONFIRM_TEXT
 
-    @QtCore.pyqtSlot()
+    @QtCore.Slot()
     def on_text_changed(self):
         """
         Enables the confirm button when the input text matches
         """
         self.confirm_btn.setEnabled(self.input_ok())
 
-    @QtCore.pyqtSlot()
+    @QtCore.Slot()
     def on_confirm(self):
         """
         Closes the dialog if the input text matches
@@ -254,7 +253,7 @@ class Console(QtWidgets.QWidget):
             blur_effect = QtWidgets.QGraphicsBlurEffect()
             blur_effect.setBlurRadius(5)
             self.editor.setGraphicsEffect(blur_effect)
-            self.editor.setFocusPolicy(QtCore.Qt.NoFocus)
+            self.editor.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             self.editor.setFocusProxy(self.warningOverlay)
 
             def on_acknowledged(dontaskagain: bool):

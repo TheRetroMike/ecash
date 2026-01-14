@@ -4,18 +4,17 @@
 
 #include <kernel/mempool_persist.h>
 
-#include <clientversion.h>
 #include <consensus/amount.h>
 #include <logging.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
-#include <shutdown.h>
 #include <streams.h>
 #include <sync.h>
 #include <txmempool.h>
 #include <uint256.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
+#include <util/signalinterrupt.h>
 #include <util/time.h>
 #include <validation.h>
 
@@ -43,8 +42,7 @@ bool LoadMempool(CTxMemPool &pool, const fs::path &load_path,
         return false;
     }
 
-    FILE *filestr{mockable_fopen_function(load_path, "rb")};
-    CAutoFile file(filestr, SER_DISK, CLIENT_VERSION);
+    AutoFile file{mockable_fopen_function(load_path, "rb")};
     if (file.IsNull()) {
         LogPrintf(
             "Failed to open mempool file from disk. Continuing anyway.\n");
@@ -105,7 +103,7 @@ bool LoadMempool(CTxMemPool &pool, const fs::path &load_path,
                 ++expired;
             }
 
-            if (ShutdownRequested()) {
+            if (active_chainstate.m_chainman.m_interrupt) {
                 return false;
             }
         }
@@ -164,12 +162,10 @@ bool DumpMempool(const CTxMemPool &pool, const fs::path &dump_path,
     auto mid = SteadyClock::now();
 
     try {
-        FILE *filestr{mockable_fopen_function(dump_path + ".new", "wb")};
-        if (!filestr) {
+        AutoFile file{mockable_fopen_function(dump_path + ".new", "wb")};
+        if (file.IsNull()) {
             return false;
         }
-
-        CAutoFile file(filestr, SER_DISK, CLIENT_VERSION);
 
         uint64_t version = MEMPOOL_DUMP_VERSION;
         file << version;

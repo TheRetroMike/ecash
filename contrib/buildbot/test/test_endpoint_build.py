@@ -5,12 +5,12 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 import json
-import test.mocks.teamcity
 import unittest
-from test.abcbot_fixture import ABCBotFixture
 
 import requests
 
+import test.mocks.teamcity
+from test.abcbot_fixture import ABCBotFixture
 from testutil import AnyWith
 
 
@@ -21,7 +21,7 @@ class buildRequestQuery:
 
     def __str__(self):
         return "?{}".format(
-            "&".join("{}={}".format(key, value) for key, value in self.__dict__.items())
+            "&".join(f"{key}={value}" for key, value in self.__dict__.items())
         )
 
 

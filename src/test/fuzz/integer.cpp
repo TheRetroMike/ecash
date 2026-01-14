@@ -33,10 +33,10 @@
 #include <util/chaintype.h>
 #include <util/check.h>
 #include <util/moneystr.h>
+#include <util/overflow.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
-#include <version.h>
 
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
@@ -97,7 +97,6 @@ FUZZ_TARGET_INIT(integer, initialize_integer) {
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
     const std::vector<uint256> v256{u256, u256_min, u256_max};
     (void)ComputeMerkleRoot(v256);
-    (void)CountBits(u64);
     (void)DecompressAmount(u64);
     (void)FormatISO8601Date(i64);
     (void)FormatISO8601DateTime(i64);
@@ -198,7 +197,7 @@ FUZZ_TARGET_INIT(integer, initialize_integer) {
     }
 
     {
-        CDataStream stream(SER_NETWORK, INIT_PROTO_VERSION);
+        DataStream stream{};
 
         uint256 deserialized_u256;
         stream << u256;
@@ -263,7 +262,7 @@ FUZZ_TARGET_INIT(integer, initialize_integer) {
     }
 
     {
-        CDataStream stream(SER_NETWORK, INIT_PROTO_VERSION);
+        DataStream stream{};
 
         ser_writedata64(stream, u64);
         const uint64_t deserialized_u64 = ser_readdata64(stream);
@@ -291,7 +290,7 @@ FUZZ_TARGET_INIT(integer, initialize_integer) {
     }
 
     {
-        CDataStream stream(SER_NETWORK, INIT_PROTO_VERSION);
+        DataStream stream{};
 
         WriteCompactSize(stream, u64);
         try {

@@ -6,13 +6,14 @@ import { decodeCashAddress } from 'ecashaddrjs';
 import WebSocket from 'isomorphic-ws';
 import * as ws from 'ws';
 import * as proto from '../proto/chronik';
-import { FailoverProxy, appendWsUrls } from './failoverProxy';
+import { appendWsUrls, FailoverProxy } from './failoverProxy';
 import { fromHex, toHex, toHexRev } from './hex';
 import {
     isValidWsSubscription,
     verifyLokadId,
     verifyPluginSubscription,
     verifyTokenId,
+    verifyTxid,
 } from './validation';
 
 type MessageEvent = ws.MessageEvent | { data: Blob };
@@ -150,44 +151,124 @@ export class ChronikClient {
 
     /**
      * Broadcasts the `rawTx` on the network.
+     *
      * If `skipTokenChecks` is false, it will be checked that the tx doesn't burn
      * any tokens before broadcasting.
+     *
+     * NB this method DOES NOT wait for finalization
      */
     public async broadcastTx(
         rawTx: Uint8Array | string,
         skipTokenChecks = false,
-    ): Promise<{ txid: string }> {
-        const request = proto.BroadcastTxRequest.encode({
-            rawTx: typeof rawTx === 'string' ? fromHex(rawTx) : rawTx,
-            skipTokenChecks,
-        }).finish();
-        const data = await this._proxyInterface.post('/broadcast-tx', request);
-        const broadcastResponse = proto.BroadcastTxResponse.decode(data);
-        return {
-            txid: toHexRev(broadcastResponse.txid),
-        };
+    ): Promise<BroadcastTxResponse> {
+        return await this._broadcastTxRequest(rawTx, 0, skipTokenChecks);
     }
 
     /**
      * Broadcasts the `rawTxs` on the network, only if all of them are valid.
+     *
      * If `skipTokenChecks` is false, it will be checked that the txs don't burn
      * any tokens before broadcasting.
+     *
+     * NB this method DOES NOT wait for finalization
      */
     public async broadcastTxs(
         rawTxs: (Uint8Array | string)[],
         skipTokenChecks = false,
-    ): Promise<{ txids: string[] }> {
+    ): Promise<BroadcastTxsResponse> {
+        return await this._broadcastTxsRequest(rawTxs, 0, skipTokenChecks);
+    }
+
+    /**
+     * Broadcasts the `rawTx` on the network.
+     *
+     * Wait for the tx to finalize by default. Allow user customization of finalizationTimeoutSecs.
+     *
+     * If `skipTokenChecks` is false, it will be checked that the tx doesn't burn
+     * any tokens before broadcasting.
+     */
+    public async broadcastAndFinalizeTx(
+        rawTx: Uint8Array | string,
+        // Default to 120s (chronik default)
+        finalizationTimeoutSecs = 120,
+        skipTokenChecks = false,
+    ): Promise<{ txid: string }> {
+        if (finalizationTimeoutSecs <= 0) {
+            throw new Error(
+                'Use broadcastTx if you do not want to wait for finalization.',
+            );
+        }
+        return await this._broadcastTxRequest(
+            rawTx,
+            finalizationTimeoutSecs,
+            skipTokenChecks,
+        );
+    }
+
+    /**
+     * Broadcasts the `rawTxs` on the network, only if all of them are valid.
+     *
+     * Wait for the txs to finalize by default. Allow user customization of finalizationTimeoutSecs.
+     *
+     * If `skipTokenChecks` is false, it will be checked that the txs don't burn
+     * any tokens before broadcasting.
+     */
+    public async broadcastAndFinalizeTxs(
+        rawTxs: (Uint8Array | string)[],
+        // Default to 120s (chronik default)
+        finalizationTimeoutSecs = 120,
+        skipTokenChecks = false,
+    ): Promise<BroadcastTxsResponse> {
+        if (finalizationTimeoutSecs <= 0) {
+            throw new Error(
+                'Use broadcastTxs if you do not want to wait for finalization.',
+            );
+        }
+        return await this._broadcastTxsRequest(
+            rawTxs,
+            finalizationTimeoutSecs,
+            skipTokenChecks,
+        );
+    }
+
+    /**
+     * Private method to standardize method API calls for broadcasting txs for
+     * both broadcastTx and broadcastAndFinalizeTx.
+     */
+    private async _broadcastTxRequest(
+        rawTx: Uint8Array | string,
+        finalizationTimeoutSecs: number,
+        skipTokenChecks: boolean,
+    ): Promise<BroadcastTxResponse> {
+        const request = proto.BroadcastTxRequest.encode({
+            rawTx: typeof rawTx === 'string' ? fromHex(rawTx) : rawTx,
+            skipTokenChecks,
+            finalizationTimeoutSecs: BigInt(finalizationTimeoutSecs),
+        }).finish();
+        const data = await this._proxyInterface.post('/broadcast-tx', request);
+        const broadcastResponse = proto.BroadcastTxResponse.decode(data);
+        return convertToBroadcastTxResponse(broadcastResponse);
+    }
+
+    /**
+     * Private method to standardize method API calls for broadcasting txs for
+     * both broadcastTxs and broadcastAndFinalizeTxs.
+     */
+    private async _broadcastTxsRequest(
+        rawTxs: (Uint8Array | string)[],
+        finalizationTimeoutSecs: number,
+        skipTokenChecks: boolean,
+    ): Promise<BroadcastTxsResponse> {
         const request = proto.BroadcastTxsRequest.encode({
             rawTxs: rawTxs.map(rawTx =>
                 typeof rawTx === 'string' ? fromHex(rawTx) : rawTx,
             ),
+            finalizationTimeoutSecs: BigInt(finalizationTimeoutSecs),
             skipTokenChecks,
         }).finish();
         const data = await this._proxyInterface.post('/broadcast-txs', request);
         const broadcastResponse = proto.BroadcastTxsResponse.decode(data);
-        return {
-            txids: broadcastResponse.txids.map(toHexRev),
-        };
+        return convertToBroadcastTxsResponse(broadcastResponse);
     }
 
     /**
@@ -243,6 +324,17 @@ export class ChronikClient {
         );
         const blockTxs = proto.TxHistoryPage.decode(data);
         return convertToTxHistoryPage(blockTxs);
+    }
+
+    /**
+     * Fetch unconfirmed transactions from the mempool.
+     *
+     * NB this endpoint is NOT paginated, even though it does return the TxHistoryPage shape
+     */
+    public async unconfirmedTxs(): Promise<TxHistoryPage> {
+        const data = await this._proxyInterface.get(`/unconfirmed-txs`);
+        const unconfirmedTxs = proto.TxHistoryPage.decode(data);
+        return convertToTxHistoryPage(unconfirmedTxs);
     }
 
     /**
@@ -382,15 +474,12 @@ export class ScriptEndpoint {
 
     /**
      * Fetches the unconfirmed tx history of this script, in chronological order.
-     * @param page Page index of the tx history.
-     * @param pageSize Number of txs per page.
+     *
+     * NB this endpoint is NOT paginated, even though it does return the TxHistoryPage shape
      */
-    public async unconfirmedTxs(
-        page = 0, // Get the first page if unspecified
-        pageSize = 25, // Must be less than 200, let server handle error as server setting could change
-    ): Promise<TxHistoryPage> {
+    public async unconfirmedTxs(): Promise<TxHistoryPage> {
         const data = await this._proxyInterface.get(
-            `/script/${this._scriptType}/${this._scriptPayload}/unconfirmed-txs?page=${page}&page_size=${pageSize}`,
+            `/script/${this._scriptType}/${this._scriptPayload}/unconfirmed-txs`,
         );
         const historyPage = proto.TxHistoryPage.decode(data);
         return {
@@ -469,15 +558,12 @@ export class TokenIdEndpoint {
 
     /**
      * Fetches the unconfirmed tx history of this tokenId, in chronological order.
-     * @param page Page index of the tx history.
-     * @param pageSize Number of txs per page.
+     *
+     * NB this endpoint is NOT paginated, even though it does return the TxHistoryPage shape
      */
-    public async unconfirmedTxs(
-        page = 0, // Get the first page if unspecified
-        pageSize = 25, // Must be less than 200, let server handle error as server setting could change
-    ): Promise<TxHistoryPage> {
+    public async unconfirmedTxs(): Promise<TxHistoryPage> {
         const data = await this._proxyInterface.get(
-            `/token-id/${this._tokenId}/unconfirmed-txs?page=${page}&page_size=${pageSize}`,
+            `/token-id/${this._tokenId}/unconfirmed-txs`,
         );
         const historyPage = proto.TxHistoryPage.decode(data);
         return {
@@ -554,15 +640,12 @@ export class LokadIdEndpoint {
 
     /**
      * Fetches the unconfirmed tx history of this tokenId, in chronological order.
-     * @param page Page index of the tx history.
-     * @param pageSize Number of txs per page.
+     *
+     * NB this endpoint is NOT paginated, even though it does return the TxHistoryPage shape
      */
-    public async unconfirmedTxs(
-        page = 0, // Get the first page if unspecified
-        pageSize = 25, // Must be less than 200, let server handle error as server setting could change
-    ): Promise<TxHistoryPage> {
+    public async unconfirmedTxs(): Promise<TxHistoryPage> {
         const data = await this._proxyInterface.get(
-            `/lokad-id/${this._lokadId}/unconfirmed-txs?page=${page}&page_size=${pageSize}`,
+            `/lokad-id/${this._lokadId}/unconfirmed-txs`,
         );
         const historyPage = proto.TxHistoryPage.decode(data);
         return {
@@ -671,16 +754,12 @@ export class PluginEndpoint {
     /**
      * Fetches the unconfirmed tx history of this groupHex for this plugin, in chronological order.
      * @param groupHex group as a lowercase hex string
-     * @param page Page index of the tx history.
-     * @param pageSize Number of txs per page.
+     *
+     * NB this endpoint is NOT paginated, even though it does return the TxHistoryPage shape
      */
-    public async unconfirmedTxs(
-        groupHex: string,
-        page = 0, // Get the first page if unspecified
-        pageSize = 25, // Must be less than 200, let server handle error as server setting could change
-    ): Promise<TxHistoryPage> {
+    public async unconfirmedTxs(groupHex: string): Promise<TxHistoryPage> {
         const data = await this._proxyInterface.get(
-            `/plugin/${this._pluginName}/${groupHex}/unconfirmed-txs?page=${page}&page_size=${pageSize}`,
+            `/plugin/${this._pluginName}/${groupHex}/unconfirmed-txs`,
         );
         const historyPage = proto.TxHistoryPage.decode(data);
         return {
@@ -761,9 +840,11 @@ export class WsEndpoint {
         this.subs = {
             scripts: [],
             tokens: [],
+            txids: [],
             lokadIds: [],
             plugins: [],
             blocks: false,
+            txs: false,
         };
         this._proxyInterface = proxyInterface;
     }
@@ -791,6 +872,26 @@ export class WsEndpoint {
         this.subs.blocks = false;
         if (this.ws?.readyState === WebSocket.OPEN) {
             this._subUnsubBlocks(true);
+        }
+    }
+
+    /**
+     * Subscribe to all tx messages
+     */
+    public subscribeToTxs() {
+        this.subs.txs = true;
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this._subUnsubTxs(false);
+        }
+    }
+
+    /**
+     * Unsubscribe from all tx messages
+     */
+    public unsubscribeFromTxs() {
+        this.subs.txs = false;
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this._subUnsubTxs(true);
         }
     }
 
@@ -980,6 +1081,40 @@ export class WsEndpoint {
         }
     }
 
+    /** Subscribe to a txid */
+    public subscribeToTxid(txid: string) {
+        verifyTxid(txid);
+
+        // Update ws.subs to include this txid
+        this.subs.txids.push(txid);
+
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            // Send subscribe msg to chronik server
+            this._subUnsubTxid(false, txid);
+        }
+    }
+
+    /** Unsubscribe from the given txid */
+    public unsubscribeFromTxid(txid: string) {
+        // Find the requested unsub txid and remove it
+        const unsubIndex = this.subs.txids.findIndex(
+            thisTxid => thisTxid === txid,
+        );
+        if (unsubIndex === -1) {
+            // If we cannot find this subscription in this.subs.txids, throw an error
+            // We do not want an app developer thinking they have unsubscribed from something if no action happened
+            throw new Error(`No existing sub to txid "${txid}"`);
+        }
+
+        // Remove the requested txid subscription from this.subs.txids
+        this.subs.txids.splice(unsubIndex, 1);
+
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            // Send unsubscribe msg to chronik server
+            this._subUnsubTxid(true, txid);
+        }
+    }
+
     /**
      * Close the WebSocket connection and prevent any future reconnection
      * attempts.
@@ -989,12 +1124,66 @@ export class WsEndpoint {
         this.ws?.close();
     }
 
+    /**
+     * Pause the WebSocket connection by disabling auto-reconnect and closing
+     * the connection. Useful when the app is backgrounded to save resources.
+     *
+     * Because we cannot predict the behavior of mobile operating systems handling
+     * websocket connections, it is better for the app developer to manually handle.
+     *
+     * We provide standard methods to accomplish this.
+     */
+    public pause() {
+        this.autoReconnect = false;
+        if (this.ws) {
+            // Note we DO NOT set manuallyClosed to true here, unlike the
+            // public close() method, because we plan to re-open the websocket,
+            // and we do not want to cycle through the failover proxy servers.
+            this.ws.close();
+        }
+    }
+
+    /**
+     * Resume the WebSocket connection by re-enabling auto-reconnect and
+     * reconnecting if the connection is closed. Useful when the app comes
+     * to foreground.
+     */
+    public async resume() {
+        // Don't resume if websocket was manually closed
+        if (this.manuallyClosed) {
+            return;
+        }
+        this.autoReconnect = true;
+        // If the connection is closed, reconnect
+        if (
+            !this.ws ||
+            this.ws.readyState === WebSocket.CLOSING ||
+            this.ws.readyState === WebSocket.CLOSED
+        ) {
+            await this._proxyInterface.connectWs(this);
+            await this.connected;
+        }
+    }
+
     private _subUnsubBlocks(isUnsub: boolean) {
         // Blocks subscription is empty object
         const BLOCKS_SUBSCRIPTION: proto.WsSubBlocks = {};
         const encodedSubscription = proto.WsSub.encode({
             isUnsub,
             blocks: BLOCKS_SUBSCRIPTION,
+        }).finish();
+        if (this.ws === undefined) {
+            throw new Error('Invalid state; _ws is undefined');
+        }
+        this.ws.send(encodedSubscription);
+    }
+
+    private _subUnsubTxs(isUnsub: boolean) {
+        // Txs subscription is empty object
+        const TXS_SUBSCRIPTION: proto.WsSubTxs = {};
+        const encodedSubscription = proto.WsSub.encode({
+            isUnsub,
+            txs: TXS_SUBSCRIPTION,
         }).finish();
         if (this.ws === undefined) {
             throw new Error('Invalid state; _ws is undefined');
@@ -1051,6 +1240,21 @@ export class WsEndpoint {
         this.ws.send(encodedSubscription);
     }
 
+    private _subUnsubTxid(isUnsub: boolean, txid: string) {
+        const encodedSubscription = proto.WsSub.encode({
+            isUnsub,
+            txid: {
+                txid: txid,
+            },
+        }).finish();
+
+        if (this.ws === undefined) {
+            throw new Error('Invalid state; _ws is undefined');
+        }
+
+        this.ws.send(encodedSubscription);
+    }
+
     private _subUnsubPlugin(isUnsub: boolean, plugin: WsSubPluginClient) {
         const encodedSubscription = proto.WsSub.encode({
             isUnsub,
@@ -1097,11 +1301,18 @@ export class WsEndpoint {
             }
             this.onMessage(msgBlock);
         } else if (typeof msg.tx !== 'undefined') {
-            this.onMessage({
+            const txMsg: MsgTxClient = {
                 type: 'Tx',
                 msgType: convertToTxMsgType(msg.tx.msgType),
                 txid: toHexRev(msg.tx.txid),
-            });
+            };
+            if (typeof msg.tx.finalizationReason !== 'undefined') {
+                txMsg.finalizationReasonType =
+                    convertToTxFinalizationReasonType(
+                        msg.tx.finalizationReason.finalizationType,
+                    );
+            }
+            this.onMessage(txMsg);
         } else {
             console.log('Silently ignored unknown Chronik message:', msg);
         }
@@ -1483,6 +1694,27 @@ function convertToTxMsgType(msgType: proto.TxMsgType): TxMsgType {
     return 'UNRECOGNIZED';
 }
 
+function isTxMsgType(msgType: any): msgType is TxMsgType {
+    return TX_MSG_TYPES.includes(msgType);
+}
+
+// Add converter and type guards for tx finalization reason
+function convertToTxFinalizationReasonType(
+    reason: proto.TxFinalizationReasonType,
+): TxFinalizationReasonType {
+    const reasonStr = proto.txFinalizationReasonTypeToJSON(reason);
+    if (isTxFinalizationReasonType(reasonStr)) {
+        return reasonStr;
+    }
+    return 'UNRECOGNIZED';
+}
+
+function isTxFinalizationReasonType(
+    reason: any,
+): reason is TxFinalizationReasonType {
+    return TX_FINALIZATION_REASON_TYPES.includes(reason);
+}
+
 function convertToTokenInfo(tokenInfo: proto.TokenInfo): TokenInfo {
     if (typeof tokenInfo.tokenType === 'undefined') {
         // Not expected to ever happen
@@ -1548,10 +1780,6 @@ function convertToGenesisInfo(
     return returnedGenesisInfo;
 }
 
-function isTxMsgType(msgType: any): msgType is TxMsgType {
-    return TX_MSG_TYPES.includes(msgType);
-}
-
 function convertToCoinbaseData(coinbaseData: proto.CoinbaseData): CoinbaseData {
     const returnedCoinbaseData: CoinbaseData = {
         scriptsig: toHex(coinbaseData.coinbaseScriptsig),
@@ -1559,6 +1787,22 @@ function convertToCoinbaseData(coinbaseData: proto.CoinbaseData): CoinbaseData {
     };
 
     return returnedCoinbaseData;
+}
+
+function convertToBroadcastTxResponse(
+    broadcastResponse: proto.BroadcastTxResponse,
+): BroadcastTxResponse {
+    return {
+        txid: toHexRev(broadcastResponse.txid),
+    };
+}
+
+function convertToBroadcastTxsResponse(
+    broadcastResponse: proto.BroadcastTxsResponse,
+): BroadcastTxsResponse {
+    return {
+        txids: broadcastResponse.txids.map(toHexRev),
+    };
 }
 
 /** Info about connected chronik server */
@@ -2032,6 +2276,8 @@ export interface MsgTxClient {
     msgType: TxMsgType;
     /** Txid of the tx (human-readable big-endian) */
     txid: string;
+    /** If the tx is finalized, why it was finalized */
+    finalizationReasonType?: TxFinalizationReasonType;
 }
 
 /** Tx message types that can come from chronik */
@@ -2040,6 +2286,7 @@ export type TxMsgType =
     | 'TX_REMOVED_FROM_MEMPOOL'
     | 'TX_CONFIRMED'
     | 'TX_FINALIZED'
+    | 'TX_INVALIDATED'
     | 'UNRECOGNIZED';
 
 const TX_MSG_TYPES: TxMsgType[] = [
@@ -2047,6 +2294,19 @@ const TX_MSG_TYPES: TxMsgType[] = [
     'TX_REMOVED_FROM_MEMPOOL',
     'TX_CONFIRMED',
     'TX_FINALIZED',
+    'TX_INVALIDATED',
+    'UNRECOGNIZED',
+];
+
+/** Reasons a tx can be finalized by Avalanche */
+export type TxFinalizationReasonType =
+    | 'TX_FINALIZATION_REASON_POST_CONSENSUS'
+    | 'TX_FINALIZATION_REASON_PRE_CONSENSUS'
+    | 'UNRECOGNIZED';
+
+const TX_FINALIZATION_REASON_TYPES: TxFinalizationReasonType[] = [
+    'TX_FINALIZATION_REASON_POST_CONSENSUS',
+    'TX_FINALIZATION_REASON_PRE_CONSENSUS',
     'UNRECOGNIZED',
 ];
 
@@ -2153,8 +2413,20 @@ interface WsSubscriptions {
     tokens: string[];
     /** Subscriptions to lokadIds */
     lokadIds: string[];
+    /** Subscriptions to txids */
+    txids: string[];
     /** Subscriptions to plugins */
     plugins: WsSubPluginClient[];
     /** Subscription to blocks */
     blocks: boolean;
+    /** Subscription to all txs */
+    txs: boolean;
+}
+
+interface BroadcastTxResponse {
+    txid: string;
+}
+
+interface BroadcastTxsResponse {
+    txids: string[];
 }

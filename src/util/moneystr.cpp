@@ -14,7 +14,7 @@ std::string FormatMoney(const Amount amt) {
     // Note: not using straight sprintf here because we do NOT want localized
     // number formatting.
     Amount amt_abs = amt > Amount::zero() ? amt : -amt;
-    const auto currency = Currency::get();
+    const auto &currency = Currency::get();
     std::string str =
         strprintf("%d.%0*d", amt_abs / currency.baseunit, currency.decimals,
                   (amt_abs % currency.baseunit) / currency.subunit);
@@ -82,7 +82,8 @@ bool ParseMoney(const std::string &money_string, Amount &nRet) {
         return false;
     }
 
-    Amount nWhole = atoi64(strWhole) * currency.baseunit;
+    Amount nWhole =
+        LocaleIndependentAtoi<int64_t>(strWhole) * currency.baseunit;
 
     nRet = nWhole + Amount(nUnits);
     return true;

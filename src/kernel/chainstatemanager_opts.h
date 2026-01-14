@@ -8,8 +8,11 @@
 #include <kernel/notifications_interface.h>
 
 #include <arith_uint256.h>
+#include <avalanche/avalanche.h>
 #include <dbwrapper.h>
 #include <primitives/blockhash.h>
+#include <script/scriptcache.h>
+#include <script/sigcache.h>
 #include <txdb.h>
 #include <util/time.h>
 
@@ -21,7 +24,9 @@ class Config;
 
 static constexpr bool DEFAULT_CHECKPOINTS_ENABLED{true};
 static constexpr auto DEFAULT_MAX_TIP_AGE{24h};
+static constexpr int DEFAULT_STOPATHEIGHT{0};
 static constexpr bool DEFAULT_STORE_RECENT_HEADERS_TIME{false};
+static constexpr bool DEFAULT_PARK_DEEP_REORG{true};
 
 namespace kernel {
 
@@ -37,6 +42,8 @@ struct ChainstateManagerOpts {
         nullptr};
     std::optional<bool> check_block_index{};
     bool checkpoints_enabled{DEFAULT_CHECKPOINTS_ENABLED};
+    bool park_deep_reorg{DEFAULT_PARK_DEEP_REORG};
+    bool automatic_unparking{!AVALANCHE_DEFAULT_ENABLED};
     //! If set, it will override the minimum work we will assume exists on some
     //! valid chain.
     std::optional<arith_uint256> minimum_chain_work{};
@@ -50,6 +57,12 @@ struct ChainstateManagerOpts {
     DBOptions coins_db{};
     CoinsViewOptions coins_view{};
     Notifications &notifications;
+    size_t script_execution_cache_bytes{DEFAULT_SCRIPT_EXECUTION_CACHE_BYTES};
+    size_t signature_cache_bytes{DEFAULT_SIGNATURE_CACHE_BYTES};
+    int stop_at_height{DEFAULT_STOPATHEIGHT};
+    //! If set, this overwrites the timestamp at which replay protection
+    //! activates.
+    std::optional<int64_t> replay_protection_activation_time{};
 
     //! If set, store and load the last few block headers reception time to
     //! speed up RTT bootstraping

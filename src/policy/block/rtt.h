@@ -7,8 +7,10 @@
 
 #include <policy/block/parkingpolicy.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 class CBlockIndex;
 

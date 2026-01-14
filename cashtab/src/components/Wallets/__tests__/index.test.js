@@ -4,7 +4,7 @@
 
 import React from 'react';
 import {
-    walletWithXecAndTokens,
+    walletWithXecAndTokensActive,
     populatedContactList,
 } from 'components/App/fixtures/mocks';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -19,10 +19,12 @@ import {
     prepareMockedChronikCallsForWallet,
     clearLocalForage,
 } from 'components/App/fixtures/helpers';
-import { validSavedWallets } from 'components/App/fixtures/mocks';
+import {
+    validActiveWallets,
+    validSavedWallets,
+} from 'components/App/fixtures/mocks';
 import CashtabTestWrapper from 'components/App/fixtures/CashtabTestWrapper';
 import * as bip39 from 'bip39';
-import { cashtabWalletsFromJSON } from 'helpers';
 import { Ecc } from 'ecash-lib';
 
 describe('<Wallets />', () => {
@@ -57,7 +59,7 @@ describe('<Wallets />', () => {
     it('We can add a savedWallet as a contact', async () => {
         // localforage defaults
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
 
@@ -68,11 +70,11 @@ describe('<Wallets />', () => {
 
         // Add a new saved wallet that can be rendered
         const addedSavedWalletContact = {
-            address: savedWallet.paths.get(1899).address,
+            address: savedWallet.address,
             name: savedWallet.name,
         };
         await localforage.setItem('wallets', [
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             savedWallet,
         ]);
 
@@ -113,17 +115,17 @@ describe('<Wallets />', () => {
     it('We can copy the address of a savedWallet to the clipboard', async () => {
         // localforage defaults
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
 
         // Custom contact list
         await localforage.setItem('contactList', populatedContactList);
 
-        const savedWallet = validSavedWallets[0];
+        const savedWallet = validActiveWallets[0];
 
         await localforage.setItem('wallets', [
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             savedWallet,
         ]);
 
@@ -160,17 +162,17 @@ describe('<Wallets />', () => {
     it('We can rename the active wallet or a saved wallet, we can add a wallet, we can import a wallet, we can delete a wallet', async () => {
         // localforage defaults
         const mockedChronik = await initializeCashtabStateForTests(
-            walletWithXecAndTokens,
+            walletWithXecAndTokensActive,
             localforage,
         );
 
         // Add 5 valid saved wallets with no state
         await localforage.setItem(
             'wallets',
-            [walletWithXecAndTokens].concat(validSavedWallets),
+            [walletWithXecAndTokensActive].concat(validSavedWallets),
         );
 
-        const walletToBeActivatedLaterInTest = validSavedWallets.find(
+        const walletToBeActivatedLaterInTest = validActiveWallets.find(
             wallet => wallet.name === 'bravo',
         );
 
@@ -311,21 +313,17 @@ describe('<Wallets />', () => {
         );
 
         // nor is it in localforage
-        const walletsNow = cashtabWalletsFromJSON(
-            await localforage.getItem('wallets'),
+        const walletsNow = await localforage.getItem('wallets');
+
+        const activeWalletAddress = await localforage.getItem(
+            'activeWalletAddress',
         );
 
-        const expectedWalletsNow = [
-            ...[walletWithXecAndTokens].concat(validSavedWallets),
-        ];
-        // The active wallet has been renamed
-        expectedWalletsNow[0].name = 'ACTIVE WALLET';
-        // We no longer have wallet alpha -- delete it
-        const alphaIndex = expectedWalletsNow.findIndex(
-            wallet => wallet.name === 'alpha',
+        const renamedWallet = walletsNow.find(
+            wallet => wallet.name === 'ACTIVE WALLET',
         );
-        expectedWalletsNow.splice(alphaIndex, 1);
-        expect(walletsNow).toEqual(expectedWalletsNow);
+        expect(renamedWallet).toBeDefined();
+        expect(renamedWallet.address).toBe(activeWalletAddress);
 
         // We can add a wallet without specifying any mnemonic
         await user.click(
@@ -336,17 +334,21 @@ describe('<Wallets />', () => {
 
         // Wallet added success notification
         expect(
-            await screen.findByText(`New wallet "qrj4p" added to wallets`),
+            await screen.findByText(`New wallet "qrj...mua" added to wallets`),
         ).toBeInTheDocument();
 
         // We see the new wallet
-        expect((await screen.findAllByText('qrj4p'))[1]).toBeInTheDocument();
+        expect(
+            (await screen.findAllByText('qrj...mua'))[1],
+        ).toBeInTheDocument();
 
         // It is added to the end of the wallets array
         // It will be organized alphabetically when the user refreshes and loadCashtabState runs
         // We want it added at the end so it's easy for a user to see what wallet was just added
         const walletsAfterAdd = await localforage.getItem('wallets');
-        expect(walletsAfterAdd[walletsAfterAdd.length - 1].name).toBe('qrj4p');
+        expect(walletsAfterAdd[walletsAfterAdd.length - 1].name).toBe(
+            'qrj...mua',
+        );
 
         // We can import a wallet by specifying a mnemonic
         await user.click(
@@ -400,7 +402,7 @@ describe('<Wallets />', () => {
         // Wallet imported success toast
         expect(
             await screen.findByText(
-                `New imported wallet "qzxep" added to your saved wallets`,
+                `New imported wallet "qzx...l7c" added to your saved wallets`,
             ),
         ).toBeInTheDocument();
 
@@ -410,14 +412,16 @@ describe('<Wallets />', () => {
         ).not.toBeInTheDocument();
 
         // We see the new wallet
-        expect((await screen.findAllByText('qzxep'))[1]).toBeInTheDocument();
+        expect(
+            (await screen.findAllByText('qzx...l7c'))[1],
+        ).toBeInTheDocument();
 
         // It is added to the end of the wallets array
         // It will be organized alphabetically when the user refreshes and loadCashtabState runs
         // We want it added at the end so it's easy for a user to see what wallet was just added
         const walletsAfterImport = await localforage.getItem('wallets');
         expect(walletsAfterImport[walletsAfterImport.length - 1].name).toBe(
-            'qzxep',
+            'qzx...l7c',
         );
 
         // The modal will be closed after a successful import
@@ -454,7 +458,7 @@ describe('<Wallets />', () => {
         // Wallet imported failure toast
         expect(
             await screen.findByText(
-                `Cannot import: wallet already exists (name: "qzxep")`,
+                `Cannot import: wallet already exists (name: "qzx...l7c")`,
             ),
         ).toBeInTheDocument();
 
@@ -488,7 +492,7 @@ describe('<Wallets />', () => {
         // We get the once-in-a-blue-moon modal error
         expect(
             await screen.findByText(
-                `By a vanishingly small chance, "qrj4p" already existed in saved wallets. Please try again.`,
+                `By a vanishingly small chance, "qrj...mua" already existed in saved wallets. Please try again.`,
             ),
         ).toBeInTheDocument();
     });

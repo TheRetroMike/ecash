@@ -101,7 +101,7 @@ public:
         connect(&timer, &QTimer::timeout, [this] { func(); });
         timer.start(millis);
     }
-    ~QtRPCTimerBase() {}
+    ~QtRPCTimerBase() = default;
 
 private:
     QTimer timer;
@@ -110,7 +110,7 @@ private:
 
 class QtRPCTimerInterface : public RPCTimerInterface {
 public:
-    ~QtRPCTimerInterface() {}
+    ~QtRPCTimerInterface() = default;
     const char *Name() override { return "Qt"; }
     RPCTimerBase *NewTimer(std::function<void()> &func,
                            int64_t millis) override {
@@ -234,7 +234,8 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node *node,
                                         }
                                     }
                                     subelement =
-                                        lastResult[atoi(curarg.c_str())];
+                                        lastResult[LocaleIndependentAtoi<int>(
+                                            curarg.c_str())];
                                 } else if (lastResult.isObject()) {
                                     subelement = lastResult.find_value(curarg);
                                 } else {

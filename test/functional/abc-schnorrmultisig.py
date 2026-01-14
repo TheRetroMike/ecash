@@ -52,9 +52,6 @@ SCHNORR_LEGACY_MULTISIG_ERROR = (
     " CHECKMULTISIG)"
 )
 
-# Blocks with invalid scripts give this error:
-BADINPUTS_ERROR = "blk-bad-inputs"
-
 
 class SchnorrMultisigTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -75,26 +72,24 @@ class SchnorrMultisigTest(BitcoinTestFramework):
         block_height = node.getblockcount()
         blockhash = node.getblockhash(block_height)
         block = FromHex(CBlock(), node.getblock(blockhash, 0))
-        block.calc_sha256()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def build_block(self, parent, transactions=(), nTime=None):
         """Make a new block with an OP_1 coinbase output.
 
         Requires parent to have its height registered."""
-        parent.calc_sha256()
-        block_height = self.block_heights[parent.sha256] + 1
+        block_height = self.block_heights[parent.hash_int] + 1
         block_time = (parent.nTime + 1) if nTime is None else nTime
 
         block = create_block(
-            parent.sha256,
+            parent.hash_int,
             create_coinbase(block_height),
             block_time,
             txlist=transactions,
         )
         block.solve()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def check_for_ban_on_rejected_tx(self, tx, reject_reason=None):
@@ -163,13 +158,12 @@ class SchnorrMultisigTest(BitcoinTestFramework):
             txfund = create_tx_with_script(
                 spendfrom, 0, b"", amount=value, script_pub_key=script
             )
-            txfund.rehash()
             fundings.append(txfund)
 
             # Spend transaction
             txspend = CTransaction()
             txspend.vout.append(CTxOut(value - 1000, CScript([OP_TRUE])))
-            txspend.vin.append(CTxIn(COutPoint(txfund.sha256, 0), b""))
+            txspend.vin.append(CTxIn(COutPoint(txfund.txid_int, 0), b""))
 
             # Sign the transaction
             sighashtype = SIGHASH_ALL | SIGHASH_FORKID
@@ -180,7 +174,6 @@ class SchnorrMultisigTest(BitcoinTestFramework):
             elif sigtype == "ecdsa":
                 txsig = private_key.sign_ecdsa(sighash) + hashbyte
             txspend.vin[0].scriptSig = CScript([dummy, txsig])
-            txspend.rehash()
 
             return txspend
 
@@ -201,11 +194,11 @@ class SchnorrMultisigTest(BitcoinTestFramework):
 
         self.log.info("Send a legacy ECDSA multisig into mempool.")
         node.p2ps[0].send_txs_and_test([ecdsa0tx], node)
-        assert_equal(node.getrawmempool(), [ecdsa0tx.hash])
+        assert_equal(node.getrawmempool(), [ecdsa0tx.txid_hex])
 
         self.log.info("Trying to mine a non-null-dummy ECDSA.")
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [ecdsa1tx]), BADINPUTS_ERROR
+            self.build_block(tip, [ecdsa1tx]), ECDSA_NULLDUMMY_ERROR
         )
         self.log.info(
             "If we try to submit it by mempool or RPC, it is rejected and we are banned"
@@ -217,12 +210,14 @@ class SchnorrMultisigTest(BitcoinTestFramework):
 
         self.log.info("Submitting a Schnorr-multisig via net, and mining it in a block")
         node.p2ps[0].send_txs_and_test([schnorr1tx], node)
-        assert_equal(set(node.getrawmempool()), {ecdsa0tx.hash, schnorr1tx.hash})
+        assert_equal(
+            set(node.getrawmempool()), {ecdsa0tx.txid_hex, schnorr1tx.txid_hex}
+        )
         tip = self.build_block(tip, [schnorr1tx])
         node.p2ps[0].send_blocks_and_test([tip], node)
 
         self.log.info("That legacy ECDSA multisig is still in mempool, let's mine it")
-        assert_equal(node.getrawmempool(), [ecdsa0tx.hash])
+        assert_equal(node.getrawmempool(), [ecdsa0tx.txid_hex])
         tip = self.build_block(tip, [ecdsa0tx])
         node.p2ps[0].send_blocks_and_test([tip], node)
         assert_equal(node.getrawmempool(), [])
@@ -230,7 +225,7 @@ class SchnorrMultisigTest(BitcoinTestFramework):
         self.log.info("Trying Schnorr in legacy multisig is invalid and banworthy.")
         self.check_for_ban_on_rejected_tx(schnorr0tx, SCHNORR_LEGACY_MULTISIG_ERROR)
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [schnorr0tx]), BADINPUTS_ERROR
+            self.build_block(tip, [schnorr0tx]), SCHNORR_LEGACY_MULTISIG_ERROR
         )
 
 

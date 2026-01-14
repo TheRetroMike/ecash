@@ -8,12 +8,12 @@ use std::{collections::HashMap, time::Duration};
 
 use abc_rust_error::Result;
 use axum::extract::ws::{self, WebSocket};
-use bitcoinsuite_core::script::ScriptVariant;
+use bitcoinsuite_core::{script::ScriptVariant, tx::TxId};
 use bitcoinsuite_slp::{lokad_id::LokadId, token_id::TokenId};
 use chronik_db::plugins::PluginMember;
 use chronik_indexer::{
     subs::{BlockMsg, BlockMsgType},
-    subs_group::{TxMsg, TxMsgType},
+    subs_group::{TxFinalizationReason, TxMsg, TxMsgType},
 };
 use chronik_plugin::data::PluginGroup;
 use chronik_proto::proto;
@@ -61,6 +61,8 @@ struct WsSub {
 
 enum WsSubType {
     Blocks,
+    Txs,
+    TxId(TxId),
     Script(ScriptVariant),
     TokenId(TokenId),
     LokadId(LokadId),
@@ -68,6 +70,8 @@ enum WsSubType {
 }
 
 type SubRecvBlocks = Option<broadcast::Receiver<BlockMsg>>;
+type SubRecvTxs = Option<broadcast::Receiver<TxMsg>>;
+type SubRecvTxIds = HashMap<TxId, broadcast::Receiver<TxMsg>>;
 type SubRecvScripts = HashMap<ScriptVariant, broadcast::Receiver<TxMsg>>;
 type SubRecvTokenId = HashMap<TokenId, broadcast::Receiver<TxMsg>>;
 type SubRecvLokadId = HashMap<LokadId, broadcast::Receiver<TxMsg>>;
@@ -75,6 +79,8 @@ type SubRecvPluginGroups = HashMap<PluginGroup, broadcast::Receiver<TxMsg>>;
 
 struct SubRecv {
     blocks: SubRecvBlocks,
+    txs: SubRecvTxs,
+    txids: SubRecvTxIds,
     scripts: SubRecvScripts,
     token_ids: SubRecvTokenId,
     lokad_ids: SubRecvLokadId,
@@ -87,6 +93,8 @@ impl SubRecv {
         tokio::select! {
             biased;
             action = Self::recv_blocks(&mut self.blocks) => action,
+            action = Self::recv_txs(&mut self.txs) => action,
+            action = Self::recv_txids(&mut self.txids) => action,
             action = Self::recv_scripts(&mut self.scripts) => action,
             action = Self::recv_token_ids(&mut self.token_ids) => action,
             action = Self::recv_lokad_ids(&mut self.lokad_ids) => action,
@@ -99,6 +107,25 @@ impl SubRecv {
         match blocks {
             Some(blocks) => sub_block_msg_action(blocks.recv().await),
             None => futures::future::pending().await,
+        }
+    }
+
+    async fn recv_txs(txs: &mut SubRecvTxs) -> Result<WsAction> {
+        match txs {
+            Some(txs) => sub_tx_msg_action(txs.recv().await),
+            None => futures::future::pending().await,
+        }
+    }
+
+    async fn recv_txids(txids: &mut SubRecvTxIds) -> Result<WsAction> {
+        if txids.is_empty() {
+            futures::future::pending().await
+        } else {
+            let txids_receivers = select_all(
+                txids.values_mut().map(|receiver| Box::pin(receiver.recv())),
+            );
+            let (tx_msg, _, _) = txids_receivers.await;
+            sub_tx_msg_action(tx_msg)
         }
     }
 
@@ -189,6 +216,29 @@ impl SubRecv {
                     if self.blocks.is_none() {
                         self.blocks = Some(subs.sub_to_block_msgs());
                     }
+                }
+            }
+            WsSubType::Txs => {
+                if sub.is_unsub {
+                    log_chronik!("WS unsubscribe from all txs\n");
+                    self.txs = None;
+                } else {
+                    log_chronik!("WS subscribe to all txs\n");
+                    // Silently ignore multiple subs to all txs
+                    if self.txs.is_none() {
+                        self.txs = Some(subs.sub_to_tx_msgs());
+                    }
+                }
+            }
+            WsSubType::TxId(txid) => {
+                if sub.is_unsub {
+                    log_chronik!("WS unsubscribe from txid {txid}\n");
+                    std::mem::drop(self.txids.remove(&txid));
+                    subs.subs_txid_mut().unsubscribe_from_member(&txid)
+                } else {
+                    log_chronik!("WS subscribe to txid {txid}\n");
+                    let recv = subs.subs_txid_mut().subscribe_to_member(&txid);
+                    self.txids.insert(txid, recv);
                 }
             }
             WsSubType::Script(script_variant) => {
@@ -298,6 +348,9 @@ fn sub_client_msg_action(
                 sub_type: match sub.sub_type {
                     None => return Err(MissingSubType.into()),
                     Some(SubType::Blocks(_)) => WsSubType::Blocks,
+                    Some(SubType::Txid(txid)) => {
+                        WsSubType::TxId(txid.txid.parse::<TxId>()?)
+                    }
                     Some(SubType::Script(script)) => {
                         WsSubType::Script(parse_script_variant(
                             &script.script_type,
@@ -313,6 +366,7 @@ fn sub_client_msg_action(
                     Some(SubType::Plugin(plugin)) => {
                         WsSubType::PluginGroup(plugin.plugin_name, plugin.group)
                     }
+                    Some(SubType::Txs(_)) => WsSubType::Txs,
                 },
             }))
         }
@@ -368,20 +422,33 @@ fn sub_block_msg_action(
 fn sub_tx_msg_action(
     tx_msg: Result<TxMsg, broadcast::error::RecvError>,
 ) -> Result<WsAction> {
-    use proto::{ws_msg::MsgType, TxMsgType::*};
+    use proto::{ws_msg::MsgType, TxFinalizationReasonType::*, TxMsgType::*};
     let tx_msg = match tx_msg {
         Ok(tx_msg) => tx_msg,
         Err(_) => return Ok(WsAction::Nothing),
     };
-    let tx_msg_type = match tx_msg.msg_type {
-        TxMsgType::AddedToMempool => TxAddedToMempool,
-        TxMsgType::RemovedFromMempool => TxRemovedFromMempool,
-        TxMsgType::Confirmed => TxConfirmed,
-        TxMsgType::Finalized => TxFinalized,
+    let (tx_msg_type, finalization_reason) = match tx_msg.msg_type {
+        TxMsgType::AddedToMempool => (TxAddedToMempool, None),
+        TxMsgType::RemovedFromMempool => (TxRemovedFromMempool, None),
+        TxMsgType::Confirmed => (TxConfirmed, None),
+        TxMsgType::Finalized(TxFinalizationReason::PostConsensus) => (
+            TxFinalized,
+            Some(proto::TxFinalizationReason {
+                finalization_type: TxFinalizationReasonPostConsensus as _,
+            }),
+        ),
+        TxMsgType::Finalized(TxFinalizationReason::PreConsensus) => (
+            TxFinalized,
+            Some(proto::TxFinalizationReason {
+                finalization_type: TxFinalizationReasonPreConsensus as _,
+            }),
+        ),
+        TxMsgType::Invalidated => (TxInvalidated, None),
     };
     let msg_type = Some(MsgType::Tx(proto::MsgTx {
         msg_type: tx_msg_type as _,
         txid: tx_msg.txid.to_vec(),
+        finalization_reason,
     }));
     let msg_proto = proto::WsMsg { msg_type };
     let msg = ws::Message::Binary(msg_proto.encode_to_vec());
@@ -397,6 +464,8 @@ pub async fn handle_subscribe_socket(
 ) {
     let mut recv = SubRecv {
         blocks: Default::default(),
+        txs: Default::default(),
+        txids: Default::default(),
         scripts: Default::default(),
         token_ids: Default::default(),
         lokad_ids: Default::default(),

@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the getavalanchepeerinfo RPC."""
+
 from random import choice
 
 from test_framework.avatools import (
@@ -97,7 +98,6 @@ class GetAvalanchePeerInfoTest(BitcoinTestFramework):
         avapeerinfo = node.getavalanchepeerinfo(proofid=uint256_hex(target_proofid))
         assert_equal(len(avapeerinfo), 1)
         assert_equal(avapeerinfo[0]["proof"], target_proof)
-
 
     def run_test(self):
         self.test_proofs_and_nodecounts()

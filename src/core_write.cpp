@@ -120,8 +120,12 @@ std::string ScriptToAsmStr(const CScript &script,
         }
 
         if (0 <= opcode && opcode <= OP_PUSHDATA4) {
-            if (vch.size() <= static_cast<std::vector<uint8_t>::size_type>(4)) {
-                str += strprintf("%d", CScriptNum(vch, false).getint());
+            if (CScriptNum::IsMinimallyEncoded(vch, MAX_SCRIPTNUM_BYTE_SIZE)) {
+                // Only render decimal number if minimally encoded and <8 bytes.
+                // Avoids rendering legitimate byte strings as decimal number.
+                str += strprintf(
+                    "%d",
+                    CScriptNum(vch, false, MAX_SCRIPTNUM_BYTE_SIZE).getint());
             } else {
                 // the IsUnspendable check makes sure not to try to decode
                 // OP_RETURN data that may match the format of a signature
@@ -166,8 +170,8 @@ std::string ScriptToAsmStr(const CScript &script,
     return str;
 }
 
-std::string EncodeHexTx(const CTransaction &tx, const int serializeFlags) {
-    CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION | serializeFlags);
+std::string EncodeHexTx(const CTransaction &tx) {
+    DataStream ssTx{};
     ssTx << tx;
     return HexStr(ssTx);
 }
@@ -215,15 +219,16 @@ void ScriptPubKeyToUniv(const CScript &scriptPubKey, UniValue &out,
 }
 
 void TxToUniv(const CTransaction &tx, const BlockHash &hashBlock,
-              UniValue &entry, bool include_hex, int serialize_flags,
-              const CTxUndo *txundo) {
+              UniValue &entry, bool include_hex, const CTxUndo *txundo,
+              TxVerbosity verbosity,
+              std::function<bool(const CTxOut &)> is_change_func) {
     entry.pushKV("txid", tx.GetId().GetHex());
     entry.pushKV("hash", tx.GetHash().GetHex());
     // Transaction version is actually unsigned in consensus checks, just
     // signed in memory, so cast to unsigned before giving it to the user.
     entry.pushKV("version",
                  static_cast<int64_t>(static_cast<uint32_t>(tx.nVersion)));
-    entry.pushKV("size", (int)::GetSerializeSize(tx, PROTOCOL_VERSION));
+    entry.pushKV("size", (int)::GetSerializeSize(tx));
     entry.pushKV("locktime", (int64_t)tx.nLockTime);
 
     UniValue vin{UniValue::VARR};
@@ -231,7 +236,7 @@ void TxToUniv(const CTransaction &tx, const BlockHash &hashBlock,
     // If available, use Undo data to calculate the fee. Note that
     // txundo == nullptr for coinbase transactions and for transactions where
     // undo data is unavailable.
-    const bool calculate_fee = txundo != nullptr;
+    const bool have_undo = txundo != nullptr;
     Amount amt_total_in = Amount::zero();
     Amount amt_total_out = Amount::zero();
 
@@ -246,17 +251,37 @@ void TxToUniv(const CTransaction &tx, const BlockHash &hashBlock,
             UniValue o(UniValue::VOBJ);
             o.pushKV("asm", ScriptToAsmStr(txin.scriptSig, true));
             o.pushKV("hex", HexStr(txin.scriptSig));
-            in.pushKV("scriptSig", o);
+            in.pushKV("scriptSig", std::move(o));
         }
-        if (calculate_fee) {
-            const CTxOut &prev_txout = txundo->vprevout[i].GetTxOut();
+        if (have_undo) {
+            const Coin &prev_coin = txundo->vprevout[i];
+            const CTxOut &prev_txout = prev_coin.GetTxOut();
+
             amt_total_in += prev_txout.nValue;
+            switch (verbosity) {
+                case TxVerbosity::SHOW_TXID:
+                case TxVerbosity::SHOW_DETAILS:
+                    break;
+
+                case TxVerbosity::SHOW_DETAILS_AND_PREVOUT:
+                    UniValue o_script_pub_key(UniValue::VOBJ);
+                    ScriptPubKeyToUniv(prev_txout.scriptPubKey,
+                                       o_script_pub_key, /*fIncludeHex=*/true);
+
+                    UniValue p(UniValue::VOBJ);
+                    p.pushKV("generated", bool(prev_coin.IsCoinBase()));
+                    p.pushKV("height", uint64_t(prev_coin.GetHeight()));
+                    p.pushKV("value", prev_txout.nValue);
+                    p.pushKV("scriptPubKey", std::move(o_script_pub_key));
+                    in.pushKV("prevout", std::move(p));
+                    break;
+            }
         }
         in.pushKV("sequence", (int64_t)txin.nSequence);
-        vin.push_back(in);
+        vin.push_back(std::move(in));
     }
 
-    entry.pushKV("vin", vin);
+    entry.pushKV("vin", std::move(vin));
 
     UniValue vout(UniValue::VARR);
     for (unsigned int i = 0; i < tx.vout.size(); i++) {
@@ -269,17 +294,22 @@ void TxToUniv(const CTransaction &tx, const BlockHash &hashBlock,
 
         UniValue o(UniValue::VOBJ);
         ScriptPubKeyToUniv(txout.scriptPubKey, o, true);
-        out.pushKV("scriptPubKey", o);
-        vout.push_back(out);
+        out.pushKV("scriptPubKey", std::move(o));
 
-        if (calculate_fee) {
+        if (is_change_func && is_change_func(txout)) {
+            out.pushKV("ischange", true);
+        }
+
+        vout.push_back(std::move(out));
+
+        if (have_undo) {
             amt_total_out += txout.nValue;
         }
     }
 
-    entry.pushKV("vout", vout);
+    entry.pushKV("vout", std::move(vout));
 
-    if (calculate_fee) {
+    if (have_undo) {
         const Amount fee = amt_total_in - amt_total_out;
         CHECK_NONFATAL(MoneyRange(fee));
         entry.pushKV("fee", fee);
@@ -292,6 +322,6 @@ void TxToUniv(const CTransaction &tx, const BlockHash &hashBlock,
     if (include_hex) {
         // The hex-encoded transaction. Used the name "hex" to be consistent
         // with the verbose output of "getrawtransaction".
-        entry.pushKV("hex", EncodeHexTx(tx, serialize_flags));
+        entry.pushKV("hex", EncodeHexTx(tx));
     }
 }

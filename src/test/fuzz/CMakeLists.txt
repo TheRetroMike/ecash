@@ -33,7 +33,6 @@ add_executable(fuzz EXCLUDE_FROM_ALL
 	crypto_aes256.cpp
 	crypto_aes256cbc.cpp
 	crypto_chacha20.cpp
-	crypto_chacha20_poly1305_aead.cpp
 	crypto_common.cpp
 	crypto_hkdf_hmac_sha256_l32.cpp
 	crypto_poly1305.cpp
@@ -61,6 +60,8 @@ add_executable(fuzz EXCLUDE_FROM_ALL
 	net.cpp
 	net_permissions.cpp
 	netaddress.cpp
+	node_eviction.cpp
+	overflow.cpp
 	p2p_transport_deserializer.cpp
 	parse_hd_keypath.cpp
 	parse_iso8601.cpp

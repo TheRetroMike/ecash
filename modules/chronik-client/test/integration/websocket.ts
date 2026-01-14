@@ -44,6 +44,15 @@ describe('Test expected websocket behavior of chronik-client', () => {
     let get_coinbase_out_value: Promise<number>;
     let get_coinbase_out_scriptpubkey: Promise<string>;
     let get_mixed_output_txid: Promise<string>;
+    let get_final_txid: Promise<string>;
+    let get_invalid_txid: Promise<string>;
+    let get_paused_txid: Promise<string>;
+    let get_resumed_txid: Promise<string>;
+    let get_misc_txid_1: Promise<string>;
+    let get_misc_txid_2: Promise<string>;
+    let get_misc_txid_3: Promise<string>;
+    let get_misc_txid_4: Promise<string>;
+    let get_misc_txid_5: Promise<string>;
     const statusEvent = new EventEmitter();
     // Collect websocket msgs in an array for analysis in each step
     let msgCollector: Array<WsMsgClient> = [];
@@ -158,6 +167,60 @@ describe('Test expected websocket behavior of chronik-client', () => {
                     resolve(message.mixed_output_txid);
                 });
             }
+
+            if (message && message.final_txid) {
+                get_final_txid = new Promise(resolve => {
+                    resolve(message.final_txid);
+                });
+            }
+
+            if (message && message.invalid_txid) {
+                get_invalid_txid = new Promise(resolve => {
+                    resolve(message.invalid_txid);
+                });
+            }
+
+            if (message && message.paused_txid) {
+                get_paused_txid = new Promise(resolve => {
+                    resolve(message.paused_txid);
+                });
+            }
+
+            if (message && message.resumed_txid) {
+                get_resumed_txid = new Promise(resolve => {
+                    resolve(message.resumed_txid);
+                });
+            }
+
+            if (message && message.misc_txid_1) {
+                get_misc_txid_1 = new Promise(resolve => {
+                    resolve(message.misc_txid_1);
+                });
+            }
+
+            if (message && message.misc_txid_2) {
+                get_misc_txid_2 = new Promise(resolve => {
+                    resolve(message.misc_txid_2);
+                });
+            }
+
+            if (message && message.misc_txid_3) {
+                get_misc_txid_3 = new Promise(resolve => {
+                    resolve(message.misc_txid_3);
+                });
+            }
+
+            if (message && message.misc_txid_4) {
+                get_misc_txid_4 = new Promise(resolve => {
+                    resolve(message.misc_txid_4);
+                });
+            }
+
+            if (message && message.misc_txid_5) {
+                get_misc_txid_5 = new Promise(resolve => {
+                    resolve(message.misc_txid_5);
+                });
+            }
         });
 
         await once(statusEvent, 'ready');
@@ -223,9 +286,21 @@ describe('Test expected websocket behavior of chronik-client', () => {
 
     let mixedOutputTxid = '';
 
+    let finalTxid = '';
+    let invalidTxid = '';
+    let resumedTxid = '';
+    let miscTxid1 = '';
+    let miscTxid2 = '';
+    let miscTxid3 = '';
+    let miscTxid4 = '';
+    let miscTxid5 = '';
+
     let ws: WsEndpoint;
 
     let subscriptions: Array<WsSubScriptClient> = [];
+
+    const EXPECTED_COINBASE_TXID =
+        '8a8f9e2e2d43e4c9c8ccd4b70192554b7276b19b39491b3783c1594522a37782';
 
     it('New regtest chain', async () => {
         // Get addresses / scripts (used in all tests)
@@ -291,6 +366,37 @@ describe('Test expected websocket behavior of chronik-client', () => {
             expect(ws.subs.scripts).to.deep.equal(remainingSubscriptions);
         }
 
+        // We can subscribe to a txid
+        const txidOne = '11'.repeat(32);
+        const txidTwo = '22'.repeat(32);
+        const txidThree = '33'.repeat(32);
+
+        ws.subscribeToTxid(txidOne);
+        ws.subscribeToTxid(txidTwo);
+        ws.subscribeToTxid(txidThree);
+
+        expect(ws.subs.txids).to.deep.equal([txidOne, txidTwo, txidThree]);
+
+        // We can unsubscribe from a txid
+        ws.unsubscribeFromTxid(txidThree);
+
+        expect(ws.subs.txids).to.deep.equal([txidOne, txidTwo]);
+
+        // We do not need to validate txid unsub requests as an error is thrown if they are not in ws.subs.txids
+        expect(() => ws.unsubscribeFromTxid('not a txid')).to.throw(
+            'No existing sub to txid "not a txid"',
+        );
+
+        ws.unsubscribeFromTxid(txidTwo);
+        ws.unsubscribeFromTxid(txidOne);
+
+        expect(ws.subs.txids).to.deep.equal([]);
+
+        // We cannot subscribe to an invalid txid
+        expect(() => ws.subscribeToTxid('notATxid')).to.throw(
+            `Invalid txid: "notATxid". txid must be 64 characters of lowercase hex.`,
+        );
+
         // We can subscribe to p2sh and p2pkh scripts with subscribeToAddress
         ws.subscribeToAddress(p2pkhAddress);
         ws.subscribeToAddress(p2shAddress);
@@ -301,7 +407,7 @@ describe('Test expected websocket behavior of chronik-client', () => {
             { scriptType: 'p2sh', payload: p2shHash },
         ]);
 
-        // We can unsubscribe from p2sha nd p2pkh scripts with unsubscribeFromAddress
+        // We can unsubscribe from p2sh and p2pkh scripts with unsubscribeFromAddress
         ws.unsubscribeFromAddress(p2pkhAddress);
         ws.unsubscribeFromAddress(p2shAddress);
 
@@ -324,6 +430,14 @@ describe('Test expected websocket behavior of chronik-client', () => {
         // We can unsubscribe from blocks
         ws.unsubscribeFromBlocks();
         expect(ws.subs.blocks).to.eql(false);
+
+        // We can subscribe to txs
+        ws.subscribeToTxs();
+        expect(ws.subs.txs).to.eql(true);
+
+        // We can unsubscribe from txs
+        ws.unsubscribeFromTxs();
+        expect(ws.subs.txs).to.eql(false);
 
         // Test some thrown errors
         // These are exhaustively unit tested in src/test/test.ts
@@ -359,14 +473,19 @@ describe('Test expected websocket behavior of chronik-client', () => {
 
         // Resubscribe to blocks
         ws.subscribeToBlocks();
+
+        // Subscribe to expected coinbase txid of finalized block
+        // Note this would be an ... unexpected ... use case
+        // But nice to show we can do it
+        ws.subscribeToTxid(EXPECTED_COINBASE_TXID);
     });
     it('After a block is avalanche finalized', async () => {
         finalizedBlockhash = await get_finalized_block_blockhash;
         finalizedHeight = await get_finalized_height;
         blockTimestamp = await get_block_timestamp;
 
-        // Wait for expected ws msg
-        await expectWsMsgs(1, msgCollector);
+        // Wait for expected ws msgs
+        await expectWsMsgs(2, msgCollector);
 
         // We get a Block Finalized msg
         const finalizedBlockMsg = msgCollector.shift();
@@ -379,7 +498,17 @@ describe('Test expected websocket behavior of chronik-client', () => {
             blockTimestamp: blockTimestamp,
         });
 
-        // We only get this msg
+        // We get a TX_FINALIZED msg from our txid subscription
+        const finalizedCoinbaseTxidMsg = msgCollector.shift();
+
+        expect(finalizedCoinbaseTxidMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_FINALIZED',
+            txid: EXPECTED_COINBASE_TXID,
+            finalizationReasonType: 'TX_FINALIZATION_REASON_POST_CONSENSUS',
+        });
+
+        // We only get these msgs
         expect(msgCollector.length).to.eql(0);
     });
     it('After some txs have been broadcast', async () => {
@@ -387,6 +516,7 @@ describe('Test expected websocket behavior of chronik-client', () => {
         await expectWsMsgs(4, msgCollector);
 
         p2pkhTxid = await get_p2pkh_txid;
+
         expect(msgCollector[0]).to.deep.equal({
             type: 'Tx',
             msgType: 'TX_ADDED_TO_MEMPOOL',
@@ -476,6 +606,7 @@ describe('Test expected websocket behavior of chronik-client', () => {
                 type: 'Tx',
                 msgType: 'TX_FINALIZED',
                 txid: txid,
+                finalizationReasonType: 'TX_FINALIZATION_REASON_POST_CONSENSUS',
             });
         }
 
@@ -773,5 +904,134 @@ describe('Test expected websocket behavior of chronik-client', () => {
         // Had we stayed subscribed, we would have expected to receive
         // Tx Confirmed msgs for the mixedTx in last step and block connected for new block
         expect(msgCollector.length).to.eql(0);
+
+        // Subscribe to p2pkh script again for the next step
+        ws.subscribeToScript('p2pkh', p2pkhHash);
+    });
+    it('After a tx is finalized via preconsensus', async () => {
+        finalTxid = await get_final_txid;
+
+        // Wait for expected ws msgs
+        await expectWsMsgs(2, msgCollector);
+
+        let txMsg = msgCollector.shift();
+
+        // First the tx is added to mempool
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_ADDED_TO_MEMPOOL',
+            txid: finalTxid,
+        });
+
+        txMsg = msgCollector.shift();
+
+        // Then the tx is finalized
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_FINALIZED',
+            txid: finalTxid,
+            finalizationReasonType: 'TX_FINALIZATION_REASON_PRE_CONSENSUS',
+        });
+    });
+    it('After a tx is invalidated via preconsensus', async () => {
+        invalidTxid = await get_invalid_txid;
+
+        // Wait for expected ws msgs
+        await expectWsMsgs(3, msgCollector);
+
+        let txMsg = msgCollector.shift();
+
+        // First the tx is added to mempool
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_ADDED_TO_MEMPOOL',
+            txid: invalidTxid,
+        });
+
+        txMsg = msgCollector.shift();
+
+        // Then the tx is removed from mempool
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_REMOVED_FROM_MEMPOOL',
+            txid: invalidTxid,
+        });
+
+        txMsg = msgCollector.shift();
+
+        // Then the tx is invalidated
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_INVALIDATED',
+            txid: invalidTxid,
+        });
+
+        // Pause the websocket at the end of this step
+        ws.pause();
+    });
+    it('We do not get ws msgs if we pause', async () => {
+        await get_paused_txid;
+
+        // Wait a bit to ensure any messages would have arrived
+        // NB we have no exact method of waiting for 0 msgs
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // We should receive no messages while paused
+        expect(msgCollector.length).to.eql(0);
+
+        // Resume the websocket at the end of this step
+        await ws.resume();
+    });
+    it('We get ws msgs after resuming', async () => {
+        resumedTxid = await get_resumed_txid;
+
+        // Wait for expected ws msg
+        await expectWsMsgs(1, msgCollector);
+
+        // We should receive the message for the tx sent after resuming
+        const txMsg = msgCollector.shift();
+
+        expect(txMsg).to.deep.equal({
+            type: 'Tx',
+            msgType: 'TX_ADDED_TO_MEMPOOL',
+            txid: resumedTxid,
+        });
+
+        // This is the only msg we receive
+        expect(msgCollector.length).to.eql(0);
+
+        // Unsub from prev sub for next test
+        ws.unsubscribeFromScript('p2pkh', p2pkhHash);
+
+        // Subscribe to txs for next test
+        ws.subscribeToTxs();
+        expect(ws.subs.txs).to.eql(true);
+    });
+    it('After subscribing to txs, we get 5 misc txs despite not being subscribed to their scripts', async () => {
+        miscTxid1 = await get_misc_txid_1;
+        miscTxid2 = await get_misc_txid_2;
+        miscTxid3 = await get_misc_txid_3;
+        miscTxid4 = await get_misc_txid_4;
+        miscTxid5 = await get_misc_txid_5;
+
+        // Wait for expected ws msgs
+        await expectWsMsgs(5, msgCollector);
+
+        // We get all 5 tx messages even though we're not subscribed to their scripts
+        const txids = [miscTxid1, miscTxid2, miscTxid3, miscTxid4, miscTxid5];
+        const expectedTxMsgs = [];
+        for (const txid of txids) {
+            expectedTxMsgs.push({
+                type: 'Tx',
+                msgType: 'TX_ADDED_TO_MEMPOOL',
+                txid: txid,
+            });
+        }
+
+        // Expect a msg for each tx
+        expect(msgCollector).to.have.deep.members(expectedTxMsgs);
+
+        // Only the 5 Tx msgs are left in msgCollector
+        expect(msgCollector.length).to.eql(5);
     });
 });

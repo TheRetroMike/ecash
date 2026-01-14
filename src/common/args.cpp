@@ -60,7 +60,7 @@ static bool InterpretBool(const std::string &strValue) {
     if (strValue.empty()) {
         return true;
     }
-    return (atoi(strValue) != 0);
+    return (LocaleIndependentAtoi<int>(strValue) != 0);
 }
 
 static std::string SettingName(const std::string &arg) {
@@ -68,69 +68,75 @@ static std::string SettingName(const std::string &arg) {
 }
 
 /**
- * Interpret -nofoo as if the user supplied -foo=0.
+ * Parse "name", "section.name", "noname", "section.noname" settings keys.
  *
- * This method also tracks when the -no form was supplied, and if so, checks
- * whether there was a double-negative (-nofoo=0 -> -foo=1).
- *
- * If there was not a double negative, it removes the "no" from the key
- * and returns false.
- *
- * If there was a double negative, it removes "no" from the key, and
- * returns true.
- *
- * If there was no "no", it returns the string value untouched.
- *
- * Where an option was negated can be later checked using the IsArgNegated()
- * method. One use case for this is to have a way to disable options that are
- * not normally boolean (e.g. using -nodebuglogfile to request that debug log
- * output is not sent to any file at all).
+ * @note Where an option was negated can be later checked using the
+ * IsArgNegated() method. One use case for this is to have a way to disable
+ * options that are not normally boolean (e.g. using -nodebuglogfile to request
+ * that debug log output is not sent to any file at all).
  */
-util::SettingsValue InterpretOption(std::string &section, std::string &key,
-                                    const std::string &value) {
+KeyInfo InterpretKey(std::string key) {
+    KeyInfo result;
     // Split section name from key name for keys like "testnet.foo" or
     // "regtest.bar"
     size_t option_index = key.find('.');
     if (option_index != std::string::npos) {
-        section = key.substr(0, option_index);
+        result.section = key.substr(0, option_index);
         key.erase(0, option_index + 1);
     }
     if (key.substr(0, 2) == "no") {
         key.erase(0, 2);
+        result.negated = true;
+    }
+    result.name = key;
+    return result;
+}
+
+/**
+ * Interpret settings value based on registered flags.
+ *
+ * @param[in]   key      key information to know if key was negated
+ * @param[in]   value    string value of setting to be parsed
+ * @param[in]   flags    ArgsManager registered argument flags
+ * @param[out]  error    Error description if settings value is not valid
+ *
+ * @return parsed settings value if it is valid, otherwise nullopt accompanied
+ * by a descriptive error string
+ */
+std::optional<util::SettingsValue>
+InterpretValue(const KeyInfo &key, const std::optional<std::string> &value,
+               unsigned int flags, std::string &error) {
+    // Return negated settings as false values.
+    if (key.negated) {
+        if (flags & ArgsManager::DISALLOW_NEGATION) {
+            error = strprintf(
+                "Negating of -%s is meaningless and therefore forbidden",
+                key.name);
+            return std::nullopt;
+        }
         // Double negatives like -nofoo=0 are supported (but discouraged)
-        if (!InterpretBool(value)) {
+        if (value && !InterpretBool(*value)) {
             LogPrintf("Warning: parsed potentially confusing double-negative "
                       "-%s=%s\n",
-                      key, value);
+                      key.name, *value);
             return true;
         }
         return false;
     }
-    return value;
-}
-
-/**
- * Check settings value validity according to flags.
- *
- * TODO: Add more meaningful error checks here in the future
- * See "here's how the flags are meant to behave" in
- * https://github.com/bitcoin/bitcoin/pull/16097#issuecomment-514627823
- */
-bool CheckValid(const std::string &key, const util::SettingsValue &val,
-                unsigned int flags, std::string &error) {
-    if (val.isBool() && !(flags & ArgsManager::ALLOW_BOOL)) {
-        error = strprintf(
-            "Negating of -%s is meaningless and therefore forbidden", key);
-        return false;
+    if (!value && (flags & ArgsManager::DISALLOW_ELISION)) {
+        error = strprintf("Can not set -%s with no value. Please specify value "
+                          "with -%s=value.",
+                          key.name, key.name);
+        return std::nullopt;
     }
-    return true;
+    return value.value_or("");
 }
 
 // Define default constructor and destructor that are not inline, so code
 // instantiating this class doesn't need to #include class definitions for all
 // members. For example, m_settings has an internal dependency on univalue.
-ArgsManager::ArgsManager() {}
-ArgsManager::~ArgsManager() {}
+ArgsManager::ArgsManager() = default;
+ArgsManager::~ArgsManager() = default;
 
 std::set<std::string> ArgsManager::GetUnsuitableSectionOnlyArgs() const {
     std::set<std::string> unsuitables;
@@ -178,7 +184,7 @@ void ArgsManager::SelectConfigNetwork(const std::string &network) {
     m_network = network;
 }
 
-bool ParseKeyValue(std::string &key, std::string &val) {
+bool ParseKeyValue(std::string &key, std::optional<std::string> &val) {
     size_t is_index = key.find('=');
     if (is_index != std::string::npos) {
         val = key.substr(is_index + 1);
@@ -224,30 +230,31 @@ bool ArgsManager::ParseParameters(int argc, const char *const argv[],
             // bitcoin-tx using stdin
             break;
         }
-        std::string val;
+        std::optional<std::string> val;
         if (!ParseKeyValue(key, val)) {
             break;
         }
 
         // Transform -foo to foo
         key.erase(0, 1);
-        std::string section;
-        util::SettingsValue value = InterpretOption(section, key, val);
-        std::optional<unsigned int> flags = GetArgFlags('-' + key);
+        KeyInfo keyinfo = InterpretKey(key);
+        std::optional<unsigned int> flags = GetArgFlags('-' + keyinfo.name);
 
         // Unknown command line options and command line options with dot
-        // characters (which are returned from InterpretOption with nonempty
+        // characters (which are returned from InterpretKey with nonempty
         // section strings) are not valid.
-        if (!flags || !section.empty()) {
+        if (!flags || !keyinfo.section.empty()) {
             error = strprintf("Invalid parameter %s", argv[i]);
             return false;
         }
 
-        if (!CheckValid(key, value, *flags, error)) {
+        std::optional<util::SettingsValue> value =
+            InterpretValue(keyinfo, val, *flags, error);
+        if (!value) {
             return false;
         }
 
-        m_settings.command_line_options[key].push_back(value);
+        m_settings.command_line_options[keyinfo.name].push_back(*value);
     }
 
     // we do not allow -includeconf from command line
@@ -344,26 +351,6 @@ fs::path ArgsManager::GetDataDir(bool net_specific) const {
     return path;
 }
 
-void ArgsManager::EnsureDataDir() const {
-    /**
-     * "/wallets" subdirectories are created in all **new**
-     * datadirs, because wallet code will create new wallets in the "wallets"
-     * subdirectory only if exists already, otherwise it will create them in
-     * the top-level datadir where they could interfere with other files.
-     * Wallet init code currently avoids creating "wallets" directories itself
-     * for backwards compatibility, but this be changed in the future and
-     * wallet code here could go away.
-     */
-    auto path{GetDataDir(/*net_specific=*/false)};
-    if (!fs::exists(path)) {
-        fs::create_directories(path / "wallets");
-    }
-    path = GetDataDir(/*net_specific=*/true);
-    if (!fs::exists(path)) {
-        fs::create_directories(path / "wallets");
-    }
-}
-
 void ArgsManager::ClearPathCache() {
     LOCK(cs_args);
 
@@ -384,26 +371,6 @@ std::vector<std::string> ArgsManager::GetArgs(const std::string &strArg) const {
 
 bool ArgsManager::IsArgSet(const std::string &strArg) const {
     return !GetSetting(strArg).isNull();
-}
-
-bool ArgsManager::InitSettings(std::string &error) {
-    EnsureDataDir();
-    if (!GetSettingsPath()) {
-        return true; // Do nothing if settings file disabled.
-    }
-
-    std::vector<std::string> errors;
-    if (!ReadSettingsFile(&errors)) {
-        error = strprintf("Failed loading settings file:\n- %s\n",
-                          Join(errors, "\n- "));
-        return false;
-    }
-    if (!WriteSettingsFile(&errors)) {
-        error = strprintf("Failed saving settings file:\n- %s\n",
-                          Join(errors, "\n- "));
-        return false;
-    }
-    return true;
 }
 
 bool ArgsManager::GetSettingsPath(fs::path *filepath, bool temp,
@@ -447,11 +414,9 @@ bool ArgsManager::ReadSettingsFile(std::vector<std::string> *errors) {
         return false;
     }
     for (const auto &setting : m_settings.rw_settings) {
-        std::string section;
-        std::string key = setting.first;
         // Split setting key into section and argname
-        (void)InterpretOption(section, key, /* value */ {});
-        if (!GetArgFlags('-' + key)) {
+        KeyInfo key = InterpretKey(setting.first);
+        if (!GetArgFlags('-' + key.name)) {
             LogPrintf("Ignoring unknown rw_settings value %s\n", setting.first);
         }
     }
@@ -550,7 +515,7 @@ std::optional<int64_t> SettingToInt(const util::SettingsValue &value) {
     if (value.isNum()) {
         return value.getInt<int64_t>();
     }
-    return atoi64(value.get_str());
+    return LocaleIndependentAtoi<int64_t>(value.get_str());
 }
 
 int64_t SettingToInt(const util::SettingsValue &value, int64_t nDefault) {

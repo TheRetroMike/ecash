@@ -89,21 +89,21 @@ BOOST_AUTO_TEST_CASE(siphash) {
     CSipHasher hasher(0x0706050403020100ULL, 0x0F0E0D0C0B0A0908ULL);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x726fdb47dd0e0e31ull);
     static const uint8_t t0[1] = {0};
-    hasher.Write(t0, 1);
+    hasher.Write(t0);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x74f839c593dc67fdull);
     static const uint8_t t1[7] = {1, 2, 3, 4, 5, 6, 7};
-    hasher.Write(t1, 7);
+    hasher.Write(t1);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x93f5f5799a932462ull);
     hasher.Write(0x0F0E0D0C0B0A0908ULL);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x3f2acc7f57c29bdbull);
     static const uint8_t t2[2] = {16, 17};
-    hasher.Write(t2, 2);
+    hasher.Write(t2);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x4bc1b3f0968dd39cull);
     static const uint8_t t3[9] = {18, 19, 20, 21, 22, 23, 24, 25, 26};
-    hasher.Write(t3, 9);
+    hasher.Write(t3);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x2f2e6163076bcfadull);
     static const uint8_t t4[5] = {27, 28, 29, 30, 31};
-    hasher.Write(t4, 5);
+    hasher.Write(t4);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x7127512f72f27cceull);
     hasher.Write(0x2726252423222120ULL);
     BOOST_CHECK_EQUAL(hasher.Finalize(), 0x0e3ea96b5304a7d0ull);
@@ -120,7 +120,7 @@ BOOST_AUTO_TEST_CASE(siphash) {
     CSipHasher hasher2(0x0706050403020100ULL, 0x0F0E0D0C0B0A0908ULL);
     for (uint8_t x = 0; x < std::size(siphash_4_2_testvec); ++x) {
         BOOST_CHECK_EQUAL(hasher2.Finalize(), siphash_4_2_testvec[x]);
-        hasher2.Write(&x, 1);
+        hasher2.Write(Span{&x, 1});
     }
     // Check test vectors from spec, eight bytes at a time
     CSipHasher hasher3(0x0706050403020100ULL, 0x0F0E0D0C0B0A0908ULL);
@@ -132,7 +132,7 @@ BOOST_AUTO_TEST_CASE(siphash) {
                       (uint64_t(x + 6) << 48) | (uint64_t(x + 7) << 56));
     }
 
-    CHashWriter ss(SER_DISK, CLIENT_VERSION);
+    HashWriter ss{};
     CMutableTransaction tx;
     // Note these tests were originally written with tx.nVersion=1
     // and the test would be affected by default tx version bumps if not fixed.
@@ -146,14 +146,14 @@ BOOST_AUTO_TEST_CASE(siphash) {
     for (int i = 0; i < 16; ++i) {
         uint64_t k1 = ctx.rand64();
         uint64_t k2 = ctx.rand64();
-        uint256 x = InsecureRand256();
+        uint256 x = m_rng.rand256();
         uint32_t n = ctx.rand32();
         uint8_t nb[4];
         WriteLE32(nb, n);
         CSipHasher sip256(k1, k2);
-        sip256.Write(x.begin(), 32);
+        sip256.Write(x);
         CSipHasher sip288 = sip256;
-        sip288.Write(nb, 4);
+        sip288.Write(nb);
         BOOST_CHECK_EQUAL(SipHashUint256(k1, k2, x), sip256.Finalize());
         BOOST_CHECK_EQUAL(SipHashUint256Extra(k1, k2, x, n), sip288.Finalize());
     }
@@ -161,10 +161,10 @@ BOOST_AUTO_TEST_CASE(siphash) {
 
 namespace {
 class CDummyObject {
-    uint32_t value;
+    uint32_t value{0};
 
 public:
-    CDummyObject() : value(0) {}
+    CDummyObject() = default;
 
     uint32_t GetValue() { return value; }
 
@@ -184,38 +184,38 @@ public:
 
 BOOST_AUTO_TEST_CASE(hashverifier_tests) {
     std::vector<uint8_t> data = ParseHex("4223");
-    CDataStream ss(data, SER_DISK, CLIENT_VERSION);
+    DataStream ss{data};
 
-    CHashVerifier<CDataStream> verifier(&ss);
+    HashVerifier verifier(ss);
 
     CDummyObject dummy;
     verifier >> dummy;
     uint256 checksum = verifier.GetHash();
     BOOST_CHECK_EQUAL(dummy.GetValue(), 0x23);
 
-    CHashWriter h0(SER_DISK, CLIENT_VERSION);
-    h0 << CDataStream(data, SER_DISK, CLIENT_VERSION);
+    HashWriter h0{};
+    h0.write(MakeByteSpan(data));
     BOOST_CHECK(h0.GetHash() == checksum);
 
-    CHashWriter h1(SER_DISK, CLIENT_VERSION);
+    HashWriter h1{};
     h1 << dummy;
     BOOST_CHECK(h1.GetHash() != checksum);
 }
 
 BOOST_AUTO_TEST_CASE(sh256_tests) {
-    CHashWriter h0(SER_DISK, CLIENT_VERSION);
+    HashWriter h0{};
     h0.write(MakeByteSpan("abc").first(3));
     BOOST_CHECK_EQUAL(
         h0.GetSHA256().GetHex(),
         "ad1500f261ff10b49c7a1796a36103b02322ae5dde404141eacf018fbf1678ba");
 
-    CHashWriter h1(SER_DISK, CLIENT_VERSION);
+    HashWriter h1{};
     h1.write(MakeByteSpan("").first(0));
     BOOST_CHECK_EQUAL(
         h1.GetSHA256().GetHex(),
         "55b852781b9995a44c939b64e441ae2724b96f99c8f4fb9a141cfc9842c4b0e3");
 
-    CHashWriter h2(SER_DISK, CLIENT_VERSION);
+    HashWriter h2{};
     h2.write(
         MakeByteSpan("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
             .first(56));

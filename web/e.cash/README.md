@@ -1,15 +1,29 @@
 # e.Cash Website
 
-Main website for eCash
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-## Building the site
+## Getting Started
 
-First run `npm ci`
+First set up the mandatory environment variables:
 
-### Develop
+```bash
+# Run from the /web/e.cash/ directory
+echo NEXT_PUBLIC_SITE_URL=https://e.cash > .env
+echo NEXT_PUBLIC_STRAPI_URL=https://strapi.e.cash >> .env
+echo NEXT_PUBLIC_STRAPI_SCORECARD_URL=https://api.scorecard.cash >> .env
+echo NEXT_PUBLIC_GOOGLE_ANALYTICS_ID=G-XXXXXXXXXX >> .env
+```
 
-To run a local instance that dynamically updates as you make changes: `npm run dev`
+Then, run the development server:
 
-### Build
+```bash
+# From repository root
+pnpm install --frozen-lockfile
+pnpm --filter e.cash run dev
+```
 
-To create an optimized production build: `npm run build`
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+## Build
+
+To create an optimized production build: `pnpm --filter e.cash run build`

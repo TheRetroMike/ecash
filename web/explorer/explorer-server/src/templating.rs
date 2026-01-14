@@ -1,3 +1,7 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 use std::collections::HashMap;
 
 use askama::Template;
@@ -6,7 +10,10 @@ use bitcoinsuite_chronik_client::proto::{
 };
 use chrono::{DateTime, Utc};
 
-use crate::{blockchain::Destination, server_primitives::JsonBalance};
+use crate::{
+    blockchain::Destination, file_hashes::FileHashes,
+    server_primitives::JsonBalance,
+};
 
 mod filters;
 
@@ -15,6 +22,7 @@ mod filters;
 pub struct BlocksTemplate {
     pub last_block_height: u32,
     pub network_selector: bool,
+    pub hashes: FileHashes,
 }
 
 #[derive(Template)]
@@ -22,12 +30,12 @@ pub struct BlocksTemplate {
 pub struct BlockTemplate<'a> {
     pub block_hex: &'a str,
     pub block_info: BlockInfo,
-    pub confirmations: i32,
     pub timestamp: DateTime<chrono::Utc>,
     pub difficulty: f64,
     pub coinbase_data: Vec<u8>,
     pub best_height: i32,
     pub network_selector: bool,
+    pub hashes: FileHashes,
 }
 
 #[derive(Template)]
@@ -47,6 +55,7 @@ pub struct TransactionTemplate<'a> {
     pub sats_output: i64,
     pub token_icon_url: &'a str,
     pub network_selector: bool,
+    pub hashes: FileHashes,
 }
 
 pub struct TokenEntryTemplate<'a> {
@@ -77,12 +86,23 @@ pub struct AddressTemplate<'a> {
     pub encoded_balances: String,
     pub token_icon_url: &'a str,
     pub network_selector: bool,
+    pub hashes: FileHashes,
+}
+
+#[derive(Template)]
+#[template(path = "pages/mempool.html")]
+pub struct MempoolTemplate {
+    pub num_txs: u32,
+    pub total_size: u64,
+    pub network_selector: bool,
+    pub hashes: FileHashes,
 }
 
 #[derive(Template)]
 #[template(path = "pages/testnet-faucet.html")]
 pub struct TestnetFaucetTemplate {
     pub network_selector: bool,
+    pub hashes: FileHashes,
 }
 
 #[derive(Template)]
@@ -90,4 +110,5 @@ pub struct TestnetFaucetTemplate {
 pub struct ErrorTemplate {
     pub message: String,
     pub network_selector: bool,
+    pub hashes: FileHashes,
 }

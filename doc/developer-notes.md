@@ -237,8 +237,10 @@ that produce better debugging builds.
 If the code is behaving strangely, take a look in the debug.log file in the data directory;
 error and debugging messages are written there.
 
-The `-debug=...` command-line option controls debugging; running with just `-debug` or `-debug=1` will turn
-on all categories (and give you a very large debug.log file).
+Debug logging can be enabled on startup with the `-debug` and `-loglevel`
+configuration options and toggled while bitcoind is running with the `logging`
+RPC.  For instance, launching bitcoind with `-debug` or `-debug=1` will turn on
+all log categories and `-loglevel=trace` will turn on all log severity levels.
 
 The Qt code routes `qDebug()` output to debug.log under category "qt": run with `-debug=qt`
 to see it.
@@ -337,7 +339,7 @@ LCOV can be used to generate a test coverage report based upon some test targets
 execution. Some packages are required to generate the coverage report:
 `c++filt`, `gcov`, `genhtml`, `lcov` and `python3`.
 
-To install these dependencies on Debian 10:
+To install these dependencies on Debian:
 
 ```shell
 sudo apt install binutils-common g++ lcov python3
@@ -606,6 +608,47 @@ Development guidelines
 
 A few non-style-related recommendations for developers, as well as points to
 pay attention to for reviewers of Bitcoin ABC code.
+
+Logging
+-------
+
+The macros `LogInfo`, `LogDebug`, `LogTrace`, `LogWarning` and `LogError` are available for
+logging messages. They should be used as follows:
+
+- `LogDebug(BCLog::CATEGORY, fmt, params...)` is what you want
+  most of the time, and it should be used for log messages that are
+  useful for debugging and can reasonably be enabled on a production
+  system (that has sufficient free storage space). They will be logged
+  if the program is started with `-debug=category` or `-debug=1`.
+  Note that `LogPrint(BCLog::CATEGORY, fmt, params...)` is a deprecated
+  alias for `LogDebug`.
+
+- `LogInfo(fmt, params...)` should only be used rarely, eg for startup
+  messages or for infrequent and important events such as a new block tip
+  being found or a new outbound connection being made. These log messages
+  are unconditional so care must be taken that they can't be used by an
+  attacker to fill up storage. Note that `LogPrintf(fmt, params...)` is
+  a deprecated alias for `LogInfo`.
+
+- `LogError(fmt, params...)` should be used in place of `LogInfo` for
+  severe problems that require the node (or a subsystem) to shut down
+  entirely (eg, insufficient storage space).
+
+- `LogWarning(fmt, params...)` should be used in place of `LogInfo` for
+  severe problems that the node admin should address, but are not
+  severe enough to warrant shutting down the node (eg, system time
+  appears to be wrong, unknown soft fork appears to have activated).
+
+- `LogTrace(BCLog::CATEGORY, fmt, params...) should be used in place of
+  `LogDebug` for log messages that would be unusable on a production
+  system, eg due to being too noisy in normal use, or too resource
+  intensive to process. These will be logged if the startup
+  options `-debug=category -loglevel=category:trace` or `-debug=1
+  -loglevel=trace` are selected.
+
+Note that the format strings and parameters of `LogDebug` and `LogTrace`
+are only evaluated if the logging category is enabled, so you must be
+careful to avoid side-effects in those expressions.
 
 Wallet
 -------
@@ -972,6 +1015,10 @@ Current third party libraries include:
   - Upstream at <https://github.com/google/leveldb> ; Maintained by Google.
   - **Note**: Follow the instructions in [Upgrading LevelDB](#upgrading-leveldb)
     when merging upstream changes to Bitcoin ABC.
+
+- src/crc32c
+  - Used by leveldb for hardware acceleration of CRC32C checksums for data integrity.
+  - Upstream at https://github.com/google/crc32c ; Maintained by Google.
 
 - src/secp256k1
   - Upstream at <https://github.com/bitcoin-core/secp256k1/> ; actively maintained

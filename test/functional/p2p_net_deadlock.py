@@ -8,7 +8,6 @@ this does not cause a deadlock.
 See https://github.com/bitcoin/bitcoin/pull/27981
 """
 
-
 import threading
 
 from test_framework.blocktools import create_block
@@ -56,7 +55,7 @@ class NetDeadlockTest(BitcoinTestFramework):
 
         self.log.info("Check whether a deadlock happened")
         # Make sure node0 successfully processed the net block before mining another one
-        self.wait_until(lambda: node0.getbestblockhash() == block.hash)
+        self.wait_until(lambda: node0.getbestblockhash() == block.hash_hex)
         self.generate(node0, 1, sync_fun=self.sync_blocks)
 
 

@@ -31,6 +31,14 @@ COPY web/explorer/ .
 WORKDIR /app/modules/bitcoinsuite-chronik-client
 COPY modules/bitcoinsuite-chronik-client/ .
 
+# avalanche-lib-wasm must be in place to to run ./build-wasm as it is a workspace member
+WORKDIR /app/modules/avalanche-lib-wasm
+COPY modules/avalanche-lib-wasm/ .
+
+# proof-manager-cli must be in place to to run ./build-wasm as it is a workspace member
+WORKDIR /app/apps/proof-manager-cli
+COPY apps/proof-manager-cli/ .
+
 # Copy secp256k1 to same directory structure as monorepo
 WORKDIR /app/src/secp256k1
 COPY src/secp256k1/ .
@@ -50,67 +58,72 @@ RUN CC=clang ./build-wasm.sh
 
 # Node image for prod deployment of ecash-herald
 
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Set working directory to monorepo root
+WORKDIR /app
+
+# Copy workspace files
+COPY pnpm-workspace.yaml .
+COPY pnpm-lock.yaml .
+COPY package.json .
 
 # Copy static assets from wasmbuilder stage (ecash-lib-wasm and ecash-lib, with wasm built in place)
-WORKDIR /app/modules
-COPY --from=wasmbuilder /app/modules .
+COPY --from=wasmbuilder /app/modules ./modules
 
-# Build all local ecash-herald dependencies
+# Copy package.json files for dependency resolution
+COPY modules/ecashaddrjs/package.json ./modules/ecashaddrjs/
+COPY modules/chronik-client/package.json ./modules/chronik-client/
+COPY modules/b58-ts/package.json ./modules/b58-ts/
+COPY modules/ecash-lib/package.json ./modules/ecash-lib/
+COPY modules/ecash-wallet/package.json ./modules/ecash-wallet/
+COPY modules/ecash-agora/package.json ./modules/ecash-agora/
+COPY modules/mock-chronik-client/package.json ./modules/mock-chronik-client/
+COPY apps/ecash-herald/package.json ./apps/ecash-herald/
 
-# ecashaddrjs
-WORKDIR /app/modules/ecashaddrjs
-COPY modules/ecashaddrjs/ .
-RUN npm ci
-RUN npm run build
+# Fetch dependencies (pnpm best practice for Docker)
+RUN pnpm fetch --frozen-lockfile
 
-# chronik-client
-WORKDIR /app/modules/chronik-client
-COPY modules/chronik-client/ .
-RUN npm ci
-RUN npm run build
+# Copy source files
+COPY modules/ecashaddrjs/ ./modules/ecashaddrjs/
+COPY modules/chronik-client/ ./modules/chronik-client/
+COPY modules/b58-ts/ ./modules/b58-ts/
+COPY modules/ecash-lib/ ./modules/ecash-lib/
+COPY modules/ecash-wallet/ ./modules/ecash-wallet/
+COPY modules/ecash-agora/ ./modules/ecash-agora/
+COPY modules/mock-chronik-client/ ./modules/mock-chronik-client/
+COPY modules/ecash-price/ ./modules/ecash-price/
+COPY apps/ecash-herald/ ./apps/ecash-herald/
 
-# ecash-script
-WORKDIR /app/modules/ecash-script
-COPY modules/ecash-script/ .
-RUN npm ci
+# Install dependencies for local modules first
+RUN pnpm install --frozen-lockfile --offline --filter b58-ts...
+RUN pnpm install --frozen-lockfile --offline --filter ecashaddrjs...
+RUN pnpm install --frozen-lockfile --offline --filter chronik-client...
+RUN pnpm install --frozen-lockfile --offline --filter ecash-lib...
+RUN pnpm install --frozen-lockfile --offline --filter ecash-wallet...
+RUN pnpm install --frozen-lockfile --offline --filter ecash-agora...
+RUN pnpm install --frozen-lockfile --offline --filter mock-chronik-client...
+RUN pnpm install --frozen-lockfile --offline --filter ecash-price...
 
-# b58-ts (required for ecash-lib)
-WORKDIR /app/modules/b58-ts
-COPY modules/b58-ts .
-RUN npm ci
+# Build local modules
+RUN pnpm --filter b58-ts run build
+RUN pnpm --filter ecashaddrjs run build
+RUN pnpm --filter chronik-client run build
+RUN pnpm --filter ecash-lib run build
+RUN pnpm --filter ecash-wallet run build
+RUN pnpm --filter ecash-agora run build
+RUN pnpm --filter mock-chronik-client run build
+RUN pnpm --filter ecash-price run build
 
-# ecash-lib
-WORKDIR /app/modules/ecash-lib
-RUN npm ci
-RUN npm run build
+# Install dependencies for ecash-herald (now that local modules are built)
+RUN pnpm install --frozen-lockfile --offline --filter ecash-herald...
 
-# ecash-agora
-WORKDIR /app/modules/ecash-agora
-COPY modules/ecash-agora/ .
-RUN npm ci
-RUN npm run build
+# Build ecash-herald from monorepo root
+RUN pnpm --filter ecash-herald run build
 
-# mock-chronik-client
-WORKDIR /app/modules/mock-chronik-client
-COPY modules/mock-chronik-client/ .
-RUN npm ci
-RUN npm run build
-
-# Now that local dependencies are ready, build ecash-herald
+# ecash-herald runs with "node dist/index.js" from the app directory
 WORKDIR /app/apps/ecash-herald
-
-# Copy only the package files and install necessary dependencies.
-# This reduces cache busting when source files are changed.
-COPY apps/ecash-herald/package.json .
-COPY apps/ecash-herald/package-lock.json .
-RUN npm ci
-
-# Copy the rest of the project files
-COPY apps/ecash-herald/ .
-
-# Compile typescript. Outputs to dist/ dir
-RUN npm run build
-
-# ecash-herald runs with "node dist/index.js"
 CMD [ "node", "dist/index.js" ]

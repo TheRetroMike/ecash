@@ -4,12 +4,13 @@
 
 #include <common/system.h>
 #include <i2p.h>
+#include <logging.h>
 #include <netaddress.h>
 #include <netbase.h>
 #include <test/util/logging.h>
 #include <test/util/net.h>
 #include <test/util/setup_common.h>
-#include <threadinterrupt.h>
+#include <util/threadinterrupt.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -19,6 +20,8 @@
 BOOST_FIXTURE_TEST_SUITE(i2p_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(unlimited_recv) {
+    const auto prev_log_level{LogInstance().LogLevel()};
+    LogInstance().SetLogLevel(BCLog::Level::Trace);
     auto CreateSockOrig = CreateSock;
 
     // Mock CreateSock() to create MockSock.
@@ -41,6 +44,7 @@ BOOST_AUTO_TEST_CASE(unlimited_recv) {
     }
 
     CreateSock = CreateSockOrig;
+    LogInstance().SetLogLevel(prev_log_level);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

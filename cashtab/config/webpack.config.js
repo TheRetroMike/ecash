@@ -34,9 +34,8 @@ const createEnvironmentHash = require('./webpack/persistentCache/createEnvironme
 const shouldUseSourceMap = process.env.GENERATE_SOURCEMAP !== 'false';
 
 const reactRefreshRuntimeEntry = require.resolve('react-refresh/runtime');
-const reactRefreshWebpackPluginRuntimeEntry = require.resolve(
-    '@pmmmwh/react-refresh-webpack-plugin',
-);
+const reactRefreshWebpackPluginRuntimeEntry =
+    require.resolve('@pmmmwh/react-refresh-webpack-plugin');
 const babelRuntimeEntry = require.resolve('babel-preset-react-app');
 const babelRuntimeEntryHelpers = require.resolve(
     '@babel/runtime/helpers/esm/assertThisInitialized',
@@ -132,9 +131,9 @@ module.exports = function (webpackEnv) {
                         config: false,
                         plugins: !useTailwind
                             ? [
-                                  'postcss-flexbugs-fixes',
+                                  require.resolve('postcss-flexbugs-fixes'),
                                   [
-                                      'postcss-preset-env',
+                                      require.resolve('postcss-preset-env'),
                                       {
                                           autoprefixer: {
                                               flexbox: 'no-2009',
@@ -145,13 +144,13 @@ module.exports = function (webpackEnv) {
                                   // Adds PostCSS Normalize as the reset css with default options,
                                   // so that it honors browserslist config in package.json
                                   // which in turn let's users customize the target behavior as per their needs.
-                                  'postcss-normalize',
+                                  require.resolve('postcss-normalize'),
                               ]
                             : [
-                                  'tailwindcss',
-                                  'postcss-flexbugs-fixes',
+                                  require.resolve('tailwindcss'),
+                                  require.resolve('postcss-flexbugs-fixes'),
                                   [
-                                      'postcss-preset-env',
+                                      require.resolve('postcss-preset-env'),
                                       {
                                           autoprefixer: {
                                               flexbox: 'no-2009',
@@ -298,6 +297,29 @@ module.exports = function (webpackEnv) {
                 // This is only used in production mode
                 new CssMinimizerPlugin(),
             ],
+            splitChunks: isEnvProduction
+                ? {
+                      chunks: 'all',
+                      minSize: 20000,
+                      minRemainingSize: 0,
+                      minChunks: 1,
+                      maxAsyncRequests: 30,
+                      maxInitialRequests: 30,
+                      enforceSizeThreshold: 50000,
+                      cacheGroups: {
+                          defaultVendors: {
+                              test: /[\\/]node_modules[\\/]/,
+                              priority: -10,
+                              reuseExistingChunk: true,
+                          },
+                          default: {
+                              minChunks: 2,
+                              priority: -20,
+                              reuseExistingChunk: true,
+                          },
+                      },
+                  }
+                : false, // Disable in development,
         },
         resolve: {
             fallback: {
@@ -305,6 +327,8 @@ module.exports = function (webpackEnv) {
                 crypto: require.resolve('crypto-browserify'),
                 buffer: require.resolve('buffer'),
             },
+            // Follow symlinks for pnpm compatibility
+            symlinks: true,
             // This allows you to set a fallback for where webpack should look for modules.
             // We placed these paths second because we want `node_modules` to "win"
             // if there are any conflicts. This matches Node resolution mechanism.
@@ -321,6 +345,9 @@ module.exports = function (webpackEnv) {
             extensions: paths.moduleFileExtensions
                 .map(ext => `.${ext}`)
                 .filter(ext => useTypeScript || !ext.includes('ts')),
+            // Allow webpack to automatically add file extensions for pnpm compatibility
+            // This fixes issues with pnpm's symlinked node_modules structure
+            fullySpecified: false,
             alias: {
                 // Support React Native Web
                 // https://www.smashingmagazine.com/2016/08/a-glimpse-into-the-future-with-react-native-for-web/
@@ -347,6 +374,11 @@ module.exports = function (webpackEnv) {
                     babelRuntimeRegenerator,
                 ]),
             ],
+        },
+        resolveLoader: {
+            // Allow webpack to automatically add file extensions for loader resolution
+            // This is needed for pnpm compatibility
+            fullySpecified: false,
         },
         module: {
             strictExportPresence: true,
@@ -420,14 +452,11 @@ module.exports = function (webpackEnv) {
                             include: paths.appSrc,
                             loader: require.resolve('babel-loader'),
                             options: {
-                                customize: require.resolve(
-                                    'babel-preset-react-app/webpack-overrides',
-                                ),
+                                customize:
+                                    require.resolve('babel-preset-react-app/webpack-overrides'),
                                 presets: [
                                     [
-                                        require.resolve(
-                                            'babel-preset-react-app',
-                                        ),
+                                        require.resolve('babel-preset-react-app'),
                                         {
                                             runtime: hasJsxRuntime
                                                 ? 'automatic'
@@ -450,6 +479,24 @@ module.exports = function (webpackEnv) {
                                 compact: isEnvProduction,
                             },
                         },
+                        // Handle .mjs and .cjs files as ES modules (needed for pnpm compatibility)
+                        {
+                            test: /\.mjs$/,
+                            include: /node_modules/,
+                            type: 'javascript/auto',
+                            resolve: {
+                                fullySpecified: false,
+                            },
+                        },
+                        // Handle .cjs files (CommonJS modules)
+                        {
+                            test: /\.cjs$/,
+                            include: /node_modules/,
+                            type: 'javascript/auto',
+                            resolve: {
+                                fullySpecified: false,
+                            },
+                        },
                         // Process any JS outside of the app with Babel.
                         // Unlike the application JS, we only compile the standard ES features.
                         {
@@ -462,9 +509,7 @@ module.exports = function (webpackEnv) {
                                 compact: false,
                                 presets: [
                                     [
-                                        require.resolve(
-                                            'babel-preset-react-app/dependencies',
-                                        ),
+                                        require.resolve('babel-preset-react-app/dependencies'),
                                         { helpers: true },
                                     ],
                                 ],
@@ -737,6 +782,7 @@ module.exports = function (webpackEnv) {
                         context: paths.appPath,
                         diagnosticOptions: {
                             syntactic: true,
+                            semantic: false,
                         },
                         mode: 'write-references',
                     },

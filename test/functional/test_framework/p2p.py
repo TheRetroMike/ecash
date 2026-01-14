@@ -604,7 +604,7 @@ class P2PInterface(P2PConnection):
         def test_function():
             if not self.last_message.get("tx"):
                 return False
-            return self.last_message["tx"].tx.rehash() == txid
+            return self.last_message["tx"].tx.txid_hex == txid
 
         self.wait_until(test_function, timeout=timeout)
 
@@ -612,7 +612,7 @@ class P2PInterface(P2PConnection):
         def test_function():
             return (
                 self.last_message.get("block")
-                and self.last_message["block"].block.rehash() == blockhash
+                and self.last_message["block"].block.hash_int == blockhash
             )
 
         self.wait_until(test_function, timeout=timeout)
@@ -622,7 +622,7 @@ class P2PInterface(P2PConnection):
             last_headers = self.last_message.get("headers")
             if not last_headers:
                 return False
-            return last_headers.headers[0].rehash() == int(blockhash, 16)
+            return last_headers.headers[0].hash_int == int(blockhash, 16)
 
         self.wait_until(test_function, timeout=timeout)
 
@@ -631,7 +631,7 @@ class P2PInterface(P2PConnection):
             last_filtered_block = self.last_message.get("merkleblock")
             if not last_filtered_block:
                 return False
-            return last_filtered_block.merkleblock.header.rehash() == int(blockhash, 16)
+            return last_filtered_block.merkleblock.header.hash_int == int(blockhash, 16)
 
         self.wait_until(test_function, timeout=timeout)
 
@@ -829,14 +829,14 @@ class P2PDataStore(P2PInterface):
             return
 
         headers_list = [self.block_store[self.last_block_hash]]
-        while headers_list[-1].sha256 not in locator.vHave:
+        while headers_list[-1].hash_int not in locator.vHave:
             # Walk back through the block store, adding headers to headers_list
             # as we go.
             prev_block_hash = headers_list[-1].hashPrevBlock
             if prev_block_hash in self.block_store:
                 prev_block_header = CBlockHeader(self.block_store[prev_block_hash])
                 headers_list.append(prev_block_header)
-                if prev_block_header.sha256 == hash_stop:
+                if prev_block_header.hash_int == hash_stop:
                     # if this is the hashstop header, stop here
                     break
             else:
@@ -876,8 +876,8 @@ class P2PDataStore(P2PInterface):
 
         with p2p_lock:
             for block in blocks:
-                self.block_store[block.sha256] = block
-                self.last_block_hash = block.sha256
+                self.block_store[block.hash_int] = block
+                self.last_block_hash = block.hash_int
 
         def test():
             if force_send:
@@ -889,7 +889,7 @@ class P2PDataStore(P2PInterface):
                     msg_headers([CBlockHeader(block) for block in blocks])
                 )
                 self.wait_until(
-                    lambda: blocks[-1].sha256 in self.getdata_requests,
+                    lambda: blocks[-1].hash_int in self.getdata_requests,
                     timeout=timeout,
                     check_connected=success,
                 )
@@ -901,10 +901,11 @@ class P2PDataStore(P2PInterface):
 
             if success:
                 self.wait_until(
-                    lambda: node.getbestblockhash() == blocks[-1].hash, timeout=timeout
+                    lambda: node.getbestblockhash() == blocks[-1].hash_hex,
+                    timeout=timeout,
                 )
             else:
-                assert node.getbestblockhash() != blocks[-1].hash
+                assert node.getbestblockhash() != blocks[-1].hash_hex
 
         if reject_reason:
             with node.assert_debug_log(expected_msgs=[reject_reason]):
@@ -925,7 +926,7 @@ class P2PDataStore(P2PInterface):
 
         with p2p_lock:
             for tx in txs:
-                self.tx_store[tx.sha256] = tx
+                self.tx_store[tx.txid_int] = tx
 
         def test():
             for tx in txs:
@@ -940,11 +941,15 @@ class P2PDataStore(P2PInterface):
             if success:
                 # Check that all txs are now in the mempool
                 for tx in txs:
-                    assert tx.hash in raw_mempool, f"{tx.hash} not found in mempool"
+                    assert tx.txid_hex in raw_mempool, (
+                        f"{tx.txid_hex} not found in mempool"
+                    )
             else:
                 # Check that none of the txs are now in the mempool
                 for tx in txs:
-                    assert tx.hash not in raw_mempool, f"{tx.hash} tx found in mempool"
+                    assert tx.txid_hex not in raw_mempool, (
+                        f"{tx.txid_hex} tx found in mempool"
+                    )
 
         if reject_reason:
             with node.assert_debug_log(expected_msgs=[reject_reason]):

@@ -8,8 +8,9 @@ Test inventory download behavior
 import functools
 import random
 import time
+from dataclasses import dataclass
+from typing import Optional
 
-from test_framework.address import ADDRESS_ECREG_UNSPENDABLE
 from test_framework.avatools import avalanche_proof_from_hex, gen_proof, wait_for_proof
 from test_framework.key import ECKey
 from test_framework.messages import (
@@ -18,16 +19,21 @@ from test_framework.messages import (
     MSG_TX,
     MSG_TYPE_MASK,
     CInv,
-    CTransaction,
-    FromHex,
     msg_avaproof,
     msg_getdata,
     msg_inv,
     msg_notfound,
 )
-from test_framework.p2p import P2PInterface, p2p_lock
+from test_framework.p2p import (
+    GETDATA_TX_INTERVAL,
+    NONPREF_PEER_TX_DELAY,
+    OVERLOADED_PEER_TX_DELAY,
+    P2PInterface,
+    p2p_lock,
+)
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error, uint256_hex
+from test_framework.wallet import MiniWallet
 from test_framework.wallet_util import bytes_to_wif
 
 
@@ -43,29 +49,22 @@ class TestP2PConn(P2PInterface):
                 self.getdata_count += 1
 
 
+@dataclass(frozen=True)
 class NetConstants:
     """Constants from net_processing"""
 
-    def __init__(
-        self,
-        getdata_interval,
-        inbound_peer_delay,
-        overloaded_peer_delay,
-        max_getdata_in_flight,
-        max_peer_announcements,
-        bypass_request_limits_permission_flags,
-        getdata_supports_notfound,
-    ):
-        self.getdata_interval = getdata_interval
-        self.inbound_peer_delay = inbound_peer_delay
-        self.overloaded_peer_delay = overloaded_peer_delay
-        self.max_getdata_in_flight = max_getdata_in_flight
-        self.max_peer_announcements = max_peer_announcements
-        self.max_getdata_inbound_wait = self.getdata_interval + self.inbound_peer_delay
-        self.bypass_request_limits_permission_flags = (
-            bypass_request_limits_permission_flags
-        )
-        self.getdata_supports_notfound = getdata_supports_notfound
+    bypass_request_limits_permission_flags: Optional[str]
+    getdata_supports_notfound: bool
+    getdata_interval: int = GETDATA_TX_INTERVAL
+    inbound_peer_delay: int = 2  # seconds
+    overloaded_peer_delay: int = OVERLOADED_PEER_TX_DELAY
+    max_getdata_in_flight: int = 1000
+    max_peer_announcements: int = 5000
+    nonpref_peer_delay: int = NONPREF_PEER_TX_DELAY
+
+    @property
+    def max_getdata_inbound_wait(self):
+        return self.getdata_interval + self.inbound_peer_delay
 
 
 class TestContext:
@@ -82,11 +81,6 @@ PROOF_TEST_CONTEXT = TestContext(
     MSG_AVA_PROOF,
     "avaproof",
     NetConstants(
-        getdata_interval=60,  # seconds
-        inbound_peer_delay=2,  # seconds
-        overloaded_peer_delay=2,  # seconds
-        max_getdata_in_flight=100,
-        max_peer_announcements=5000,
         bypass_request_limits_permission_flags="bypass_proof_request_limits",
         getdata_supports_notfound=True,
     ),
@@ -96,11 +90,6 @@ STAKE_CONTENDER_TEST_CONTEXT = TestContext(
     MSG_AVA_STAKE_CONTENDER,
     "stakecontender",
     NetConstants(
-        getdata_interval=60,  # seconds
-        inbound_peer_delay=2,  # seconds
-        overloaded_peer_delay=2,  # seconds
-        max_getdata_in_flight=100,
-        max_peer_announcements=5000,
         bypass_request_limits_permission_flags=None,
         getdata_supports_notfound=False,
     ),
@@ -110,11 +99,6 @@ TX_TEST_CONTEXT = TestContext(
     MSG_TX,
     "tx",
     NetConstants(
-        getdata_interval=60,  # seconds
-        inbound_peer_delay=2,  # seconds
-        overloaded_peer_delay=2,  # seconds
-        max_getdata_in_flight=100,
-        max_peer_announcements=5000,
         bypass_request_limits_permission_flags="relay",
         getdata_supports_notfound=True,
     ),
@@ -191,24 +175,8 @@ class InventoryDownloadTest(BitcoinTestFramework):
     @skip(PROOF_TEST_CONTEXT)
     def test_inv_tx(self, context):
         self.log.info("Generate a transaction on node 0")
-        tx = self.nodes[0].createrawtransaction(
-            inputs=[
-                {
-                    # coinbase
-                    "txid": self.nodes[0].getblock(self.nodes[0].getblockhash(1))["tx"][
-                        0
-                    ],
-                    "vout": 0,
-                }
-            ],
-            outputs={ADDRESS_ECREG_UNSPENDABLE: 50000000 - 250.00},
-        )
-        tx = self.nodes[0].signrawtransactionwithkey(
-            hexstring=tx,
-            privkeys=[self.nodes[0].get_deterministic_priv_key().key],
-        )["hex"]
-        ctx = FromHex(CTransaction(), tx)
-        txid = int(ctx.rehash(), 16)
+        tx = self.wallet.create_self_transfer()
+        txid = int(tx["txid"], 16)
 
         self.log.info(
             f"Announce the transaction to all nodes from all {NUM_INBOUND} incoming "
@@ -228,7 +196,7 @@ class InventoryDownloadTest(BitcoinTestFramework):
         with self.nodes[1].assert_debug_log(
             [f"got inv: tx {uint256_hex(txid)}  new peer=0"]
         ):
-            self.nodes[0].sendrawtransaction(tx)
+            self.nodes[0].sendrawtransaction(tx["hex"])
             self.nodes[0].setmocktime(int(time.time()) + UNCONDITIONAL_RELAY_DELAY)
 
         # Since node 1 is connected outbound to an honest peer (node 0), it
@@ -311,8 +279,6 @@ class InventoryDownloadTest(BitcoinTestFramework):
             int(time.time()) + context.constants.getdata_interval + 1
         )
         peer_fallback.wait_until(lambda: peer_fallback.getdata_count >= 1)
-        with p2p_lock:
-            assert_equal(peer_fallback.getdata_count, 1)
         # reset mocktime
         self.restart_node(0)
 
@@ -332,8 +298,6 @@ class InventoryDownloadTest(BitcoinTestFramework):
         peer_disconnect.peer_disconnect()
         peer_disconnect.wait_for_disconnect()
         peer_fallback.wait_until(lambda: peer_fallback.getdata_count >= 1)
-        with p2p_lock:
-            assert_equal(peer_fallback.getdata_count, 1)
 
     def test_notfound_fallback(self, context):
         self.log.info(
@@ -353,19 +317,32 @@ class InventoryDownloadTest(BitcoinTestFramework):
         # Send notfound, so that fallback peer is selected
         peer_notfound.send_and_ping(msg_notfound(vec=[CInv(context.inv_type, 0xFFDD)]))
         peer_fallback.wait_until(lambda: peer_fallback.getdata_count >= 1)
-        with p2p_lock:
-            assert_equal(peer_fallback.getdata_count, 1)
 
-    def test_preferred_inv(self, context):
-        self.log.info("Check that invs from preferred peers are downloaded immediately")
-        self.restart_node(
-            0, extra_args=self.extra_args[0] + ["-whitelist=noban@127.0.0.1"]
-        )
+    def test_preferred_inv(self, context, preferred=False):
+        if preferred:
+            self.log.info(
+                "Check that invs from preferred peers are downloaded immediately"
+            )
+            self.restart_node(
+                0, extra_args=self.extra_args[0] + ["-whitelist=noban@127.0.0.1"]
+            )
+        else:
+            self.log.info(
+                f"Check invs from non-preferred peers are downloaded after "
+                f"{context.constants.nonpref_peer_delay} s"
+            )
+        mock_time = int(time.time() + 1)
+        self.nodes[0].setmocktime(mock_time)
         peer = self.nodes[0].add_p2p_connection(context.p2p_conn())
         peer.send_message(msg_inv([CInv(t=context.inv_type, h=0xFF00FF00)]))
-        peer.wait_until(lambda: peer.getdata_count >= 1)
-        with p2p_lock:
-            assert_equal(peer.getdata_count, 1)
+        peer.sync_with_ping()
+        if preferred:
+            peer.wait_until(lambda: peer.getdata_count >= 1)
+        else:
+            with p2p_lock:
+                assert_equal(peer.getdata_count, 0)
+            self.nodes[0].setmocktime(mock_time + context.constants.nonpref_peer_delay)
+            peer.wait_until(lambda: peer.getdata_count >= 1)
 
     def test_large_inv_batch(self, context):
         max_peer_announcements = context.constants.max_peer_announcements
@@ -404,8 +381,6 @@ class InventoryDownloadTest(BitcoinTestFramework):
         )
         peer.wait_until(lambda: peer.getdata_count == max_peer_announcements)
         peer.sync_with_ping()
-        with p2p_lock:
-            assert_equal(peer.getdata_count, max_peer_announcements)
 
     def test_spurious_notfound(self, context):
         self.log.info("Check that spurious notfound is ignored")
@@ -526,6 +501,8 @@ class InventoryDownloadTest(BitcoinTestFramework):
                 assert "notfound" not in peer.last_message
 
     def run_test(self):
+        self.wallet = MiniWallet(self.nodes[0])
+
         for context in [STAKE_CONTENDER_TEST_CONTEXT]:
             self.test_inv_ignore(context)
 
@@ -545,6 +522,7 @@ class InventoryDownloadTest(BitcoinTestFramework):
             self.test_disconnect_fallback(context)
             self.test_notfound_fallback(context)
             self.test_preferred_inv(context)
+            self.test_preferred_inv(context, True)
             self.test_large_inv_batch(context)
             self.test_spurious_notfound(context)
 

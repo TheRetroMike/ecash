@@ -90,11 +90,11 @@ extern "C" uint32_t GetIPList(void *thread, char *requestedHostname,
 class CDnsThread {
 public:
     struct FlagSpecificData {
-        int nIPv4, nIPv6;
+        int nIPv4{0}, nIPv6{0};
         std::vector<addr_t> cache;
-        time_t cacheTime;
-        unsigned int cacheHits;
-        FlagSpecificData() : nIPv4(0), nIPv6(0), cacheTime(0), cacheHits(0) {}
+        time_t cacheTime{0};
+        unsigned int cacheHits{0};
+        FlagSpecificData() = default;
     };
 
     dns_opt_t dns_opt; // must be first
@@ -252,7 +252,7 @@ extern "C" void *ThreadDumper(void *data) {
             FILE *f = fsbridge::fopen("dnsseed.dat.new", "w+");
             if (f) {
                 {
-                    CAutoFile cf(f, SER_DISK, CLIENT_VERSION);
+                    AutoFile cf(f);
                     cf << db;
                 }
                 rename("dnsseed.dat.new", "dnsseed.dat");
@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
     FILE *f = fsbridge::fopen("dnsseed.dat", "r");
     if (f) {
         tfm::format(std::cout, "Loading dnsseed.dat...");
-        CAutoFile cf(f, SER_DISK, CLIENT_VERSION);
+        AutoFile cf(f);
         cf >> db;
         if (opts.fWipeBan) {
             db.banned.clear();

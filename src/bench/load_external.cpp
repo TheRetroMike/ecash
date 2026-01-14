@@ -29,14 +29,14 @@ static void LoadExternalBlockFile(benchmark::Bench &bench) {
     // Create a single block as in the blocks files (magic bytes, block size,
     // block data) as a stream object.
     const fs::path blkfile{testing_setup.get()->m_path_root / "blk.dat"};
-    CDataStream ss(SER_DISK, 0);
+    DataStream ss{};
     auto params{testing_setup->m_node.chainman->GetParams()};
     ss << params.DiskMagic();
     ss << static_cast<uint32_t>(benchmark::data::block413567.size());
     // We can't use the streaming serialization
     // (ss << benchmark::data::block413567)
     // because that first writes a compact size.
-    ss.write(MakeByteSpan(benchmark::data::block413567));
+    ss << Span{benchmark::data::block413567};
 
     // Create the test file.
     {
@@ -56,7 +56,7 @@ static void LoadExternalBlockFile(benchmark::Bench &bench) {
     bench.run([&] {
         // "rb" is "binary, O_RDONLY", positioned to the start of the file.
         // The file will be closed by LoadExternalBlockFile().
-        FILE *file{fsbridge::fopen(blkfile, "rb")};
+        AutoFile file{fsbridge::fopen(blkfile, "rb")};
         testing_setup->m_node.chainman->LoadExternalBlockFile(
             file, &pos, &blocks_with_unknown_parent);
     });

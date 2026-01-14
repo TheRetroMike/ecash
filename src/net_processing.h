@@ -88,12 +88,6 @@ public:
         //! with a conflicting one.
         int64_t avalanche_peer_replacement_cooldown{
             AVALANCHE_DEFAULT_PEER_REPLACEMENT_COOLDOWN};
-        //! Whether this node has enabled avalanche preconsensus.
-        bool avalanche_preconsensus{DEFAULT_AVALANCHE_PRECONSENSUS};
-        //! Whether this node has enabled avalanche staking rewards
-        //! preconsensus.
-        bool avalanche_staking_preconsensus{
-            DEFAULT_AVALANCHE_STAKING_PRECONSENSUS};
 
         //! Whether or not the internal RNG behaves deterministically (this is
         //! a test-only option).
@@ -153,7 +147,7 @@ public:
 
     /** Process a single message from a peer. Public for fuzz testing */
     virtual void ProcessMessage(const Config &config, CNode &pfrom,
-                                const std::string &msg_type, CDataStream &vRecv,
+                                const std::string &msg_type, DataStream &vRecv,
                                 const std::chrono::microseconds time_received,
                                 const std::atomic<bool> &interruptMsgProc)
         EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) = 0;

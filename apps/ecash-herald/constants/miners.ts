@@ -168,6 +168,27 @@ const miners: Miners = {
                 coinbaseHexFragment: '393020303120507465204c7464', // "90 01 Pte Ltd" ASCII
             },
         ],
+        [
+            '76a9147b5e3b3c03c577cabc88275af797b15637b0fdcd88ac',
+            {
+                miner: 'Node Miner',
+                coinbaseHexFragment: '6e6f64652f', // "node/" ASCII
+            },
+        ],
+        [
+            '76a91467e5fd9e06f01bc40627ad0bdbb5a014c743a81788ac',
+            {
+                miner: 'LSoftware DMCC',
+                coinbaseHexFragment: '4c536f66747761726520444d434320', // "LSoftware DMCC " ASCII
+            },
+        ],
+        [
+            '76a914a1a16b0c06361696165c638b12e2f5cf714bc18f88ac',
+            {
+                miner: 'hash-hut.net',
+                coinbaseHexFragment: '686173682d6875742e6e6574', // "hash-hut.net " ASCII
+            },
+        ],
     ],
 };
 

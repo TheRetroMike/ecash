@@ -4,6 +4,7 @@
 
 #include <test/fuzz/fuzz.h>
 
+#include <test/util/random.h>
 #include <util/check.h>
 
 #include <cstdint>
@@ -29,6 +30,14 @@ void FuzzFrameworkRegisterTarget(std::string_view name, TypeTestOneInput target,
 static TypeTestOneInput *g_test_one_input{nullptr};
 
 void initialize() {
+    // By default, make the RNG deterministic with a fixed seed. This will
+    // affect all randomness during the fuzz test, except:
+    // - GetStrongRandBytes(), which is used for the creation of private key
+    // material.
+    // - Creating a BasicTestingSetup or derived class will switch to a random
+    // seed.
+    SeedRandomStateForTest(SeedRand::ZEROS);
+
     if (std::getenv("PRINT_ALL_FUZZ_TARGETS_AND_ABORT")) {
         for (const auto &t : FuzzTargets()) {
             std::cout << t.first << std::endl;

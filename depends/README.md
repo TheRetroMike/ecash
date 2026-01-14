@@ -90,7 +90,7 @@ The following can be set when running make: `make FOO=bar`
 - `SDK_PATH`: Path where SDKs can be found (used by macOS)
 - `FALLBACK_DOWNLOAD_PATH`: If a source file can't be fetched, try here before giving up
 - `C_STANDARD`: Set the C standard version used. Defaults to `gnu11`.
-- `CXX_STANDARD`: Set the C++ standard version used. Defaults to `c++17`.
+- `CXX_STANDARD`: Set the C++ standard version used. Defaults to `c++20`.
 - `NO_QT`: Don't download/build/cache Qt and its dependencies
 - `NO_QR`: Don't download/build/cache packages needed for enabling qrencode
 - `NO_ZMQ`: Don't download/build/cache packages needed for enabling ZeroMQ
@@ -114,7 +114,7 @@ The following can be set when running make: `make FOO=bar`
 If some packages are not built, for example by building the depends with
 `make NO_WALLET=1`, the appropriate options should be set when building Bitcoin
 ABC using these dependencies.
-In this example, `-DBUILD_BITCOIN_WALLET=OFF` should be passed to the `cmake`
+In this example, `-DBUILD_WALLET=OFF` should be passed to the `cmake`
 command line to ensure that the build will not fail due to missing dependencies.
 
 Additional targets:

@@ -95,10 +95,17 @@ public:
 
     CBlockHeader header;
 
-    // Dummy for deserialization
+    /**
+     * Dummy for deserialization
+     */
     CBlockHeaderAndShortTxIDs() {}
 
-    explicit CBlockHeaderAndShortTxIDs(const CBlock &block);
+    /**
+     * @param[in]  nonce  This should be randomly generated, and is used for
+     *     the siphash secret key
+     */
+    explicit CBlockHeaderAndShortTxIDs(const CBlock &block,
+                                       const uint64_t nonce);
 
     uint64_t GetShortID(const TxHash &txhash) const;
 
@@ -166,11 +173,10 @@ public:
     PartiallyDownloadedBlock(const Config &configIn, CTxMemPool *poolIn)
         : pool(poolIn), config(&configIn) {}
 
-    // extra_txn is a list of extra transactions to look at, in <txhash,
-    // reference> form.
-    ReadStatus
-    InitData(const CBlockHeaderAndShortTxIDs &cmpctblock,
-             const std::vector<std::pair<TxHash, CTransactionRef>> &extra_txn);
+    // extra_txn is a list of extra orphan/conflicted/etc transactions to look
+    // at
+    ReadStatus InitData(const CBlockHeaderAndShortTxIDs &cmpctblock,
+                        const std::vector<CTransactionRef> &extra_txn);
     bool IsTxAvailable(size_t index) const;
     ReadStatus FillBlock(CBlock &block,
                          const std::vector<CTransactionRef> &vtx_missing);

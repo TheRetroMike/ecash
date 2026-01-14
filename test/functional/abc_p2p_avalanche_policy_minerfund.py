@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the resolution of miner fund changes via avalanche."""
+
 import random
 
 from test_framework.avatools import (
@@ -100,7 +101,6 @@ class AvalancheMinerFundTest(BitcoinTestFramework):
                 )
 
             pad_tx(cb)
-            cb.calc_sha256()
             return cb
 
         def new_block(tip, miner_fund_addr, miner_fund_amount):
@@ -117,29 +117,29 @@ class AvalancheMinerFundTest(BitcoinTestFramework):
                 miner_fund_addr == MINER_FUND_ADDR
                 and miner_fund_amount >= policy_miner_fund_amount
             )
-            expected_tip = block.hash if matches_policy else tip
+            expected_tip = block.hash_hex if matches_policy else tip
             assert_equal(node.getbestblockhash(), expected_tip)
 
             # Poll and check the node votes what we expect
-            poll_node.send_poll([block.sha256])
+            poll_node.send_poll([block.hash_int])
             expected_vote = (
                 AvalancheVoteError.ACCEPTED
                 if matches_policy
                 else AvalancheVoteError.PARKED
             )
             assert_response(
-                poll_node, avakey, [AvalancheVote(expected_vote, block.sha256)]
+                poll_node, avakey, [AvalancheVote(expected_vote, block.hash_int)]
             )
 
             # Vote yes on this block until the node accepts it
-            self.wait_until(lambda: has_accepted_tip(block.hash))
-            assert_equal(node.getbestblockhash(), block.hash)
+            self.wait_until(lambda: has_accepted_tip(block.hash_hex))
+            assert_equal(node.getbestblockhash(), block.hash_hex)
 
-            poll_node.send_poll([block.sha256])
+            poll_node.send_poll([block.hash_int])
             assert_response(
                 poll_node,
                 avakey,
-                [AvalancheVote(AvalancheVoteError.ACCEPTED, block.sha256)],
+                [AvalancheVote(AvalancheVoteError.ACCEPTED, block.hash_int)],
             )
 
             return block
@@ -172,7 +172,9 @@ class AvalancheMinerFundTest(BitcoinTestFramework):
         # Check a rejection case
         tip = node.getbestblockhash()
         self.log.info("Miner fund rejection test case")
-        reject = new_block(tip, OTHER_MINER_FUND_ADDR, policy_miner_fund_amount).hash
+        reject = new_block(
+            tip, OTHER_MINER_FUND_ADDR, policy_miner_fund_amount
+        ).hash_hex
         reject_hash = int(reject, 16)
         with node.wait_for_debug_log(
             [f"Avalanche invalidated block {reject}".encode()],
@@ -183,7 +185,7 @@ class AvalancheMinerFundTest(BitcoinTestFramework):
             pass
 
         # Build a block on the accepted tip and the chain continues as normal
-        tip = new_block(tip, MINER_FUND_ADDR, policy_miner_fund_amount).hash
+        tip = new_block(tip, MINER_FUND_ADDR, policy_miner_fund_amount).hash_hex
         assert_equal(node.getbestblockhash(), tip)
 
         # Tip should finalize

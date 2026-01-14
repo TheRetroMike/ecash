@@ -17,6 +17,7 @@ ser_*, deser_*: functions that handle serialization/deserialization.
 Classes use __slots__ to ensure extraneous attributes aren't accidentally added
 by tests, compromising their intended effect.
 """
+
 import copy
 import hashlib
 import random
@@ -27,7 +28,7 @@ import unittest
 from base64 import b64decode, b64encode
 from enum import IntEnum
 from io import BytesIO
-from typing import List
+from typing import List, Optional
 
 from test_framework.siphash import siphash256
 from test_framework.util import assert_equal, uint256_hex
@@ -406,7 +407,7 @@ class CTxOut:
 
 
 class CTransaction:
-    __slots__ = ("hash", "nLockTime", "nVersion", "sha256", "vin", "vout")
+    __slots__ = ("nLockTime", "nVersion", "vin", "vout")
 
     def __init__(self, tx=None):
         if tx is None:
@@ -414,23 +415,17 @@ class CTransaction:
             self.vin = []
             self.vout = []
             self.nLockTime = 0
-            self.sha256 = None
-            self.hash = None
         else:
             self.nVersion = tx.nVersion
             self.vin = copy.deepcopy(tx.vin)
             self.vout = copy.deepcopy(tx.vout)
             self.nLockTime = tx.nLockTime
-            self.sha256 = tx.sha256
-            self.hash = tx.hash
 
     def deserialize(self, f):
         self.nVersion = struct.unpack("<i", f.read(4))[0]
         self.vin = deser_vector(f, CTxIn)
         self.vout = deser_vector(f, CTxOut)
         self.nLockTime = struct.unpack("<I", f.read(4))[0]
-        self.sha256 = None
-        self.hash = None
 
     def billable_size(self):
         """
@@ -446,25 +441,17 @@ class CTransaction:
             + struct.pack("<I", self.nLockTime)
         )
 
-    # Recalculate the txid
-    def rehash(self):
-        self.sha256 = None
-        self.calc_sha256()
-        return self.hash
+    @property
+    def txid_hex(self) -> str:
+        """Return txid  as hex string."""
+        return hash256(self.serialize())[::-1].hex()
 
-    # self.sha256 and self.hash -- those are expected to be the txid.
-    def calc_sha256(self):
-        if self.sha256 is None:
-            self.sha256 = uint256_from_str(hash256(self.serialize()))
-        self.hash = hash256(self.serialize())[::-1].hex()
-
-    def get_id(self):
-        # For now, just forward the hash.
-        self.calc_sha256()
-        return self.hash
+    @property
+    def txid_int(self) -> int:
+        """Return txid as integer."""
+        return uint256_from_str(hash256(self.serialize()))
 
     def is_valid(self):
-        self.calc_sha256()
         for tout in self.vout:
             if tout.nValue < 0 or tout.nValue > MAX_MONEY:
                 return False
@@ -479,14 +466,12 @@ class CTransaction:
 
 class CBlockHeader:
     __slots__ = (
-        "hash",
         "hashMerkleRoot",
         "hashPrevBlock",
         "nBits",
         "nNonce",
         "nTime",
         "nVersion",
-        "sha256",
     )
 
     def __init__(self, header=None):
@@ -499,9 +484,6 @@ class CBlockHeader:
             self.nTime = header.nTime
             self.nBits = header.nBits
             self.nNonce = header.nNonce
-            self.sha256 = header.sha256
-            self.hash = header.hash
-            self.calc_sha256()
 
     def set_null(self):
         self.nVersion = 1
@@ -510,8 +492,6 @@ class CBlockHeader:
         self.nTime = 0
         self.nBits = 0
         self.nNonce = 0
-        self.sha256 = None
-        self.hash = None
 
     def deserialize(self, f):
         self.nVersion = struct.unpack("<i", f.read(4))[0]
@@ -520,10 +500,11 @@ class CBlockHeader:
         self.nTime = struct.unpack("<I", f.read(4))[0]
         self.nBits = struct.unpack("<I", f.read(4))[0]
         self.nNonce = struct.unpack("<I", f.read(4))[0]
-        self.sha256 = None
-        self.hash = None
 
     def serialize(self) -> bytes:
+        return self._serialize_header()
+
+    def _serialize_header(self) -> bytes:
         return (
             struct.pack("<i", self.nVersion)
             + ser_uint256(self.hashPrevBlock)
@@ -533,23 +514,15 @@ class CBlockHeader:
             + struct.pack("<I", self.nNonce)
         )
 
-    def calc_sha256(self):
-        if self.sha256 is None:
-            r = (
-                struct.pack("<i", self.nVersion)
-                + ser_uint256(self.hashPrevBlock)
-                + ser_uint256(self.hashMerkleRoot)
-                + struct.pack("<I", self.nTime)
-                + struct.pack("<I", self.nBits)
-                + struct.pack("<I", self.nNonce)
-            )
-            self.sha256 = uint256_from_str(hash256(r))
-            self.hash = hash256(r)[::-1].hex()
+    @property
+    def hash_hex(self) -> str:
+        """Return block header hash as hex string."""
+        return hash256(self._serialize_header())[::-1].hex()
 
-    def rehash(self):
-        self.sha256 = None
-        self.calc_sha256()
-        return self.sha256
+    @property
+    def hash_int(self) -> int:
+        """Return block header hash as integer."""
+        return uint256_from_str(hash256(self._serialize_header()))
 
     def __repr__(self):
         return (
@@ -591,14 +564,12 @@ class CBlock(CBlockHeader):
     def calc_merkle_root(self):
         hashes = []
         for tx in self.vtx:
-            tx.calc_sha256()
-            hashes.append(ser_uint256(tx.sha256))
+            hashes.append(ser_uint256(tx.txid_int))
         return self.get_merkle_root(hashes)
 
     def is_valid(self):
-        self.calc_sha256()
         target = uint256_from_compact(self.nBits)
-        if self.sha256 > target:
+        if self.hash_int > target:
             return False
         for tx in self.vtx:
             if not tx.is_valid():
@@ -608,11 +579,9 @@ class CBlock(CBlockHeader):
         return True
 
     def solve(self):
-        self.rehash()
         target = uint256_from_compact(self.nBits)
-        while self.sha256 > target:
+        while self.hash_int > target:
             self.nNonce += 1
-            self.rehash()
 
     def __repr__(self):
         return (
@@ -758,7 +727,7 @@ class HeaderAndShortIDs:
         [k0, k1] = self.get_siphash_keys()
         for i in range(len(block.vtx)):
             if i not in prefill_list:
-                tx_hash = block.vtx[i].sha256
+                tx_hash = block.vtx[i].txid_int
                 self.shortids.append(calculate_shortid(k0, k1, tx_hash))
 
     def __repr__(self):
@@ -1098,7 +1067,7 @@ class AvalancheResponse:
 class TCPAvalancheResponse:
     __slots__ = ("response", "sig")
 
-    def __init__(self, response=AvalancheResponse(), sig=b"\0" * 64):
+    def __init__(self, response: AvalancheResponse, sig=b"\0" * 64):
         self.response = response
         self.sig = sig
 
@@ -1178,7 +1147,7 @@ class AvalancheDelegation:
 class AvalancheHello:
     __slots__ = ("delegation", "sig")
 
-    def __init__(self, delegation=AvalancheDelegation(), sig=b"\0" * 64):
+    def __init__(self, delegation: AvalancheDelegation, sig=b"\0" * 64):
         self.delegation = delegation
         self.sig = sig
 
@@ -1456,8 +1425,8 @@ class msg_tx:
     __slots__ = ("tx",)
     msgtype = b"tx"
 
-    def __init__(self, tx=CTransaction()):
-        self.tx = tx
+    def __init__(self, tx: Optional[CTransaction] = None):
+        self.tx = tx or CTransaction()
 
     def deserialize(self, f):
         self.tx.deserialize(f)
@@ -2060,7 +2029,7 @@ class msg_tcpavaresponse:
     msgtype = b"avaresponse"
 
     def __init__(self):
-        self.response = TCPAvalancheResponse()
+        self.response = TCPAvalancheResponse(AvalancheResponse())
 
     def deserialize(self, f):
         self.response.deserialize(f)
@@ -2077,7 +2046,7 @@ class msg_avahello:
     msgtype = b"avahello"
 
     def __init__(self):
-        self.hello = AvalancheHello()
+        self.hello = AvalancheHello(AvalancheDelegation())
 
     def deserialize(self, f):
         self.hello.deserialize(f)

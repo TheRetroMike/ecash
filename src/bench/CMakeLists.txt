@@ -41,7 +41,6 @@ add_executable(bitcoin-bench
 	block_assemble.cpp
 	cashaddr.cpp
 	ccoins_caching.cpp
-	chacha_poly_aead.cpp
 	chacha20.cpp
 	chained_tx.cpp
 	checkblock.cpp
@@ -63,6 +62,7 @@ add_executable(bitcoin-bench
 	peer_eviction.cpp
 	poly1305.cpp
 	prevector.cpp
+	readwriteblock.cpp
 	rollingbloom.cpp
 	rpc_blockchain.cpp
 	rpc_mempool.cpp
@@ -77,7 +77,7 @@ add_executable(bitcoin-bench
 
 target_link_libraries(bitcoin-bench testutil)
 
-if(BUILD_BITCOIN_WALLET)
+if(BUILD_WALLET)
 	target_sources(bitcoin-bench
 		PRIVATE
 			coin_selection.cpp

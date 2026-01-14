@@ -45,7 +45,7 @@ RPC_EVAL_FALSE_ERROR = f"{EVAL_FALSE_ERROR}ent)"
 
 
 class PreviousSpendableOutput(object):
-    def __init__(self, tx=CTransaction(), n=-1):
+    def __init__(self, tx: CTransaction, n=-1):
         self.tx = tx
         self.n = n
 
@@ -86,7 +86,7 @@ class SegwitRecoveryTest(BitcoinTestFramework):
             base_block_hash = self.genesis_hash
             block_time = TEST_TIME
         else:
-            base_block_hash = base_block.sha256
+            base_block_hash = base_block.hash_int
             block_time = base_block.nTime + 1
         # First create the coinbase
         self.tip_height += 1
@@ -137,7 +137,7 @@ class SegwitRecoveryTest(BitcoinTestFramework):
 
             # Fund transaction to segwit addresses
             txfund = CTransaction()
-            txfund.vin = [CTxIn(COutPoint(spend.tx.sha256, spend.n))]
+            txfund.vin = [CTxIn(COutPoint(spend.tx.txid_int, spend.n))]
             amount = (50 * COIN - 1000) // len(redeem_scripts)
             for redeem_script in redeem_scripts:
                 txfund.vout.append(
@@ -145,7 +145,6 @@ class SegwitRecoveryTest(BitcoinTestFramework):
                         amount, CScript([OP_HASH160, hash160(redeem_script), OP_EQUAL])
                     )
                 )
-            txfund.rehash()
 
             # Segwit spending transaction
             # We'll test if a node that checks for standardness accepts this
@@ -156,7 +155,7 @@ class SegwitRecoveryTest(BitcoinTestFramework):
             txspend = CTransaction()
             for i in range(len(redeem_scripts)):
                 txspend.vin.append(
-                    CTxIn(COutPoint(txfund.sha256, i), CScript([redeem_scripts[i]]))
+                    CTxIn(COutPoint(txfund.txid_int, i), CScript([redeem_scripts[i]]))
                 )
             txspend.vout = [
                 CTxOut(
@@ -164,7 +163,6 @@ class SegwitRecoveryTest(BitcoinTestFramework):
                     CScript([OP_HASH160, hash160(CScript([OP_TRUE])), OP_EQUAL]),
                 )
             ]
-            txspend.rehash()
 
             return txfund, txspend
 

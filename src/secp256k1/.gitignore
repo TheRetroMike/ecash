@@ -10,10 +10,12 @@ bench_internal
 tests
 exhaustive_tests
 gen_context
+gen_ecmult_static_pre_g
 valgrind_ctime_test
 *.exe
 *.so
 *.a
+*.csv
 !.gitignore
 
 Makefile

@@ -38,6 +38,7 @@
 #include <util/error.h>
 #include <util/strencodings.h>
 #include <util/string.h>
+#include <util/vector.h>
 #include <validation.h>
 #include <validationinterface.h>
 
@@ -47,7 +48,6 @@
 #include <univalue.h>
 
 using node::AnalyzePSBT;
-using node::BroadcastTransaction;
 using node::FindCoins;
 using node::GetTransaction;
 using node::NodeContext;
@@ -60,7 +60,7 @@ static void TxToJSON(const CTransaction &tx, const BlockHash &hashBlock,
     // Blockchain contextual information (confirmations and blocktime) is not
     // available to code in bitcoin-common, so we query them here and push the
     // data into the returned UniValue.
-    TxToUniv(tx, BlockHash(), entry, true, RPCSerializationFlags());
+    TxToUniv(tx, BlockHash(), entry, true);
 
     if (!hashBlock.IsNull()) {
         LOCK(cs_main);
@@ -85,7 +85,7 @@ static void TxToJSON(const CTransaction &tx, const BlockHash &hashBlock,
 static RPCHelpMan getrawtransaction() {
     return RPCHelpMan{
         "getrawtransaction",
-        "\nReturn the raw transaction data.\n"
+        "Return the raw transaction data.\n"
         "\nBy default, this call only returns a transaction if it is in the "
         "mempool. If -txindex is enabled\n"
         "and no blockhash argument is passed, it will return the transaction "
@@ -96,7 +96,7 @@ static RPCHelpMan getrawtransaction() {
         "\nIf verbose is 'true', returns an Object with information about "
         "'txid'.\n"
         "If verbose is 'false' or omitted, returns a string that is "
-        "serialized, hex-encoded data for 'txid'.\n",
+        "serialized, hex-encoded data for 'txid'.",
         {
             {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO,
              "The transaction id"},
@@ -117,79 +117,26 @@ static RPCHelpMan getrawtransaction() {
                 RPCResult::Type::OBJ,
                 "",
                 "",
-                {
-                    {RPCResult::Type::BOOL, "in_active_chain",
-                     "Whether specified block is in the active chain or not "
-                     "(only present with explicit \"blockhash\" argument)"},
-                    {RPCResult::Type::STR_HEX, "hex",
-                     "The serialized, hex-encoded data for 'txid'"},
-                    {RPCResult::Type::STR_HEX, "txid",
-                     "The transaction id (same as provided)"},
-                    {RPCResult::Type::STR_HEX, "hash", "The transaction hash"},
-                    {RPCResult::Type::NUM, "size",
-                     "The serialized transaction size"},
-                    {RPCResult::Type::NUM, "version", "The version"},
-                    {RPCResult::Type::NUM_TIME, "locktime", "The lock time"},
-                    {RPCResult::Type::ARR,
-                     "vin",
-                     "",
-                     {
-                         {RPCResult::Type::OBJ,
-                          "",
-                          "",
-                          {
-                              {RPCResult::Type::STR_HEX, "txid",
-                               "The transaction id"},
-                              {RPCResult::Type::STR, "vout", ""},
-                              {RPCResult::Type::OBJ,
-                               "scriptSig",
-                               "The script",
-                               {
-                                   {RPCResult::Type::STR, "asm", "asm"},
-                                   {RPCResult::Type::STR_HEX, "hex", "hex"},
-                               }},
-                              {RPCResult::Type::NUM, "sequence",
-                               "The script sequence number"},
-                          }},
-                     }},
-                    {RPCResult::Type::ARR,
-                     "vout",
-                     "",
-                     {
-                         {RPCResult::Type::OBJ,
-                          "",
-                          "",
-                          {
-                              {RPCResult::Type::NUM, "value",
-                               "The value in " + Currency::get().ticker},
-                              {RPCResult::Type::NUM, "n", "index"},
-                              {RPCResult::Type::OBJ,
-                               "scriptPubKey",
-                               "",
-                               {
-                                   {RPCResult::Type::STR, "asm", "the asm"},
-                                   {RPCResult::Type::STR, "hex", "the hex"},
-                                   {RPCResult::Type::NUM, "reqSigs",
-                                    "The required sigs"},
-                                   {RPCResult::Type::STR, "type",
-                                    "The type, eg 'pubkeyhash'"},
-                                   {RPCResult::Type::ARR,
-                                    "addresses",
-                                    "",
-                                    {
-                                        {RPCResult::Type::STR, "address",
-                                         "bitcoin address"},
-                                    }},
-                               }},
-                          }},
-                     }},
-                    {RPCResult::Type::STR_HEX, "blockhash", "the block hash"},
-                    {RPCResult::Type::NUM, "confirmations",
-                     "The confirmations"},
-                    {RPCResult::Type::NUM_TIME, "blocktime",
-                     "The block time expressed in " + UNIX_EPOCH_TIME},
-                    {RPCResult::Type::NUM, "time", "Same as \"blocktime\""},
-                }},
+                Cat<std::vector<RPCResult>>(
+                    {
+                        {RPCResult::Type::BOOL, "in_active_chain",
+                         "Whether specified block is in the active chain or "
+                         "not "
+                         "(only present with explicit \"blockhash\" argument)"},
+                        {RPCResult::Type::STR_HEX, "blockhash",
+                         "the block hash"},
+                        {RPCResult::Type::NUM, "confirmations",
+                         "The confirmations"},
+                        {RPCResult::Type::NUM_TIME, "blocktime",
+                         "The block time expressed in " + UNIX_EPOCH_TIME},
+                        {RPCResult::Type::NUM, "time", "Same as \"blocktime\""},
+                        {RPCResult::Type::STR_HEX, "hex",
+                         "The serialized, hex-encoded data for 'txid'"},
+                    },
+                    DecodeTxDoc(/*txid_field_doc=*/"The transaction id (same "
+                                                   "as provided)",
+                                /*wallet=*/false)),
+            },
         },
         RPCExamples{HelpExampleCli("getrawtransaction", "\"mytxid\"") +
                     HelpExampleCli("getrawtransaction", "\"mytxid\" true") +
@@ -273,7 +220,7 @@ static RPCHelpMan getrawtransaction() {
             }
 
             if (!fVerbose) {
-                return EncodeHexTx(*tx, RPCSerializationFlags());
+                return EncodeHexTx(*tx);
             }
 
             UniValue result(UniValue::VOBJ);
@@ -399,66 +346,9 @@ static RPCHelpMan decoderawtransaction() {
             RPCResult::Type::OBJ,
             "",
             "",
-            {
-                {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
-                {RPCResult::Type::STR_HEX, "hash", "The transaction hash"},
-                {RPCResult::Type::NUM, "size", "The transaction size"},
-                {RPCResult::Type::NUM, "version", "The version"},
-                {RPCResult::Type::NUM_TIME, "locktime", "The lock time"},
-                {RPCResult::Type::ARR,
-                 "vin",
-                 "",
-                 {
-                     {RPCResult::Type::OBJ,
-                      "",
-                      "",
-                      {
-                          {RPCResult::Type::STR_HEX, "txid",
-                           "The transaction id"},
-                          {RPCResult::Type::NUM, "vout", "The output number"},
-                          {RPCResult::Type::OBJ,
-                           "scriptSig",
-                           "The script",
-                           {
-                               {RPCResult::Type::STR, "asm", "asm"},
-                               {RPCResult::Type::STR_HEX, "hex", "hex"},
-                           }},
-                          {RPCResult::Type::NUM, "sequence",
-                           "The script sequence number"},
-                      }},
-                 }},
-                {RPCResult::Type::ARR,
-                 "vout",
-                 "",
-                 {
-                     {RPCResult::Type::OBJ,
-                      "",
-                      "",
-                      {
-                          {RPCResult::Type::NUM, "value",
-                           "The value in " + Currency::get().ticker},
-                          {RPCResult::Type::NUM, "n", "index"},
-                          {RPCResult::Type::OBJ,
-                           "scriptPubKey",
-                           "",
-                           {
-                               {RPCResult::Type::STR, "asm", "the asm"},
-                               {RPCResult::Type::STR_HEX, "hex", "the hex"},
-                               {RPCResult::Type::NUM, "reqSigs",
-                                "The required sigs"},
-                               {RPCResult::Type::STR, "type",
-                                "The type, eg 'pubkeyhash'"},
-                               {RPCResult::Type::ARR,
-                                "addresses",
-                                "",
-                                {
-                                    {RPCResult::Type::STR, "address",
-                                     "bitcoin address"},
-                                }},
-                           }},
-                      }},
-                 }},
-            }},
+            DecodeTxDoc(/*txid_field_doc=*/"The transaction id",
+                        /*wallet=*/false),
+        },
         RPCExamples{HelpExampleCli("decoderawtransaction", "\"hexstring\"") +
                     HelpExampleRpc("decoderawtransaction", "\"hexstring\"")},
         [&](const RPCHelpMan &self, const Config &config,
@@ -563,7 +453,7 @@ static RPCHelpMan combinerawtransaction() {
                                    R"('["myhex1", "myhex2", "myhex3"]')")},
         [&](const RPCHelpMan &self, const Config &config,
             const JSONRPCRequest &request) -> UniValue {
-            UniValue txs = request.params[0].get_array();
+            const UniValue &txs = request.params[0].get_array();
             std::vector<CMutableTransaction> txVariants(txs.size());
 
             for (unsigned int idx = 0; idx < txs.size(); idx++) {
@@ -748,7 +638,7 @@ static RPCHelpMan signrawtransactionwithkey() {
             FillableSigningProvider keystore;
             const UniValue &keys = request.params[1].get_array();
             for (size_t idx = 0; idx < keys.size(); ++idx) {
-                UniValue k = keys[idx];
+                const UniValue &k = keys[idx];
                 CKey key = DecodeSecret(k.get_str());
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
@@ -950,7 +840,7 @@ static RPCHelpMan decodepsbt() {
             // Add the decoded tx
             UniValue tx_univ(UniValue::VOBJ);
             TxToUniv(CTransaction(*psbtx.tx), BlockHash(), tx_univ, false);
-            result.pushKV("tx", tx_univ);
+            result.pushKV("tx", std::move(tx_univ));
 
             // Unknown data
             if (psbtx.unknown.size() > 0) {
@@ -958,7 +848,7 @@ static RPCHelpMan decodepsbt() {
                 for (auto entry : psbtx.unknown) {
                     unknowns.pushKV(HexStr(entry.first), HexStr(entry.second));
                 }
-                result.pushKV("unknown", unknowns);
+                result.pushKV("unknown", std::move(unknowns));
             }
 
             // inputs
@@ -985,8 +875,8 @@ static RPCHelpMan decodepsbt() {
 
                     UniValue o(UniValue::VOBJ);
                     ScriptToUniv(txout.scriptPubKey, o, true);
-                    out.pushKV("scriptPubKey", o);
-                    in.pushKV("utxo", out);
+                    out.pushKV("scriptPubKey", std::move(o));
+                    in.pushKV("utxo", std::move(out));
                 } else {
                     have_all_utxos = false;
                 }
@@ -998,7 +888,7 @@ static RPCHelpMan decodepsbt() {
                         partial_sigs.pushKV(HexStr(sig.second.first),
                                             HexStr(sig.second.second));
                     }
-                    in.pushKV("partial_signatures", partial_sigs);
+                    in.pushKV("partial_signatures", std::move(partial_sigs));
                 }
 
                 // Sighash
@@ -1012,7 +902,7 @@ static RPCHelpMan decodepsbt() {
                 if (!input.redeem_script.empty()) {
                     UniValue r(UniValue::VOBJ);
                     ScriptToUniv(input.redeem_script, r, false);
-                    in.pushKV("redeem_script", r);
+                    in.pushKV("redeem_script", std::move(r));
                 }
 
                 // keypaths
@@ -1028,9 +918,9 @@ static RPCHelpMan decodepsbt() {
                                       ReadBE32(entry.second.fingerprint)));
                         keypath.pushKV("path",
                                        WriteHDKeypath(entry.second.path));
-                        keypaths.push_back(keypath);
+                        keypaths.push_back(std::move(keypath));
                     }
-                    in.pushKV("bip32_derivs", keypaths);
+                    in.pushKV("bip32_derivs", std::move(keypaths));
                 }
 
                 // Final scriptSig
@@ -1039,7 +929,7 @@ static RPCHelpMan decodepsbt() {
                     scriptsig.pushKV(
                         "asm", ScriptToAsmStr(input.final_script_sig, true));
                     scriptsig.pushKV("hex", HexStr(input.final_script_sig));
-                    in.pushKV("final_scriptSig", scriptsig);
+                    in.pushKV("final_scriptSig", std::move(scriptsig));
                 }
 
                 // Unknown data
@@ -1049,12 +939,12 @@ static RPCHelpMan decodepsbt() {
                         unknowns.pushKV(HexStr(entry.first),
                                         HexStr(entry.second));
                     }
-                    in.pushKV("unknown", unknowns);
+                    in.pushKV("unknown", std::move(unknowns));
                 }
 
-                inputs.push_back(in);
+                inputs.push_back(std::move(in));
             }
-            result.pushKV("inputs", inputs);
+            result.pushKV("inputs", std::move(inputs));
 
             // outputs
             Amount output_value = Amount::zero();
@@ -1066,7 +956,7 @@ static RPCHelpMan decodepsbt() {
                 if (!output.redeem_script.empty()) {
                     UniValue r(UniValue::VOBJ);
                     ScriptToUniv(output.redeem_script, r, false);
-                    out.pushKV("redeem_script", r);
+                    out.pushKV("redeem_script", std::move(r));
                 }
 
                 // keypaths
@@ -1081,9 +971,9 @@ static RPCHelpMan decodepsbt() {
                                       ReadBE32(entry.second.fingerprint)));
                         keypath.pushKV("path",
                                        WriteHDKeypath(entry.second.path));
-                        keypaths.push_back(keypath);
+                        keypaths.push_back(std::move(keypath));
                     }
-                    out.pushKV("bip32_derivs", keypaths);
+                    out.pushKV("bip32_derivs", std::move(keypaths));
                 }
 
                 // Unknown data
@@ -1093,10 +983,10 @@ static RPCHelpMan decodepsbt() {
                         unknowns.pushKV(HexStr(entry.first),
                                         HexStr(entry.second));
                     }
-                    out.pushKV("unknown", unknowns);
+                    out.pushKV("unknown", std::move(unknowns));
                 }
 
-                outputs.push_back(out);
+                outputs.push_back(std::move(out));
 
                 // Fee calculation
                 if (MoneyRange(psbtx.tx->vout[i].nValue) &&
@@ -1107,7 +997,7 @@ static RPCHelpMan decodepsbt() {
                     have_all_utxos = false;
                 }
             }
-            result.pushKV("outputs", outputs);
+            result.pushKV("outputs", std::move(outputs));
             if (have_all_utxos) {
                 result.pushKV("fee", total_in - output_value);
             }
@@ -1143,7 +1033,7 @@ static RPCHelpMan combinepsbt() {
             const JSONRPCRequest &request) -> UniValue {
             // Unserialize the transactions
             std::vector<PartiallySignedTransaction> psbtxs;
-            UniValue txs = request.params[0].get_array();
+            const UniValue &txs = request.params[0].get_array();
             if (txs.empty()) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER,
                                    "Parameter 'txs' cannot be empty");
@@ -1164,7 +1054,7 @@ static RPCHelpMan combinepsbt() {
                 throw JSONRPCTransactionError(error);
             }
 
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << merged_psbt;
             return EncodeBase64(ssTx);
         },
@@ -1221,7 +1111,7 @@ static RPCHelpMan finalizepsbt() {
             bool complete = FinalizeAndExtractPSBT(psbtx, mtx);
 
             UniValue result(UniValue::VOBJ);
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             std::string result_str;
 
             if (complete && extract) {
@@ -1332,7 +1222,7 @@ static RPCHelpMan createpsbt() {
             }
 
             // Serialize the PSBT
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << psbtx;
 
             return EncodeBase64(ssTx);
@@ -1398,7 +1288,7 @@ static RPCHelpMan converttopsbt() {
             }
 
             // Serialize the PSBT
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << psbtx;
 
             return EncodeBase64(ssTx);
@@ -1505,7 +1395,7 @@ RPCHelpMan utxoupdatepsbt() {
                 UpdatePSBTOutput(public_provider, psbtx, i);
             }
 
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << psbtx;
             return EncodeBase64(ssTx);
         },
@@ -1531,7 +1421,7 @@ RPCHelpMan joinpsbts() {
             const JSONRPCRequest &request) -> UniValue {
             // Unserialize the transactions
             std::vector<PartiallySignedTransaction> psbtxs;
-            UniValue txs = request.params[0].get_array();
+            const UniValue &txs = request.params[0].get_array();
 
             if (txs.size() <= 1) {
                 throw JSONRPCError(
@@ -1615,7 +1505,7 @@ RPCHelpMan joinpsbts() {
             shuffled_psbt.unknown.insert(merged_psbt.unknown.begin(),
                                          merged_psbt.unknown.end());
 
-            CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssTx{};
             ssTx << shuffled_psbt;
             return EncodeBase64(ssTx);
         },
@@ -1725,7 +1615,7 @@ RPCHelpMan analyzepsbt() {
                     for (const CKeyID &pubkey : input.missing_pubkeys) {
                         missing_pubkeys_univ.push_back(HexStr(pubkey));
                     }
-                    missing.pushKV("pubkeys", missing_pubkeys_univ);
+                    missing.pushKV("pubkeys", std::move(missing_pubkeys_univ));
                 }
                 if (!input.missing_redeem_script.IsNull()) {
                     missing.pushKV("redeemscript",
@@ -1736,15 +1626,15 @@ RPCHelpMan analyzepsbt() {
                     for (const CKeyID &pubkey : input.missing_sigs) {
                         missing_sigs_univ.push_back(HexStr(pubkey));
                     }
-                    missing.pushKV("signatures", missing_sigs_univ);
+                    missing.pushKV("signatures", std::move(missing_sigs_univ));
                 }
                 if (!missing.getKeys().empty()) {
-                    input_univ.pushKV("missing", missing);
+                    input_univ.pushKV("missing", std::move(missing));
                 }
-                inputs_result.push_back(input_univ);
+                inputs_result.push_back(std::move(input_univ));
             }
             if (!inputs_result.empty()) {
-                result.pushKV("inputs", inputs_result);
+                result.pushKV("inputs", std::move(inputs_result));
             }
             if (psbta.estimated_vsize != std::nullopt) {
                 result.pushKV("estimated_vsize", (int)*psbta.estimated_vsize);

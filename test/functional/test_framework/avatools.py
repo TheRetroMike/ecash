@@ -481,13 +481,17 @@ def build_msg_avaproofs(
 
 def can_find_inv_in_poll(
     quorum,
-    inv_hash,
+    inv_hashes,
     response=AvalancheVoteError.ACCEPTED,
     other_response=AvalancheVoteError.ACCEPTED,
     unexpected_hashes=None,
-    response_map={},
+    response_map: Optional[dict] = None,
 ):
     found_hash = False
+
+    if not isinstance(inv_hashes, list):
+        inv_hashes = [inv_hashes]
+
     for n in quorum:
         poll = n.get_avapoll_if_available()
 
@@ -501,17 +505,17 @@ def can_find_inv_in_poll(
             # Vote to everything but our searched inv
             r = other_response
 
-            if response_map.get(inv.type, None):
+            if response_map is not None and response_map.get(inv.type, None):
                 r = response_map[inv.type]
 
             # Look for what we expect
-            if inv.hash == inv_hash:
+            if inv.hash in inv_hashes:
                 r = response
                 found_hash = True
 
-            assert inv.hash not in (
-                unexpected_hashes or []
-            ), f"Unexpected inv hash {inv.hash} found in list {unexpected_hashes}"
+            assert inv.hash not in (unexpected_hashes or []), (
+                f"Unexpected inv hash {inv.hash} found in list {unexpected_hashes}"
+            )
 
             votes.append(AvalancheVote(r, inv.hash))
 

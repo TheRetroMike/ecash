@@ -5,6 +5,7 @@
 
 Verify that a bitcoind node can load multiple wallet files
 """
+
 import os
 import shutil
 import stat
@@ -564,7 +565,7 @@ class MultiWalletTest(BitcoinTestFramework):
         )
         assert_raises_rpc_error(
             -8, "Cannot unload the requested wallet", w1.unloadwallet, "w2"
-        ),
+        )
 
         # Successfully unload the specified wallet name
         self.nodes[0].unloadwallet("w1")

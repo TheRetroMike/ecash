@@ -46,13 +46,13 @@ import { WalletContext, isWalletContextLoaded } from 'wallet/context';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 // Easter egg imports not used in extension/src/components/App.js
 import TabCash from 'assets/tabcash.png';
-import { CashtabWallet, hasEnoughToken } from 'wallet';
+import { hasEnoughToken } from 'wallet';
 import ServiceWorkerWrapper from 'components/Common/ServiceWorkerWrapper';
 import WebApp from 'components/AppModes/WebApp';
 import Extension from 'components/AppModes/Extension';
 import Header from 'components/Header';
-import { isValidCashtabWallet } from 'validation';
 import { Bounce, ToastContainer } from 'react-toastify';
+import PullToRefresh from 'components/Common/PullToRefresh';
 import {
     ExtensionFrame,
     GlobalStyle,
@@ -70,8 +70,6 @@ import {
     EasterEgg,
     DesktopLogo,
 } from 'components/App/styles';
-import appConfig from 'config/app';
-import { FIRMA } from 'constants/tokens';
 
 const App = () => {
     const ContextValue = useContext(WalletContext);
@@ -81,56 +79,36 @@ const App = () => {
     }
     const {
         cashtabState,
-        setCashtabState,
-        updateCashtabState,
-        fiatPrice,
-        firmaPrice,
         loading,
-        setLoading,
         cashtabLoaded,
+        initialUtxoSyncComplete,
+        update,
+        refreshTransactionHistory,
     } = ContextValue;
-    const { settings, wallets } = cashtabState;
-    const wallet = wallets.length > 0 ? wallets[0] : false;
+    const { wallets, activeWallet } = cashtabState;
+    const wallet = typeof activeWallet !== 'undefined' ? activeWallet : false;
     const [navMenuClicked, setNavMenuClicked] = useState(false);
     const handleNavMenuClick = () => setNavMenuClicked(!navMenuClicked);
-    // If wallet is unmigrated, do not show page until it has migrated
-    // An invalid wallet will be validated/populated after the next API call, ETA 10s
-    const validWallet = isValidCashtabWallet(wallet);
     const location = useLocation();
     const navigate = useNavigate();
 
-    /**
-     * Note the use Number here is acceptable for XECX because
-     * the supply is less than XEC supply, and hence less than
-     * Number.MAX_SAFE_INTEGER
-     */
-    const balanceXecx =
-        wallet !== false
-            ? Number(
-                  wallet.state.tokens.get(appConfig.vipTokens.xecx.tokenId),
-              ) || 0
-            : 0;
-
-    const balanceFirma =
-        wallet !== false
-            ? Number(wallet.state.tokens.get(FIRMA.tokenId)) || 0
-            : 0;
-
     // Easter egg boolean not used in extension/src/components/App.js
-    const hasTab = validWallet
-        ? hasEnoughToken(
-              (wallet as CashtabWallet).state.tokens,
-              '50d8292c6255cda7afc6c8566fed3cf42a2794e9619740fe8f4c95431271410e',
-              '1',
-          )
-        : false;
+    const hasTab =
+        wallet !== false
+            ? hasEnoughToken(
+                  wallet.state.tokens,
+                  '50d8292c6255cda7afc6c8566fed3cf42a2794e9619740fe8f4c95431271410e',
+                  '1',
+              )
+            : false;
     return (
         <ThemeProvider theme={theme}>
             <GlobalStyle />
             {process.env.REACT_APP_BUILD_ENV === 'extension' ? (
                 <>
                     <ExtensionFrame />
-                    <Extension wallet={wallet} />
+                    {/** We can only render the address sharing modal if we have a wallet */}
+                    {wallet !== false && <Extension />}
                 </>
             ) : (
                 <>
@@ -139,10 +117,8 @@ const App = () => {
                 </>
             )}
 
-            {loading ? (
+            {(loading || (!initialUtxoSyncComplete && wallets.length > 0)) && (
                 <Spinner />
-            ) : (
-                wallet !== false && !validWallet && <Spinner />
             )}
 
             <CustomApp
@@ -167,6 +143,7 @@ const App = () => {
                     pauseOnHover
                     theme="dark"
                     transition={Bounce}
+                    aria-label="Notifications"
                 />
                 <WalletBody>
                     <WalletCtn showFooter={wallet !== false}>
@@ -177,25 +154,16 @@ const App = () => {
                                 {wallet === false ? (
                                     <OnBoarding />
                                 ) : (
-                                    <>
+                                    <PullToRefresh
+                                        onRefresh={async () => {
+                                            // Sync wallet data instead of reloading the page
+                                            // This refreshes UTXOs, token balances, and transaction history
+                                            await update();
+                                            await refreshTransactionHistory();
+                                        }}
+                                        disabled={loading || !wallet}
+                                    >
                                         <Header
-                                            wallets={wallets}
-                                            settings={settings}
-                                            updateCashtabState={
-                                                updateCashtabState
-                                            }
-                                            setCashtabState={setCashtabState}
-                                            loading={loading}
-                                            setLoading={setLoading}
-                                            balanceSats={
-                                                (wallet as CashtabWallet).state
-                                                    .balanceSats
-                                            }
-                                            balanceXecx={balanceXecx}
-                                            balanceFirma={balanceFirma}
-                                            fiatPrice={fiatPrice}
-                                            firmaPrice={firmaPrice}
-                                            userLocale={navigator.language}
                                             path={location.pathname}
                                         ></Header>
                                         <ScreenWrapper>
@@ -312,7 +280,7 @@ const App = () => {
                                                 />
                                             </Routes>
                                         </ScreenWrapper>
-                                    </>
+                                    </PullToRefresh>
                                 )}
                             </>
                         )}

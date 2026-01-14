@@ -38,34 +38,9 @@ import { token as tokenConfig } from 'config/token';
 import { isValidCashAddress } from 'ecashaddrjs';
 import appConfig from 'config/app';
 import { getUserLocale } from 'helpers';
+import { getMintBatons, getAgoraAdFuelSats } from 'token-protocols/slpv1';
+import { getMaxDecimalizedQty, getSendTokenInputs } from 'token-protocols';
 import {
-    getSlpSendTargetOutputs,
-    getSlpBurnTargetOutputs,
-    getMintBatons,
-    getMintTargetOutputs,
-    getNftChildGenesisInput,
-    getNftParentFanInputs,
-    getNftParentFanTxTargetOutputs,
-    getNft,
-    getNftChildSendTargetOutputs,
-    getAgoraAdFuelSats,
-    SUPPORTED_MINT_TYPES,
-} from 'token-protocols/slpv1';
-import {
-    getAlpSendTargetOutputs,
-    getAlpBurnTargetOutputs,
-    getAlpMintTargetOutputs,
-    getAlpAgoraListTargetOutputs,
-} from 'token-protocols/alp';
-import {
-    getSendTokenInputs,
-    TokenInputInfo,
-    TokenTargetOutput,
-    getMaxDecimalizedQty,
-} from 'token-protocols';
-import { sendXec } from 'transactions';
-import {
-    hasEnoughToken,
     decimalizeTokenAmount,
     toSatoshis,
     toXec,
@@ -73,7 +48,6 @@ import {
     xecToNanoSatoshis,
     TokenUtxo,
     SlpDecimals,
-    CashtabPathInfo,
     ScriptUtxoWithToken,
 } from 'wallet';
 import Modal from 'components/Common/Modal';
@@ -102,9 +76,6 @@ import {
     TokenUrlCol,
     TokenStatsTableRow,
     SwitchHolder,
-    InfoModalParagraph,
-    ButtonDisabledMsg,
-    ButtonDisabledSpan,
     NftTitle,
     NftTable,
     NftRow,
@@ -129,16 +100,19 @@ import {
     getChildNftsFromParent,
     getTokenGenesisInfo,
 } from 'chronik';
-import { GenesisInfo, TokenType } from 'chronik-client';
+import { GenesisInfo } from 'chronik-client';
 import { supportedFiatCurrencies } from 'config/CashtabSettings';
 import {
     slpSend,
     SLP_NFT1_CHILD,
+    SLP_TOKEN_TYPE_NFT1_CHILD,
     Script,
     fromHex,
+    toHex,
     shaRmd160,
-    P2PKHSignatory,
-    ALL_BIP143,
+    payment,
+    TokenType,
+    TxBuilder,
 } from 'ecash-lib';
 import { InlineLoader } from 'components/Common/Spinner';
 import {
@@ -146,6 +120,7 @@ import {
     AgoraOneshotAdSignatory,
     AgoraPartialAdSignatory,
     AgoraPartial,
+    getAgoraPaymentAction,
 } from 'ecash-agora';
 import OrderBook from 'components/Agora/OrderBook';
 import Collection, {
@@ -173,17 +148,17 @@ const Token: React.FC = () => {
         updateCashtabState,
         chronik,
         agora,
-        ecc,
         chaintipBlockheight,
         fiatPrice,
+        ecashWallet,
     } = ContextValue;
-    const { settings, wallets, cashtabCache } = cashtabState;
-    const wallet = wallets[0];
+    const { settings, cashtabCache, activeWallet } = cashtabState;
+    if (!activeWallet || !ecashWallet) {
+        return null;
+    }
+    const wallet = activeWallet;
     // We get sk/pk/hash when wallet changes
-    const { sk, pk, address } = wallet.paths.get(
-        appConfig.derivationPath,
-    ) as CashtabPathInfo;
-    const changeScript = Script.fromAddress(address);
+
     const { tokens, balanceSats } = wallet.state;
 
     const { tokenId } = useParams();
@@ -212,7 +187,8 @@ const Token: React.FC = () => {
 
     if (cachedInfoLoaded) {
         ({ tokenType, genesisInfo, genesisSupply } = cachedInfo);
-        ({ protocol } = tokenType);
+        tokenType = tokenType as unknown as TokenType | undefined;
+        ({ protocol } = tokenType as any);
         ({ tokenName, tokenTicker, url, hash, decimals } = genesisInfo);
     }
 
@@ -295,16 +271,10 @@ const Token: React.FC = () => {
     const [isBlacklisted, setIsBlacklisted] = useState<null | boolean>(null);
     const [chronikQueryError, setChronikQueryError] = useState<boolean>(false);
     const [nftTokenIds, setNftTokenIds] = useState<string[]>([]);
-    const [nftChildGenesisInput, setNftChildGenesisInput] = useState<
-        TokenUtxo[]
-    >([]);
-    const [nftFanInputs, setNftFanInputs] = useState<TokenUtxo[]>([]);
     const [availableNftInputs, setAvailableNftInputs] = useState<number>(0);
     const [showTokenTypeInfo, setShowTokenTypeInfo] = useState<boolean>(false);
     const [showAgoraPartialInfo, setShowAgoraPartialInfo] =
         useState<boolean>(false);
-    const [showFanoutInfo, setShowFanoutInfo] = useState<boolean>(false);
-    const [showMintNftInfo, setShowMintNftInfo] = useState<boolean>(false);
     const [sendTokenAddressError, setSendTokenAddressError] = useState<
         false | string
     >(false);
@@ -360,6 +330,7 @@ const Token: React.FC = () => {
     );
     const [nftOfferAgoraQueryError, setNftOfferAgoraQueryError] =
         useState<boolean>(false);
+    const [firmaBidPrice, setFirmaBidPrice] = useState<null | number>(null);
 
     // By default, we load the app with all switches disabled
     // For SLP v1 tokens, we want showSend to be enabled by default
@@ -371,7 +342,6 @@ const Token: React.FC = () => {
         showAirdrop: boolean;
         showBurn: boolean;
         showMint: boolean;
-        showFanout: boolean;
         showMintNft: boolean;
         showSellNft: boolean;
         showSellSlp: boolean;
@@ -383,7 +353,6 @@ const Token: React.FC = () => {
         showAirdrop: false,
         showBurn: false,
         showMint: false,
-        showFanout: false,
         showMintNft: false,
         showSellNft: false,
         showSellSlp: false,
@@ -645,7 +614,7 @@ const Token: React.FC = () => {
                 tokenId,
             );
             cashtabCache.tokens.set(tokenId, cachedInfoWithGroupTokenId);
-            updateCashtabState('cashtabCache', cashtabCache);
+            updateCashtabState({ cashtabCache: cashtabCache });
         } catch (err) {
             console.error(`Error getting token details for ${tokenId}`, err);
             setChronikQueryError(true);
@@ -686,6 +655,22 @@ const Token: React.FC = () => {
         }
     };
 
+    const getFirmaBidPrice = async () => {
+        try {
+            const firmaBidPriceResp = await fetch(
+                `https://firmaprotocol.com/api/bid`,
+            );
+            const firmaBidPriceJson = await firmaBidPriceResp.json();
+            const bidPrice = firmaBidPriceJson.bid;
+            console.info(`FIRMA buys at: ${bidPrice} XEC`);
+            setFirmaBidPrice(bidPrice);
+        } catch (err) {
+            console.error(`Error fetching FIRMA bid price`, err);
+            // Don't show error to user, just log it
+            // The warning will simply not show if we can't fetch the price
+        }
+    };
+
     useEffect(() => {
         if (tokenId === appConfig.vipTokens.xecx.tokenId) {
             // Get XECX sweeper balance when user is on xecx token page
@@ -693,6 +678,8 @@ const Token: React.FC = () => {
         } else if (tokenId === FIRMA.tokenId) {
             // Get balance of the FIRMA redeem hot wallet when user is on firma token page
             getFirmaRedeemBalance();
+            // Get FIRMA bid price for listing price validation
+            getFirmaBidPrice();
         }
     }, [tokenId]);
 
@@ -869,10 +856,10 @@ const Token: React.FC = () => {
     }, [switches]);
 
     useEffect(() => {
-        if (fiatPrice === null && selectedCurrency !== 'XEC') {
+        if (fiatPrice === null && selectedCurrency !== appConfig.ticker) {
             // Clear NFT and Token list prices and de-select fiat currency if rate is unavailable
             handleSelectedCurrencyChange({
-                target: { value: 'XEC' },
+                target: { value: appConfig.ticker },
             } as React.ChangeEvent<HTMLSelectElement>);
         }
     }, [fiatPrice]);
@@ -891,47 +878,30 @@ const Token: React.FC = () => {
 
         if (isNftParent) {
             // If this is an SLP1 NFT Parent
-            // Update nft fan inputs
-            setNftFanInputs(
-                getNftParentFanInputs(tokenId as string, wallet.state.slpUtxos),
-            );
-            // Update nft child genesis input
-            // Note this is always an array, either empty or of 1 qty-1 utxo
-            setNftChildGenesisInput(
-                getNftChildGenesisInput(
-                    tokenId as string,
-                    wallet.state.slpUtxos,
-                ),
-            );
             // Update the child NFTs
             getNfts(tokenId as string);
-            // Get total amount of child genesis inputs
+            // Get total amount of available parent token UTXOs (any qty >= 1)
+            // ecash-wallet will automatically create qty-1 inputs if needed
             const availableNftMintInputs = wallet.state.slpUtxos.filter(
                 (slpUtxo: TokenUtxo) =>
                     slpUtxo?.token?.tokenId === tokenId &&
-                    slpUtxo?.token?.atoms === 1n,
+                    slpUtxo?.token?.atoms >= 1n,
             );
             setAvailableNftInputs(availableNftMintInputs.length);
         }
     }, [wallet.state.slpUtxos, isNftParent]);
 
     useEffect(() => {
-        if (nftChildGenesisInput.length > 0) {
-            // If we have inputs to mint an NFT, NFT1 default action should be Mint NFT
+        if (isNftParent && availableNftInputs > 0) {
+            // If we have any parent token UTXOs (any qty >= 1), default action should be Mint NFT
+            // ecash-wallet automatically handles creating qty-1 inputs if needed
             setSwitches({
                 ...switchesOff,
                 showMintNft: true,
             });
-        } else if (nftFanInputs.length > 0) {
-            // If we have no nftChildGenesisInput but we do have nftFanInputs
-            // default action should be a fan-out tx to get these inputs
-            setSwitches({
-                ...switchesOff,
-                showFanout: true,
-            });
         }
         // Otherwise all switches are off
-    }, [nftFanInputs, nftChildGenesisInput]);
+    }, [isNftParent, availableNftInputs]);
 
     useEffect(() => {
         if (previewedAgoraPartial === null) {
@@ -968,58 +938,58 @@ const Token: React.FC = () => {
         const cleanAddress = address.split('?')[0];
 
         try {
-            // Get input utxos for slpv1 or ALP send tx
-            const tokenInputInfo = !isNftChild
-                ? // Note this works for ALP or SLP
-                  getSendTokenInputs(
-                      wallet.state.slpUtxos,
-                      tokenId as string,
-                      amount,
-                      decimals as SlpDecimals,
-                  )
-                : undefined;
+            if (!ecashWallet) {
+                // We do not render the component with ecashWallet, so we do not expect this to happen
+                // Helps typescript clarity
+                throw new Error('Wallet not initialized');
+            }
 
-            // Get targetOutputs for an slpv1 send tx
-            const tokenSendTargetOutputs = isNftChild
-                ? getNftChildSendTargetOutputs(tokenId as string, cleanAddress)
-                : isAlp
-                ? getAlpSendTargetOutputs(
-                      tokenInputInfo as TokenInputInfo,
-                      cleanAddress,
-                  )
-                : getSlpSendTargetOutputs(
-                      tokenInputInfo as TokenInputInfo,
-                      cleanAddress,
-                      tokenType!.number,
+            // Build payment.Action for token send
+            // ecash-wallet handles UTXO selection and token change automatically
+            const sendAtoms = isNftChild
+                ? 1n
+                : BigInt(
+                      undecimalizeTokenAmount(amount, decimals as SlpDecimals),
                   );
-            // Build and broadcast the tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                tokenSendTargetOutputs,
-                settings.minFeeSends &&
-                    (hasEnoughToken(
-                        tokens,
-                        appConfig.vipTokens.grumpy.tokenId,
-                        appConfig.vipTokens.grumpy.vipBalance,
-                    ) ||
-                        hasEnoughToken(
-                            tokens,
-                            appConfig.vipTokens.cachet.tokenId,
-                            appConfig.vipTokens.cachet.vipBalance,
-                        ))
-                    ? appConfig.minFee
-                    : appConfig.defaultFee,
-                chaintipBlockheight,
-                isNftChild
-                    ? getNft(tokenId as string, wallet.state.slpUtxos)
-                    : (tokenInputInfo as TokenInputInfo).tokenInputs,
-            );
+
+            // All token sends are the same in the ecash-wallet API
+            // ecash-wallet deals with differing token specs
+            const action: payment.Action = {
+                outputs: [
+                    { sats: 0n }, // OP_RETURN at outIdx 0
+                    {
+                        sats: BigInt(appConfig.dustSats),
+                        script: Script.fromAddress(cleanAddress),
+                        tokenId: tokenId as string,
+                        atoms: sendAtoms,
+                    },
+                ],
+                tokenActions: [
+                    {
+                        type: 'SEND',
+                        tokenId: tokenId as string,
+                        tokenType: tokenType as unknown as TokenType,
+                    },
+                ],
+                feePerKb: BigInt(settings.satsPerKb),
+            };
+
+            // Build and broadcast using ecash-wallet
+            const builtAction = ecashWallet.action(action).build();
+            const broadcastResult = await builtAction.broadcast();
+
+            if (!broadcastResult.success) {
+                throw new Error(
+                    `Transaction broadcast failed: ${broadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            // Get the first txid (or the only one for single-tx actions)
+            const txid = broadcastResult.broadcasted[0];
 
             confirmRawTx(
                 <a
-                    href={`${explorer.blockExplorerUrl}/tx/${response.txid}`}
+                    href={`${explorer.blockExplorerUrl}/tx/${txid}`}
                     target="_blank"
                     rel="noopener noreferrer"
                 >
@@ -1029,56 +999,6 @@ const Token: React.FC = () => {
             clearInputForms();
         } catch (e) {
             console.error(`Error sending ${isNftChild ? 'NFT' : 'token'}`, e);
-            toast.error(`${e}`);
-        }
-    }
-
-    /**
-     * Create SLP1 NFT Mint Fan Inputs
-     * Function may only be called if nftFanInputs is not an empty array
-     * Note the only button that calls this function is disabled if nftFanInputs.length === 0
-     */
-    async function createNftMintInputs() {
-        try {
-            // Get targetOutputs for an slpv1 nft parent fan-out tx
-            const nftFanTargetOutputs =
-                getNftParentFanTxTargetOutputs(nftFanInputs);
-
-            // Build and broadcast the tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                nftFanTargetOutputs,
-                settings.minFeeSends &&
-                    (hasEnoughToken(
-                        tokens,
-                        appConfig.vipTokens.grumpy.tokenId,
-                        appConfig.vipTokens.grumpy.vipBalance,
-                    ) ||
-                        hasEnoughToken(
-                            tokens,
-                            appConfig.vipTokens.cachet.tokenId,
-                            appConfig.vipTokens.cachet.vipBalance,
-                        ))
-                    ? appConfig.minFee
-                    : appConfig.defaultFee,
-                chaintipBlockheight,
-                nftFanInputs,
-            );
-
-            confirmRawTx(
-                <a
-                    href={`${explorer.blockExplorerUrl}/tx/${response.txid}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >
-                    NFT Mint inputs created
-                </a>,
-            );
-            clearInputForms();
-        } catch (e) {
-            console.error(`Error creating NFT mint inputs`, e);
             toast.error(`${e}`);
         }
     }
@@ -1115,8 +1035,8 @@ const Token: React.FC = () => {
                 ? xecxRedeemError
                     ? `Cannot redeem less than 5.46 XECX`
                     : firmaRedeemError
-                    ? `Cannot redeem less than ${FIRMA_MINIMUM_REDEMPTION} FIRMA`
-                    : false
+                      ? `Cannot redeem less than ${FIRMA_MINIMUM_REDEMPTION} FIRMA`
+                      : false
                 : isValidAmountOrErrorMsg,
         );
 
@@ -1318,47 +1238,57 @@ const Token: React.FC = () => {
         Event('SendToken.js', 'Burn eToken', tokenId as string);
 
         try {
-            // Get input utxos for slpv1 burn tx
-            // This is done the same way as for an slpv1 send tx
-            const tokenInputInfo = getSendTokenInputs(
-                wallet.state.slpUtxos,
-                tokenId as string,
-                formData.burnAmount,
-                decimals as SlpDecimals,
+            if (!ecashWallet) {
+                // We do not render the component with ecashWallet, so we do not expect this to happen
+                // Helps typescript clarity
+                throw new Error('Wallet not initialized');
+            }
+
+            // Calculate burnAtoms from decimal amount
+            const burnAtoms = BigInt(
+                undecimalizeTokenAmount(
+                    formData.burnAmount,
+                    decimals as SlpDecimals,
+                ),
             );
 
-            // Get targetOutputs for an slpv1 burn tx
-            // this is NOT like an slpv1 send tx
-            const tokenBurnTargetOutputs = isAlp
-                ? getAlpBurnTargetOutputs(tokenInputInfo)
-                : getSlpBurnTargetOutputs(tokenInputInfo, tokenType!.number);
+            // Build payment.Action for token burn
+            // ecash-wallet handles UTXO selection automatically
+            const action: payment.Action = {
+                outputs: [
+                    { sats: 0n }, // OP_RETURN at outIdx 0
+                ],
+                tokenActions: [
+                    {
+                        type: 'BURN',
+                        tokenId: tokenId as string,
+                        tokenType: tokenType as unknown as TokenType,
+                        burnAtoms,
+                    },
+                ],
+                feePerKb: BigInt(settings.satsPerKb),
+            };
 
-            // Build and broadcast the tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                tokenBurnTargetOutputs,
-                settings.minFeeSends &&
-                    (hasEnoughToken(
-                        tokens,
-                        appConfig.vipTokens.grumpy.tokenId,
-                        appConfig.vipTokens.grumpy.vipBalance,
-                    ) ||
-                        hasEnoughToken(
-                            tokens,
-                            appConfig.vipTokens.cachet.tokenId,
-                            appConfig.vipTokens.cachet.vipBalance,
-                        ))
-                    ? appConfig.minFee
-                    : appConfig.defaultFee,
-                chaintipBlockheight,
-                tokenInputInfo.tokenInputs,
-                true, // skip SLP burn checks
-            );
+            // Build and broadcast using ecash-wallet
+            // Note: ecash-wallet automatically infers SEND action for ALP burns when exact atoms aren't available
+            const builtAction = ecashWallet.action(action).build();
+            const broadcastResult = await builtAction.broadcast();
+
+            if (!broadcastResult.success) {
+                throw new Error(
+                    `Transaction broadcast failed: ${broadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            // Get the last txid (for chained transactions, this is the actual burn tx)
+            const txid =
+                broadcastResult.broadcasted[
+                    broadcastResult.broadcasted.length - 1
+                ];
+
             confirmRawTx(
                 <a
-                    href={`${explorer.blockExplorerUrl}/tx/${response.txid}`}
+                    href={`${explorer.blockExplorerUrl}/tx/${txid}`}
                     target="_blank"
                     rel="noopener noreferrer"
                 >
@@ -1368,6 +1298,8 @@ const Token: React.FC = () => {
             clearInputForms();
             setShowConfirmBurnEtoken(false);
             setConfirmationOfEtokenToBeBurnt('');
+            // Refresh token supply after successful burn
+            getUncachedTokenInfo();
         } catch (e) {
             setShowConfirmBurnEtoken(false);
             setConfirmationOfEtokenToBeBurnt('');
@@ -1378,29 +1310,19 @@ const Token: React.FC = () => {
     async function handleMint() {
         Event('SendToken.js', 'Mint eToken', tokenId as string);
 
-        // We only use 1 mint baton
-        const mintBaton = mintBatons[0];
-        const tokenTypeNumberFromUtxo = mintBaton.token.tokenType.number;
-
         try {
-            // Get targetOutputs for an slpv1 burn tx
-            // this is NOT like an slpv1 send tx
-            const mintTargetOutputs = isAlp
-                ? getAlpMintTargetOutputs(
-                      tokenId as string,
-                      BigInt(
-                          undecimalizeTokenAmount(
-                              formData.mintAmount,
-                              decimals as SlpDecimals,
-                          ),
-                      ),
-                  )
-                : getMintTargetOutputs(
-                      tokenId as string,
-                      decimals as SlpDecimals,
-                      formData.mintAmount,
-                      tokenTypeNumberFromUtxo as SUPPORTED_MINT_TYPES,
-                  );
+            if (!ecashWallet) {
+                // We do not render the component with ecashWallet, so we do not expect this to happen
+                // Helps typescript clarity
+                throw new Error('Wallet not initialized');
+            }
+
+            // Note: Minting is not currently supported for SLP_TOKEN_TYPE_MINT_VAULT tokens.
+            // MINT_VAULT tokens don't have mint batons (they use a different mechanism where any UTXO
+            // at the mint vault address can mint). Since getMintBatons() filters for isMintBaton === true,
+            // it returns an empty array for MINT_VAULT tokens, so the mint switch (which only appears
+            // when mintBatons.length > 0) will never be shown for these tokens in the UI.
+
             // We should not be able to get here without at least one mint baton,
             // as the mint switch would be disabled
             // Still, handle
@@ -1408,31 +1330,61 @@ const Token: React.FC = () => {
                 throw new Error(`Unable to find mint baton for ${tokenName}`);
             }
 
-            // Build and broadcast the tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                mintTargetOutputs,
-                settings.minFeeSends &&
-                    (hasEnoughToken(
-                        tokens,
-                        appConfig.vipTokens.grumpy.tokenId,
-                        appConfig.vipTokens.grumpy.vipBalance,
-                    ) ||
-                        hasEnoughToken(
-                            tokens,
-                            appConfig.vipTokens.cachet.tokenId,
-                            appConfig.vipTokens.cachet.vipBalance,
-                        ))
-                    ? appConfig.minFee
-                    : appConfig.defaultFee,
-                chaintipBlockheight,
-                [mintBaton],
+            // Calculate minted atoms (undecimalized)
+            const mintedAtoms = BigInt(
+                undecimalizeTokenAmount(
+                    formData.mintAmount,
+                    decimals as SlpDecimals,
+                ),
             );
+
+            // Build payment.Action for token mint
+            // ecash-wallet handles UTXO selection automatically, including finding mint batons
+            const action: payment.Action = {
+                outputs: [
+                    { sats: 0n }, // OP_RETURN at outIdx 0
+                    {
+                        sats: BigInt(appConfig.dustSats),
+                        script: ecashWallet.script,
+                        tokenId: tokenId as string,
+                        atoms: mintedAtoms,
+                    },
+                    {
+                        sats: BigInt(appConfig.dustSats),
+                        script: ecashWallet.script,
+                        tokenId: tokenId as string,
+                        atoms: 0n,
+                        isMintBaton: true,
+                    },
+                ],
+                tokenActions: [
+                    {
+                        type: 'MINT',
+                        tokenId: tokenId as string,
+                        tokenType: tokenType as unknown as TokenType,
+                    },
+                ],
+                feePerKb: BigInt(settings.satsPerKb),
+            };
+
+            // Build and broadcast using ecash-wallet
+            const builtAction = ecashWallet.action(action).build();
+            console.log(`rawTx: ${builtAction.txs[0].toHex()}`);
+            console.log(`txid: ${builtAction.txs[0].txid()}`);
+            const broadcastResult = await builtAction.broadcast();
+
+            if (!broadcastResult.success) {
+                throw new Error(
+                    `Transaction broadcast failed: ${broadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            // Get the first txid (or the only one for single-tx actions)
+            const txid = broadcastResult.broadcasted[0];
+
             confirmRawTx(
                 <a
-                    href={`${explorer.blockExplorerUrl}/tx/${response.txid}`}
+                    href={`${explorer.blockExplorerUrl}/tx/${txid}`}
                     target="_blank"
                     rel="noopener noreferrer"
                 >
@@ -1440,6 +1392,8 @@ const Token: React.FC = () => {
                 </a>,
             );
             clearInputForms();
+            // Refresh token supply after successful mint
+            getUncachedTokenInfo();
         } catch (e) {
             toast.error(`${e}`);
         }
@@ -1513,6 +1467,17 @@ const Token: React.FC = () => {
     };
 
     const listNft = async () => {
+        if (typeof tokenId !== 'string') {
+            // Should never happen
+            toast.error(`Error listing NFT: tokenId is undefined`);
+            return;
+        }
+        if (!ecashWallet) {
+            // Should never happen
+            toast.error(`Error listing NFT: wallet not initialized`);
+            return;
+        }
+
         const listPriceSatoshis =
             selectedCurrency === appConfig.ticker
                 ? toSatoshis(Number(formData.nftListPrice))
@@ -1524,20 +1489,7 @@ const Token: React.FC = () => {
                           ).toFixed(2),
                       ),
                   );
-        const satsPerKb =
-            settings.minFeeSends &&
-            (hasEnoughToken(
-                tokens,
-                appConfig.vipTokens.grumpy.tokenId,
-                appConfig.vipTokens.grumpy.vipBalance,
-            ) ||
-                hasEnoughToken(
-                    tokens,
-                    appConfig.vipTokens.cachet.tokenId,
-                    appConfig.vipTokens.cachet.vipBalance,
-                ))
-                ? appConfig.minFee
-                : appConfig.defaultFee;
+        const satsPerKb = settings.satsPerKb;
 
         // Build the ad tx
         // The advertisement tx is an SLP send tx of the listed NFT to the seller's wallet
@@ -1549,21 +1501,13 @@ const Token: React.FC = () => {
             },
             {
                 sats: BigInt(listPriceSatoshis),
-                script: Script.p2pkh(
-                    fromHex(
-                        (
-                            wallet.paths.get(
-                                appConfig.derivationPath,
-                            ) as CashtabPathInfo
-                        ).hash,
-                    ),
-                ),
+                script: Script.p2pkh(fromHex(wallet.hash)),
             },
         ];
 
         const agoraOneshot = new AgoraOneshot({
             enforcedOutputs,
-            cancelPk: pk,
+            cancelPk: fromHex(activeWallet.pk),
         });
         const agoraAdScript = agoraOneshot.adScript();
         const agoraAdP2sh = Script.p2sh(shaRmd160(agoraAdScript.bytecode));
@@ -1585,56 +1529,58 @@ const Token: React.FC = () => {
         ];
         const offerTxFuelSats = getAgoraAdFuelSats(
             agoraAdScript,
-            AgoraOneshotAdSignatory(sk),
+            AgoraOneshotAdSignatory(fromHex(wallet.sk)),
             offerTargetOutputs,
-            satsPerKb,
+            BigInt(satsPerKb),
         );
 
         // So, the ad prep tx must include an output with an input that covers this fee
         // This will be dust + fee
         const adFuelOutputSats = appConfig.dustSats + offerTxFuelSats;
 
-        // Input needs to be the child NFT utxo with appropriate signData
-        // Get the NFT utxo from Cashtab wallet
-        const [thisNftUtxo] = getNft(tokenId as string, wallet.state.slpUtxos);
-        // Prepare it for an ecash-lib tx
-        const adSetupInputs = [
-            {
-                input: {
-                    prevOut: {
-                        txid: thisNftUtxo.outpoint.txid,
-                        outIdx: thisNftUtxo.outpoint.outIdx,
-                    },
-                    signData: {
-                        sats: BigInt(appConfig.dustSats),
-                        outputScript: changeScript,
-                    },
-                },
-                signatory: P2PKHSignatory(sk, pk, ALL_BIP143),
-            },
-        ];
-        const adSetupTargetOutputs = [
-            {
-                sats: 0n,
-                script: slpSend(tokenId as string, SLP_NFT1_CHILD, [1n]),
-            },
-            { sats: BigInt(adFuelOutputSats), script: agoraAdP2sh },
-        ];
-
-        // Broadcast the ad setup tx
+        // Broadcast the ad setup tx using ecash-wallet
         let adSetupTxid;
         try {
-            // Build and broadcast the ad setup tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                adSetupTargetOutputs,
-                satsPerKb,
-                chaintipBlockheight,
-                adSetupInputs,
-            );
-            adSetupTxid = response.txid;
+            // Build payment.Action for ad setup transaction
+            // This sends the NFT to the P2SH address with fuel for the offer tx
+            // Output 0: OP_RETURN (ecash-wallet will build the script from tokenActions)
+            // Output 1: P2SH output with NFT (for the offer tx)
+            // ecash-wallet will automatically select the NFT UTXO based on the token send action
+            const adSetupOutputs: payment.PaymentOutput[] = [
+                { sats: 0n }, // OP_RETURN - ecash-wallet will build the script
+                {
+                    sats: BigInt(adFuelOutputSats),
+                    script: agoraAdP2sh,
+                    tokenId: tokenId as string,
+                    atoms: 1n, // NFT quantity is always 1
+                },
+            ];
+
+            const adSetupAction: payment.Action = {
+                outputs: adSetupOutputs,
+                tokenActions: [
+                    {
+                        type: 'SEND',
+                        tokenId: tokenId as string,
+                        tokenType: SLP_TOKEN_TYPE_NFT1_CHILD,
+                    },
+                ],
+                feePerKb: BigInt(satsPerKb),
+            };
+
+            // Build and broadcast using ecash-wallet
+            const builtAdSetupAction = ecashWallet
+                .action(adSetupAction)
+                .build();
+            const adSetupBroadcastResult = await builtAdSetupAction.broadcast();
+
+            if (!adSetupBroadcastResult.success) {
+                throw new Error(
+                    `Ad setup transaction broadcast failed: ${adSetupBroadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            adSetupTxid = adSetupBroadcastResult.broadcasted[0];
 
             confirmRawTx(
                 <a
@@ -1652,38 +1598,44 @@ const Token: React.FC = () => {
             return;
         }
 
-        const offerInputs = [
-            // The actual NFT
-            {
-                input: {
-                    prevOut: {
-                        // Since we just broadcast the ad tx and know how it was built,
-                        // this prevOut will always look like this
-                        txid: adSetupTxid,
-                        outIdx: 1,
-                    },
-                    signData: {
-                        sats: BigInt(adFuelOutputSats),
-                        redeemScript: agoraAdScript,
-                    },
-                },
-                signatory: AgoraOneshotAdSignatory(sk),
-            },
-        ];
-
+        // Build and broadcast the offer transaction
+        // This uses a P2SH input with custom signatory, so we build it manually with TxBuilder
         let offerTxid;
         try {
-            // Build and broadcast the ad setup tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                offerTargetOutputs,
-                satsPerKb,
-                chaintipBlockheight,
-                offerInputs,
+            const offerInputs = [
+                {
+                    input: {
+                        prevOut: {
+                            // Since we just broadcast the ad tx and know how it was built,
+                            // this prevOut will always look like this
+                            txid: adSetupTxid,
+                            outIdx: 1,
+                        },
+                        signData: {
+                            sats: BigInt(adFuelOutputSats),
+                            redeemScript: agoraAdScript,
+                        },
+                    },
+                    signatory: AgoraOneshotAdSignatory(fromHex(wallet.sk)),
+                },
+            ];
+
+            // Build the offer transaction using TxBuilder
+            const offerTxBuilder = new TxBuilder({
+                inputs: offerInputs,
+                outputs: offerTargetOutputs,
+            });
+
+            const offerTx = offerTxBuilder.sign({
+                feePerKb: BigInt(satsPerKb),
+                dustSats: BigInt(appConfig.dustSats),
+            });
+
+            // Broadcast using ecash-wallet's chronik
+            const { txid } = await ecashWallet.chronik.broadcastTx(
+                toHex(offerTx.ser()),
             );
-            offerTxid = response.txid;
+            offerTxid = txid;
 
             // Maintain this notification as we do not parse listing prices in websocket
             toast(
@@ -1740,7 +1692,7 @@ const Token: React.FC = () => {
         // but you must create the offer with priceNanoSatsPerToken for 1 token satoshi
         // i.e. 0.000000001 token
         const priceNanoSatsPerTokenSatoshi =
-            BigInt(priceNanoSatsPerDecimalizedToken) /
+            priceNanoSatsPerDecimalizedToken /
             BigInt(Math.pow(10, decimals as SlpDecimals));
 
         // Convert formData list qty (a decimalized token qty) to BigInt token sats
@@ -1759,17 +1711,20 @@ const Token: React.FC = () => {
         let agoraPartial;
 
         try {
-            agoraPartial = await agora.selectParams({
-                tokenId: tokenId,
-                // We cannot render the Token screen until tokenType is defined
-                tokenType: (tokenType as TokenType).number,
-                // We cannot render the Token screen until protocol is defined
-                tokenProtocol: protocol as 'ALP' | 'SLP',
-                offeredAtoms: userSuggestedOfferedTokens,
-                priceNanoSatsPerAtom: priceNanoSatsPerTokenSatoshi,
-                makerPk: pk,
-                minAcceptedAtoms,
-            });
+            agoraPartial = await agora.selectParams(
+                {
+                    tokenId: tokenId,
+                    // We cannot render the Token screen until tokenType is defined
+                    tokenType: (tokenType as TokenType).number,
+                    // We cannot render the Token screen until protocol is defined
+                    tokenProtocol: protocol as 'ALP' | 'SLP',
+                    offeredAtoms: userSuggestedOfferedTokens,
+                    priceNanoSatsPerAtom: priceNanoSatsPerTokenSatoshi,
+                    makerPk: fromHex(wallet.pk),
+                    minAcceptedAtoms,
+                },
+                appConfig.scriptIntegerBits,
+            );
             return setPreviewedAgoraPartial(agoraPartial);
         } catch (err) {
             // We can run into errors trying to create an agora partial
@@ -1821,7 +1776,9 @@ const Token: React.FC = () => {
 
         let firmaBidPrice;
         try {
-            const firmaBidPriceResp = await fetch(`https://firma.cash/api/bid`);
+            const firmaBidPriceResp = await fetch(
+                `https://firmaprotocol.com/api/bid`,
+            );
             const firmaBidPriceJson = await firmaBidPriceResp.json();
             firmaBidPrice = firmaBidPriceJson.bid;
             console.info(`FIRMA buys at: ${firmaBidPrice} XEC`);
@@ -1840,7 +1797,7 @@ const Token: React.FC = () => {
         // but you must create the offer with priceNanoSatsPerToken for 1 atom
         // i.e. 0.000000001 token
         let priceNanoSatsPerAtom =
-            BigInt(priceNanoSatsPerDecimalizedToken) /
+            priceNanoSatsPerDecimalizedToken /
             BigInt(Math.pow(10, decimals as SlpDecimals));
 
         // Convert formData list qty (a decimalized token qty) to BigInt token sats
@@ -1861,10 +1818,13 @@ const Token: React.FC = () => {
                 tokenProtocol: protocol as 'ALP' | 'SLP',
                 offeredAtoms: userSuggestedOfferedTokens,
                 priceNanoSatsPerAtom: priceNanoSatsPerAtom,
-                makerPk: pk,
+                makerPk: fromHex(wallet.pk),
                 minAcceptedAtoms: userSuggestedOfferedTokens,
             };
-            firmaPartial = await agora.selectParams(firmaPartialParams);
+            firmaPartial = await agora.selectParams(
+                firmaPartialParams,
+                appConfig.scriptIntegerBits,
+            );
 
             let actualPrice = getFirmaPartialUnitPrice(firmaPartial);
             // Keep making firmaPartials until we have one that is acceptable
@@ -1938,57 +1898,45 @@ const Token: React.FC = () => {
             toast.error(`Error listing ALP partial: tokenId is undefined`);
             return;
         }
+        if (!tokenType) {
+            // Should never happen
+            toast.error(`Error listing ALP partial: tokenType is undefined`);
+            return;
+        }
+        if (!ecashWallet) {
+            // Should never happen
+            toast.error(`Error listing ALP partial: wallet not initialized`);
+            return;
+        }
 
         // offeredTokens is in units of token satoshis
         const offeredTokens = previewedAgoraPartial.offeredAtoms();
 
-        const satsPerKb =
-            settings.minFeeSends &&
-            (hasEnoughToken(
-                tokens,
-                appConfig.vipTokens.grumpy.tokenId,
-                appConfig.vipTokens.grumpy.vipBalance,
-            ) ||
-                hasEnoughToken(
-                    tokens,
-                    appConfig.vipTokens.cachet.tokenId,
-                    appConfig.vipTokens.cachet.vipBalance,
-                ))
-                ? appConfig.minFee
-                : appConfig.defaultFee;
-
-        // Get enough token utxos to cover the listing
-        // Note that getSendTokenInputs expects decimalized tokens as a string and decimals as a param
-        // Because we have undecimalized tokens in token sats from the AgoraPartial object,
-        // We pass this and "0" as decimals
-        const alpInputsInfo = getSendTokenInputs(
-            wallet.state.slpUtxos,
-            tokenId,
-            // This is already in units of token sats
-            offeredTokens.toString(),
-            0, // offeredTokens is already undecimalized
-        );
-
-        // Get sendAmounts and input token utxos like a normal token send tx
-        const { tokenInputs } = alpInputsInfo;
-        const offerTargetOutputs = getAlpAgoraListTargetOutputs(
-            alpInputsInfo,
-            previewedAgoraPartial,
-        );
-
         let offerTxid;
         try {
-            // Build and broadcast the ad setup tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                offerTargetOutputs,
-                satsPerKb,
-                chaintipBlockheight,
-                tokenInputs,
-            );
-            offerTxid = response.txid;
+            // Build payment.Action for Agora ALP partial listing using ecash-agora helper
+            const agoraListAction = getAgoraPaymentAction({
+                type: 'LIST',
+                tokenType,
+                variant: { type: 'PARTIAL', params: previewedAgoraPartial },
+            });
+
+            // Add feePerKb to the action
+            agoraListAction.feePerKb = BigInt(settings.satsPerKb);
+
+            // Build and broadcast using ecash-wallet
+            // ecash-wallet automatically handles token UTXO selection and change
+            const builtAction = ecashWallet.action(agoraListAction).build();
+            const broadcastResult = await builtAction.broadcast();
+
+            if (!broadcastResult.success) {
+                throw new Error(
+                    `Transaction broadcast failed: ${broadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            // Get the first txid (ALP partial listings are single-tx)
+            offerTxid = broadcastResult.broadcasted[0];
 
             // Calculate decimalized total offered amount for notifications
             const decimalizedOfferedTokens = decimalizeTokenAmount(
@@ -2025,28 +1973,35 @@ const Token: React.FC = () => {
     };
 
     const listSlpPartial = async () => {
+        if (previewedAgoraPartial === null) {
+            // Should never happen
+            toast.error(
+                `Error listing SLP partial: Agora preview is undefined`,
+            );
+            return;
+        }
+        if (typeof tokenId !== 'string') {
+            // Should never happen
+            toast.error(`Error listing SLP partial: tokenId is undefined`);
+            return;
+        }
+        if (!tokenType) {
+            // Should never happen
+            toast.error(`Error listing SLP partial: tokenType is undefined`);
+            return;
+        }
+        if (!ecashWallet) {
+            // Should never happen
+            toast.error(`Error listing SLP partial: wallet not initialized`);
+            return;
+        }
+
         // offeredTokens is in units of token satoshis
         const offeredTokens = (
             previewedAgoraPartial as AgoraPartial
         ).offeredAtoms();
 
-        // To guarantee we have no utxo conflicts while sending a chain of 2 txs
-        // We ensure that the target output of the ad setup tx will include enough XEC
-        // to cover the offer tx
-        const satsPerKb =
-            settings.minFeeSends &&
-            (hasEnoughToken(
-                tokens,
-                appConfig.vipTokens.grumpy.tokenId,
-                appConfig.vipTokens.grumpy.vipBalance,
-            ) ||
-                hasEnoughToken(
-                    tokens,
-                    appConfig.vipTokens.cachet.tokenId,
-                    appConfig.vipTokens.cachet.vipBalance,
-                ))
-                ? appConfig.minFee
-                : appConfig.defaultFee;
+        const satsPerKb = settings.satsPerKb;
 
         const agoraAdScript = (
             previewedAgoraPartial as AgoraPartial
@@ -2065,7 +2020,7 @@ const Token: React.FC = () => {
             0, // offeredTokens is already undecimalized
         );
 
-        const { tokenInputs, sendAmounts } = slpInputsInfo;
+        const { sendAmounts } = slpInputsInfo;
 
         // Seller finishes offer setup + sends tokens to the advertised P2SH
         const agoraScript = (previewedAgoraPartial as AgoraPartial).script();
@@ -2077,7 +2032,7 @@ const Token: React.FC = () => {
                 // We will not have any token change for the tx that creates the offer
                 // This is bc the ad setup tx sends the exact amount of tokens we need
                 // for the ad tx (the offer)
-                script: slpSend(tokenId as string, tokenType!.number, [
+                script: slpSend(tokenId as string, tokenType.number, [
                     sendAmounts[0],
                 ]),
             },
@@ -2086,50 +2041,14 @@ const Token: React.FC = () => {
 
         const adSetupSatoshis = getAgoraAdFuelSats(
             agoraAdScript,
-            AgoraPartialAdSignatory(sk),
+            AgoraPartialAdSignatory(fromHex(wallet.sk)),
             offerTargetOutputs,
-            satsPerKb,
+            BigInt(satsPerKb),
         );
 
         // The ad setup tx itself is sending tokens to a dust output
         // So, the fuel input must be adSetupSatoshis more than dust
         const agoraAdFuelInputSats = appConfig.dustSats + adSetupSatoshis;
-
-        const adSetupInputs = [];
-        for (const slpTokenInput of tokenInputs) {
-            adSetupInputs.push({
-                input: {
-                    prevOut: slpTokenInput.outpoint,
-                    signData: {
-                        sats: BigInt(appConfig.dustSats),
-                        outputScript: changeScript,
-                    },
-                },
-                signatory: P2PKHSignatory(sk, pk, ALL_BIP143),
-            });
-        }
-        const adSetupTargetOutputs: TokenTargetOutput[] = [
-            {
-                sats: 0n,
-                // We use sendAmounts here instead of sendAmounts[0] used in offerTargetOutputs
-                // They may be the same thing, i.e. sendAmounts may be an array of length one
-                // But we could have token change for the ad setup tx
-                script: slpSend(
-                    tokenId as string,
-                    (previewedAgoraPartial as AgoraPartial).tokenType,
-                    sendAmounts,
-                ),
-            },
-            {
-                sats: BigInt(agoraAdFuelInputSats),
-                script: agoraAdP2sh,
-            },
-        ];
-
-        // Include token change output for the ad setup tx if we have change
-        if (sendAmounts.length > 1) {
-            adSetupTargetOutputs.push({ sats: BigInt(appConfig.dustSats) });
-        }
 
         // Calculate decimalized total offered amount for notifications
         const decimalizedOfferedTokens = decimalizeTokenAmount(
@@ -2137,20 +2056,60 @@ const Token: React.FC = () => {
             decimals as SlpDecimals,
         );
 
-        // Broadcast the ad setup tx
+        // Broadcast the ad setup tx using ecash-wallet
         let adSetupTxid;
         try {
-            // Build and broadcast the ad setup tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                adSetupTargetOutputs,
-                satsPerKb,
-                chaintipBlockheight,
-                adSetupInputs,
-            );
-            adSetupTxid = response.txid;
+            // Build payment.Action for ad setup transaction
+            // This sends tokens to the P2SH address with fuel for the offer tx
+            // Output 0: OP_RETURN (ecash-wallet will build the script from tokenActions)
+            // Output 1: P2SH output with tokens (for the offer tx)
+            // Output 2 (if change): Token change output
+            const adSetupOutputs: payment.PaymentOutput[] = [
+                { sats: 0n }, // OP_RETURN - ecash-wallet will build the script
+                {
+                    sats: BigInt(agoraAdFuelInputSats),
+                    script: agoraAdP2sh,
+                    tokenId: tokenId as string,
+                    atoms: sendAmounts[0], // The amount being sent to P2SH
+                },
+            ];
+
+            // Include token change output for the ad setup tx if we have change
+            if (sendAmounts.length > 1) {
+                adSetupOutputs.push({
+                    sats: BigInt(appConfig.dustSats),
+                    script: ecashWallet.script,
+                    tokenId: tokenId as string,
+                    atoms: sendAmounts[1],
+                });
+            }
+
+            // ecash-wallet will automatically select the required token UTXOs based on the token send action
+            const adSetupAction: payment.Action = {
+                outputs: adSetupOutputs,
+                tokenActions: [
+                    {
+                        type: 'SEND',
+                        tokenId: tokenId as string,
+                        tokenType,
+                    },
+                ],
+                feePerKb: BigInt(satsPerKb),
+            };
+
+            // Build and broadcast using ecash-wallet
+            const builtAdSetupAction = ecashWallet
+                .action(adSetupAction)
+                .build();
+            const adSetupBroadcastResult = await builtAdSetupAction.broadcast();
+
+            if (!adSetupBroadcastResult.success) {
+                throw new Error(
+                    `Ad setup transaction broadcast failed: ${adSetupBroadcastResult.errors?.join(', ')}`,
+                );
+            }
+
+            adSetupTxid = adSetupBroadcastResult.broadcasted[0];
 
             confirmRawTx(
                 <a
@@ -2168,39 +2127,44 @@ const Token: React.FC = () => {
             return;
         }
 
-        // Now that we know the prevOut txid, we can make the real input
-        const offerInputs = [
-            // The utxo storing the tokens to be offered
-            {
-                input: {
-                    prevOut: {
-                        // Since we just broadcast the ad tx and know how it was built,
-                        // this prevOut will always look like this
-                        txid: adSetupTxid,
-                        outIdx: 1,
-                    },
-                    signData: {
-                        sats: BigInt(agoraAdFuelInputSats),
-                        redeemScript: agoraAdScript,
-                    },
-                },
-                signatory: AgoraPartialAdSignatory(sk),
-            },
-        ];
-
+        // Build and broadcast the offer transaction
+        // This uses a P2SH input with custom signatory, so we build it manually with TxBuilder
         let offerTxid;
         try {
-            // Build and broadcast the ad setup tx
-            const { response } = await sendXec(
-                chronik,
-                ecc,
-                wallet,
-                offerTargetOutputs,
-                satsPerKb,
-                chaintipBlockheight,
-                offerInputs,
+            const offerInputs = [
+                {
+                    input: {
+                        prevOut: {
+                            // Since we just broadcast the ad tx and know how it was built,
+                            // this prevOut will always look like this
+                            txid: adSetupTxid,
+                            outIdx: 1,
+                        },
+                        signData: {
+                            sats: BigInt(agoraAdFuelInputSats),
+                            redeemScript: agoraAdScript,
+                        },
+                    },
+                    signatory: AgoraPartialAdSignatory(fromHex(wallet.sk)),
+                },
+            ];
+
+            // Build the offer transaction using TxBuilder
+            const offerTxBuilder = new TxBuilder({
+                inputs: offerInputs,
+                outputs: offerTargetOutputs,
+            });
+
+            const offerTx = offerTxBuilder.sign({
+                feePerKb: BigInt(satsPerKb),
+                dustSats: BigInt(appConfig.dustSats),
+            });
+
+            // Broadcast using ecash-wallet's chronik
+            const { txid } = await ecashWallet.chronik.broadcastTx(
+                toHex(offerTx.ser()),
             );
-            offerTxid = response.txid;
+            offerTxid = txid;
 
             // Maintain this notification as we do not parse listing prices in websocket
             toast(
@@ -2268,56 +2232,6 @@ const Token: React.FC = () => {
                             handleOk={() => setShowAgoraPartialInfo(false)}
                             handleCancel={() => setShowAgoraPartialInfo(false)}
                         />
-                    )}
-                    {showFanoutInfo && (
-                        <Modal
-                            title="Creating NFT mint inputs"
-                            handleOk={() => setShowFanoutInfo(false)}
-                            handleCancel={() => setShowFanoutInfo(false)}
-                            height={300}
-                        >
-                            <InfoModalParagraph>
-                                A genesis tx for an NFT collection determines
-                                the size of your NFT collection.
-                            </InfoModalParagraph>
-                            <InfoModalParagraph>
-                                For example, if you created an NFT Collection
-                                with a supply of 100, you can mint 100 NFTs.{' '}
-                            </InfoModalParagraph>
-                            <InfoModalParagraph>
-                                However, each NFT must be minted from an input
-                                UTXO with qty 1. Cashtab creates these by
-                                splitting your original UTXO into utxos with qty
-                                1.{' '}
-                            </InfoModalParagraph>
-                            <InfoModalParagraph>
-                                These qty 1 NFT Collection utxos can be used to
-                                mint NFTs.
-                            </InfoModalParagraph>
-                        </Modal>
-                    )}
-                    {showMintNftInfo && (
-                        <Modal
-                            title="Minting an NFT"
-                            handleOk={() => setShowMintNftInfo(false)}
-                            handleCancel={() => setShowMintNftInfo(false)}
-                            height={300}
-                        >
-                            <InfoModalParagraph>
-                                You can use an NFT Mint Input (a qty-1 utxo from
-                                an NFT Collection token) to mint an NFT.
-                            </InfoModalParagraph>
-                            <InfoModalParagraph>
-                                NFTs from the same Collection are usually
-                                related somehow. They will be indexed by the
-                                tokenId of the NFT Collection.
-                            </InfoModalParagraph>
-                            <InfoModalParagraph>
-                                For example, popular NFT Collections include
-                                Cryptopunks and Bored Apes. Each individual
-                                Cryptopunk or Bored Ape is its own NFT.
-                            </InfoModalParagraph>
-                        </Modal>
                     )}
                     {showLargeIconModal && (
                         <Modal
@@ -2568,178 +2482,263 @@ const Token: React.FC = () => {
                         !switches.showRedeemXecx &&
                         (formData.tokenListPrice !== '' ||
                             tokenId === FIRMA.tokenId) &&
-                        previewedAgoraPartial !== null && (
-                            <Modal
-                                title={
-                                    isRedeemingFirma
-                                        ? `Redeem $FIRMA for XEC?`
-                                        : `List ${tokenTicker}?`
-                                }
-                                disabled={
-                                    previewedAgoraPartialUnacceptable ||
-                                    (isRedeemingFirma && !canRedeemFirma)
-                                }
-                                handleOk={
-                                    isAlp ? listAlpPartial : listSlpPartial
-                                }
-                                handleCancel={() =>
-                                    setPreviewedAgoraPartial(null)
-                                }
-                                showCancelButton
-                                height={isRedeemingFirma ? 290 : 450}
-                            >
-                                {isRedeemingFirma ? (
-                                    <>
-                                        <AgoraPreviewTable>
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    You sell:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {decimalizedTokenQtyToLocaleFormat(
-                                                        decimalizeTokenAmount(
-                                                            previewedAgoraPartial
-                                                                .offeredAtoms()
-                                                                .toString(),
-                                                            decimals as SlpDecimals,
-                                                        ),
-                                                        userLocale,
-                                                    )}{' '}
-                                                    $FIRMA
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    You receive:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {toXec(
-                                                        Number(
-                                                            previewedAgoraPartial.askedSats(
-                                                                previewedAgoraPartial.offeredAtoms(),
+                        previewedAgoraPartial !== null &&
+                        (() => {
+                            // Check if listing FIRMA below bid price
+                            let isListingFirmaBelowBid = false;
+                            if (
+                                tokenId === FIRMA.tokenId &&
+                                !isRedeemingFirma &&
+                                firmaBidPrice !== null &&
+                                previewedAgoraPartial !== null
+                            ) {
+                                const minAcceptedTokenSatoshis =
+                                    previewedAgoraPartial.minAcceptedAtoms();
+                                const minAcceptPriceSats =
+                                    previewedAgoraPartial.askedSats(
+                                        minAcceptedTokenSatoshis,
+                                    );
+                                const minAcceptedPriceXec = toXec(
+                                    Number(minAcceptPriceSats),
+                                );
+                                const minAcceptedTokens = decimalizeTokenAmount(
+                                    minAcceptedTokenSatoshis.toString(),
+                                    decimals as SlpDecimals,
+                                );
+                                const actualPricePerToken = new BigNumber(
+                                    minAcceptedPriceXec,
+                                ).div(new BigNumber(minAcceptedTokens));
+                                const actualPriceNumber =
+                                    actualPricePerToken.toNumber();
+                                isListingFirmaBelowBid =
+                                    actualPriceNumber < firmaBidPrice;
+                            }
+                            return (
+                                <Modal
+                                    title={
+                                        isRedeemingFirma
+                                            ? `Redeem $FIRMA for XEC?`
+                                            : `List ${tokenTicker}?`
+                                    }
+                                    disabled={
+                                        previewedAgoraPartialUnacceptable ||
+                                        (isRedeemingFirma && !canRedeemFirma) ||
+                                        isListingFirmaBelowBid
+                                    }
+                                    handleOk={
+                                        isAlp ? listAlpPartial : listSlpPartial
+                                    }
+                                    handleCancel={() =>
+                                        setPreviewedAgoraPartial(null)
+                                    }
+                                    showCancelButton
+                                    height={isRedeemingFirma ? 290 : 450}
+                                >
+                                    {isRedeemingFirma ? (
+                                        <>
+                                            <AgoraPreviewTable>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        You sell:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {decimalizedTokenQtyToLocaleFormat(
+                                                            decimalizeTokenAmount(
+                                                                previewedAgoraPartial
+                                                                    .offeredAtoms()
+                                                                    .toString(),
+                                                                decimals as SlpDecimals,
                                                             ),
-                                                        ),
-                                                    ).toLocaleString(
-                                                        userLocale,
-                                                        {
-                                                            minimumFractionDigits: 2,
-                                                            maximumFractionDigits: 2,
-                                                        },
-                                                    )}{' '}
-                                                    XEC
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    $FIRMA price:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {getAgoraPartialActualPrice()}
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                            {!canRedeemFirma && (
-                                                <Alert noWordBreak>
-                                                    {firmaRedeemErrorMsg}
-                                                </Alert>
-                                            )}
-                                            {previewedAgoraPartialUnacceptable && (
-                                                <Alert noWordBreak>
-                                                    This offer cannot be
-                                                    accepted because the min buy
-                                                    is higher than the total
-                                                    offered tokens. Cashtab does
-                                                    not support creating this
-                                                    type of offer. Please update
-                                                    your params and try again.
-                                                </Alert>
-                                            )}
-                                        </AgoraPreviewTable>
-                                    </>
-                                ) : (
-                                    <>
-                                        <AgoraPreviewParagraph>
-                                            Agora offers require special
-                                            encoding and may not match your
-                                            input.
-                                        </AgoraPreviewParagraph>
-                                        <AgoraPreviewParagraph>
-                                            Create the following sell offer?
-                                        </AgoraPreviewParagraph>
-                                        <AgoraPreviewTable>
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    Offered qty:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {decimalizedTokenQtyToLocaleFormat(
-                                                        decimalizeTokenAmount(
-                                                            previewedAgoraPartial
-                                                                .offeredAtoms()
-                                                                .toString(),
-                                                            decimals as SlpDecimals,
-                                                        ),
-                                                        userLocale,
-                                                    )}
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    Min qty:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {decimalizedTokenQtyToLocaleFormat(
-                                                        decimalizeTokenAmount(
-                                                            previewedAgoraPartial
-                                                                .minAcceptedAtoms()
-                                                                .toString(),
-                                                            decimals as SlpDecimals,
-                                                        ),
-                                                        userLocale,
-                                                    )}
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                            {previewedAgoraPartialUnacceptable && (
-                                                <Alert noWordBreak>
-                                                    This offer cannot be
-                                                    accepted because the min buy
-                                                    is higher than the total
-                                                    offered tokens. Cashtab does
-                                                    not support creating this
-                                                    type of offer. Please update
-                                                    your params and try again.
-                                                </Alert>
-                                            )}
+                                                            userLocale,
+                                                        )}{' '}
+                                                        $FIRMA
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        You receive:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {toXec(
+                                                            Number(
+                                                                previewedAgoraPartial.askedSats(
+                                                                    previewedAgoraPartial.offeredAtoms(),
+                                                                ),
+                                                            ),
+                                                        ).toLocaleString(
+                                                            userLocale,
+                                                            {
+                                                                minimumFractionDigits: 2,
+                                                                maximumFractionDigits: 2,
+                                                            },
+                                                        )}{' '}
+                                                        XEC
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        $FIRMA price:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {getAgoraPartialActualPrice()}
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                {!canRedeemFirma && (
+                                                    <Alert noWordBreak>
+                                                        {firmaRedeemErrorMsg}
+                                                    </Alert>
+                                                )}
+                                                {previewedAgoraPartialUnacceptable && (
+                                                    <Alert noWordBreak>
+                                                        This offer cannot be
+                                                        accepted because the min
+                                                        buy is higher than the
+                                                        total offered tokens.
+                                                        Cashtab does not support
+                                                        creating this type of
+                                                        offer. Please update
+                                                        your params and try
+                                                        again.
+                                                    </Alert>
+                                                )}
+                                            </AgoraPreviewTable>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <AgoraPreviewParagraph>
+                                                Agora offers require special
+                                                encoding and may not match your
+                                                input.
+                                            </AgoraPreviewParagraph>
+                                            <AgoraPreviewParagraph>
+                                                Create the following sell offer?
+                                            </AgoraPreviewParagraph>
+                                            <AgoraPreviewTable>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        Offered qty:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {decimalizedTokenQtyToLocaleFormat(
+                                                            decimalizeTokenAmount(
+                                                                previewedAgoraPartial
+                                                                    .offeredAtoms()
+                                                                    .toString(),
+                                                                decimals as SlpDecimals,
+                                                            ),
+                                                            userLocale,
+                                                        )}
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        Min qty:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {decimalizedTokenQtyToLocaleFormat(
+                                                            decimalizeTokenAmount(
+                                                                previewedAgoraPartial
+                                                                    .minAcceptedAtoms()
+                                                                    .toString(),
+                                                                decimals as SlpDecimals,
+                                                            ),
+                                                            userLocale,
+                                                        )}
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                {previewedAgoraPartialUnacceptable && (
+                                                    <Alert noWordBreak>
+                                                        This offer cannot be
+                                                        accepted because the min
+                                                        buy is higher than the
+                                                        total offered tokens.
+                                                        Cashtab does not support
+                                                        creating this type of
+                                                        offer. Please update
+                                                        your params and try
+                                                        again.
+                                                    </Alert>
+                                                )}
 
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    Actual price:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {getAgoraPartialActualPrice()}
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        Actual price:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {getAgoraPartialActualPrice()}
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
 
-                                            <AgoraPreviewRow>
-                                                <AgoraPreviewLabel>
-                                                    Target price:{' '}
-                                                </AgoraPreviewLabel>
-                                                <AgoraPreviewCol>
-                                                    {getAgoraPartialTargetPriceXec()}
-                                                </AgoraPreviewCol>
-                                            </AgoraPreviewRow>
-                                        </AgoraPreviewTable>
-                                        <AgoraPreviewParagraph>
-                                            If actual price is not close to
-                                            target price, increase your min buy.
-                                        </AgoraPreviewParagraph>
-                                        <AgoraPreviewParagraph>
-                                            You can cancel this listing at any
-                                            time.
-                                        </AgoraPreviewParagraph>
-                                    </>
-                                )}
-                            </Modal>
-                        )}
+                                                <AgoraPreviewRow>
+                                                    <AgoraPreviewLabel>
+                                                        Target price:{' '}
+                                                    </AgoraPreviewLabel>
+                                                    <AgoraPreviewCol>
+                                                        {getAgoraPartialTargetPriceXec()}
+                                                    </AgoraPreviewCol>
+                                                </AgoraPreviewRow>
+                                                {isListingFirmaBelowBid && (
+                                                    <Alert noWordBreak>
+                                                        ⚠️ Warning: You are
+                                                        listing FIRMA for{' '}
+                                                        {(() => {
+                                                            const minAcceptedTokenSatoshis =
+                                                                previewedAgoraPartial.minAcceptedAtoms();
+                                                            const minAcceptPriceSats =
+                                                                previewedAgoraPartial.askedSats(
+                                                                    minAcceptedTokenSatoshis,
+                                                                );
+                                                            const minAcceptedPriceXec =
+                                                                toXec(
+                                                                    Number(
+                                                                        minAcceptPriceSats,
+                                                                    ),
+                                                                );
+                                                            const minAcceptedTokens =
+                                                                decimalizeTokenAmount(
+                                                                    minAcceptedTokenSatoshis.toString(),
+                                                                    decimals as SlpDecimals,
+                                                                );
+                                                            const actualPricePerToken =
+                                                                new BigNumber(
+                                                                    minAcceptedPriceXec,
+                                                                ).div(
+                                                                    new BigNumber(
+                                                                        minAcceptedTokens,
+                                                                    ),
+                                                                );
+                                                            return getAgoraSpotPriceXec(
+                                                                actualPricePerToken.toNumber(),
+                                                                userLocale,
+                                                            );
+                                                        })()}{' '}
+                                                        per token, which is
+                                                        below FIRMA's current
+                                                        buy price of{' '}
+                                                        {getAgoraSpotPriceXec(
+                                                            firmaBidPrice as number,
+                                                            userLocale,
+                                                        )}{' '}
+                                                        per token. You should
+                                                        redeem FIRMA instead to
+                                                        get the best price.
+                                                    </Alert>
+                                                )}
+                                            </AgoraPreviewTable>
+                                            <AgoraPreviewParagraph>
+                                                If actual price is not close to
+                                                target price, increase your min
+                                                buy.
+                                            </AgoraPreviewParagraph>
+                                            <AgoraPreviewParagraph>
+                                                You can cancel this listing at
+                                                any time.
+                                            </AgoraPreviewParagraph>
+                                        </>
+                                    )}
+                                </Modal>
+                            );
+                        })()}
                     {renderedTokenType === 'NFT' && (
                         <>
                             <NftNameTitle>{tokenName}</NftNameTitle>
@@ -2955,7 +2954,6 @@ const Token: React.FC = () => {
                                             offers={
                                                 nftActiveOffer as unknown as OneshotOffer[]
                                             }
-                                            activePk={pk}
                                             chronik={chronik}
                                             chaintipBlockheight={
                                                 chaintipBlockheight
@@ -3063,7 +3061,6 @@ const Token: React.FC = () => {
                                 fiatPrice={fiatPrice}
                                 userLocale={userLocale}
                                 wallet={wallet}
-                                activePk={pk}
                                 chaintipBlockheight={chaintipBlockheight}
                                 noCollectionInfo
                             />
@@ -3347,24 +3344,23 @@ const Token: React.FC = () => {
                                                                   } `
                                                                 : '$ '
                                                         }${(
-                                                                          parseFloat(
-                                                                              formData.nftListPrice,
-                                                                          ) *
-                                                                          fiatPrice
-                                                                      ).toLocaleString(
-                                                                          userLocale,
-                                                                          {
-                                                                              minimumFractionDigits:
-                                                                                  appConfig.cashDecimals,
-                                                                              maximumFractionDigits:
-                                                                                  appConfig.cashDecimals,
-                                                                          },
-                                                                      )} ${
-                                                                          settings &&
-                                                                          settings.fiatCurrency
-                                                                              ? settings.fiatCurrency.toUpperCase()
-                                                                              : 'USD'
-                                                                      }`
+                                                            parseFloat(
+                                                                formData.nftListPrice,
+                                                            ) * fiatPrice
+                                                        ).toLocaleString(
+                                                            userLocale,
+                                                            {
+                                                                minimumFractionDigits:
+                                                                    appConfig.cashDecimals,
+                                                                maximumFractionDigits:
+                                                                    appConfig.cashDecimals,
+                                                            },
+                                                        )} ${
+                                                            settings &&
+                                                            settings.fiatCurrency
+                                                                ? settings.fiatCurrency.toUpperCase()
+                                                                : 'USD'
+                                                        }`
                                                                     : `${
                                                                           settings
                                                                               ? `${
@@ -3705,70 +3701,9 @@ const Token: React.FC = () => {
                                         <>
                                             <SwitchHolder>
                                                 <Switch
-                                                    name="Toggle NFT Parent Fan-out"
-                                                    checked={
-                                                        switches.showFanout
-                                                    }
-                                                    handleToggle={() =>
-                                                        // We turn everything else off, whether we are turning this one on or off
-                                                        setSwitches({
-                                                            ...switchesOff,
-                                                            showFanout:
-                                                                !switches.showFanout,
-                                                        })
-                                                    }
-                                                />
-                                                <SwitchLabel>
-                                                    <DataAndQuestionButton>
-                                                        Create NFT mint inputs
-                                                        <IconButton
-                                                            name={`Click for more info about NFT Collection fan-out txs`}
-                                                            icon={
-                                                                <QuestionIcon />
-                                                            }
-                                                            onClick={() =>
-                                                                setShowFanoutInfo(
-                                                                    true,
-                                                                )
-                                                            }
-                                                        />
-                                                    </DataAndQuestionButton>
-                                                </SwitchLabel>
-                                            </SwitchHolder>
-                                            {switches.showFanout && (
-                                                <TokenStatsRow>
-                                                    <SecondaryButton
-                                                        style={{
-                                                            marginTop: '12px',
-                                                            marginBottom: '0px',
-                                                        }}
-                                                        disabled={
-                                                            nftFanInputs.length ===
-                                                            0
-                                                        }
-                                                        onClick={
-                                                            createNftMintInputs
-                                                        }
-                                                    >
-                                                        Create NFT Mint Inputs
-                                                    </SecondaryButton>
-                                                    <ButtonDisabledMsg>
-                                                        {nftFanInputs.length ===
-                                                        0
-                                                            ? 'No token utxos exist with qty !== 1'
-                                                            : ''}
-                                                    </ButtonDisabledMsg>
-                                                </TokenStatsRow>
-                                            )}
-                                            <SwitchHolder>
-                                                <Switch
                                                     name="Toggle Mint NFT"
                                                     checked={
                                                         switches.showMintNft
-                                                    }
-                                                    disabled={
-                                                        nftChildGenesisInput.length ===
-                                                        0
                                                     }
                                                     handleToggle={() =>
                                                         // We turn everything else off, whether we are turning this one on or off
@@ -3780,47 +3715,12 @@ const Token: React.FC = () => {
                                                     }
                                                 />
                                                 <SwitchLabel>
-                                                    <DataAndQuestionButton>
-                                                        Mint NFT{' '}
-                                                        {availableNftInputs ===
-                                                        0 ? (
-                                                            <ButtonDisabledSpan>
-                                                                &nbsp;(no NFT
-                                                                mint inputs)
-                                                            </ButtonDisabledSpan>
-                                                        ) : (
-                                                            <p>
-                                                                &nbsp; (
-                                                                {
-                                                                    availableNftInputs
-                                                                }{' '}
-                                                                input
-                                                                {availableNftInputs >
-                                                                1
-                                                                    ? 's'
-                                                                    : ''}{' '}
-                                                                available)
-                                                            </p>
-                                                        )}
-                                                        <IconButton
-                                                            name={`Click for more info about minting an NFT`}
-                                                            icon={
-                                                                <QuestionIcon />
-                                                            }
-                                                            onClick={() =>
-                                                                setShowMintNftInfo(
-                                                                    true,
-                                                                )
-                                                            }
-                                                        />
-                                                    </DataAndQuestionButton>
+                                                    Mint NFT
                                                 </SwitchLabel>
                                             </SwitchHolder>
                                             {switches.showMintNft && (
                                                 <CreateTokenForm
-                                                    nftChildGenesisInput={
-                                                        nftChildGenesisInput
-                                                    }
+                                                    groupTokenId={tokenId}
                                                 />
                                             )}
                                         </>

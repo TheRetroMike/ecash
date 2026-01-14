@@ -16,7 +16,7 @@ use bitcoinsuite_core::{
     net::Net,
     tx::{Tx, TxId},
 };
-use chronik_bridge::{ffi::init_error, util::expect_unique_ptr};
+use chronik_bridge::ffi::init_error;
 use chronik_db::{
     index_tx::TxNumCacheSettings, io::GroupHistorySettings, mem::MempoolTx,
 };
@@ -103,9 +103,9 @@ fn try_setup_chronik(
         plugins_dir: datadir.join("plugins"),
         plugins_conf: datadir.join("plugins.toml"),
     })?;
-    log!("Starting Chronik bound to {:?}\n", hosts);
+    log!("Starting Chronik bound to {hosts:?}\n");
     let bridge = chronik_bridge::ffi::make_bridge(node_context);
-    let bridge_ref = expect_unique_ptr("make_bridge", &bridge);
+    let node = Arc::new(Node { bridge });
     let (pause, pause_notify) = Pause::new_pair(params.is_pause_allowed);
     let mut indexer = ChronikIndexer::setup(
         ChronikIndexerParams {
@@ -125,18 +125,14 @@ fn try_setup_chronik(
             },
             decompress_script_fn: decompress_script,
         },
-        |file_num, data_pos, undo_pos| {
-            Ok(Tx::from(bridge_ref.load_tx(file_num, data_pos, undo_pos)?))
-        },
-        || bridge_ref.shutdown_requested(),
+        node.clone(),
     )?;
-    indexer.resync_indexer(bridge_ref)?;
-    if bridge.shutdown_requested() {
+    indexer.resync_indexer(node.as_ref())?;
+    if node.bridge.shutdown_requested() {
         // Don't setup Chronik if the user requested shutdown during resync
         return Ok(());
     }
     let indexer = Arc::new(RwLock::new(indexer));
-    let node = Arc::new(Node { bridge });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -179,8 +175,7 @@ fn try_setup_chronik(
             })
             .collect::<Result<Vec<_>>>()?;
         log!(
-            "Starting Chronik Electrum interface bound to {:?}\n",
-            electrum_hosts
+            "Starting Chronik Electrum interface bound to {electrum_hosts:?}\n",
         );
         let electrum_server =
             ChronikElectrumServer::setup(ChronikElectrumServerParams {
@@ -192,6 +187,8 @@ fn try_setup_chronik(
                 tls_privkey_path: params.electrum_privkey_path,
                 max_history: params.electrum_max_history,
                 donation_address: params.electrum_donation_address,
+                peers_validation_interval: params
+                    .electrum_peers_validation_interval,
             })?;
         runtime.spawn({
             let node = Arc::clone(&node);
@@ -248,6 +245,8 @@ fn parse_socket_addr_protocol(
     let protocol = match protocol_letter {
         b't' => ChronikElectrumProtocol::Tcp,
         b's' => ChronikElectrumProtocol::Tls,
+        b'w' => ChronikElectrumProtocol::Ws,
+        b'y' => ChronikElectrumProtocol::Wss,
         _ => {
             return Err(
                 InvalidChronikElectrumHostProtocol(protocol_letter).into()
@@ -304,7 +303,7 @@ impl Chronik {
             "handle_tx_removed_from_mempool",
             indexer.handle_tx_removed_from_mempool(txid),
         );
-        log_chronik!("Chronik: transaction {} removed from mempool\n", txid);
+        log_chronik!("Chronik: transaction {txid} removed from mempool\n");
     }
 
     /// Block connected to the longest chain
@@ -353,6 +352,29 @@ impl Chronik {
         );
     }
 
+    /// Transaction finalized with Avalanche
+    pub fn handle_tx_finalized(&self, txid: [u8; 32]) {
+        self.block_if_paused();
+        let txid = TxId::from(txid);
+        self.node.ok_or_abort(
+            "handle_tx_finalized",
+            self.finalize_transaction(&txid),
+        );
+    }
+
+    /// Transaction invalidated with Avalanche
+    pub fn handle_tx_invalidated(
+        &self,
+        tx: &ffi::CTransaction,
+        spent_coins: &cxx::CxxVector<ffi::CCoin>,
+    ) {
+        self.block_if_paused();
+        self.node.ok_or_abort(
+            "handle_tx_invalidated",
+            self.invalidate_transaction(tx, spent_coins),
+        );
+    }
+
     fn add_tx_to_mempool(
         &self,
         ptx: &ffi::CTransaction,
@@ -366,7 +388,7 @@ impl Chronik {
             tx: Tx::from(tx),
             time_first_seen,
         })?;
-        log_chronik!("Chronik: transaction {} added to mempool\n", txid);
+        log_chronik!("Chronik: transaction {txid} added to mempool\n");
         Ok(())
     }
 
@@ -384,9 +406,7 @@ impl Chronik {
         let num_txs = block.block_txs.txs.len();
         indexer.handle_block_connected(block)?;
         log_chronik!(
-            "Chronik: block {} connected with {} txs\n",
-            block_hash,
-            num_txs,
+            "Chronik: block {block_hash} connected with {num_txs} txs\n"
         );
         Ok(())
     }
@@ -405,23 +425,19 @@ impl Chronik {
         let num_txs = block.block_txs.txs.len();
         indexer.handle_block_disconnected(block)?;
         log_chronik!(
-            "Chronik: block {} disconnected with {} txs\n",
-            block_hash,
-            num_txs,
+            "Chronik: block {block_hash} disconnected with {num_txs} txs\n"
         );
         Ok(())
     }
 
     fn finalize_block(&self, bindex: &ffi::CBlockIndex) -> Result<()> {
         let mut indexer = self.indexer.blocking_write();
-        let block = indexer.load_chronik_block(&self.node.bridge, bindex)?;
+        let block = indexer.load_chronik_block(&self.node, bindex)?;
         let block_hash = block.db_block.hash.clone();
         let num_txs = block.block_txs.txs.len();
         indexer.handle_block_finalized(block)?;
         log_chronik!(
-            "Chronik: block {} finalized with {} txs\n",
-            block_hash,
-            num_txs,
+            "Chronik: block {block_hash} finalized with {num_txs} txs\n"
         );
         Ok(())
     }
@@ -447,6 +463,30 @@ impl Chronik {
         indexer.handle_block_invalidated(block)?;
         log_chronik!(
             "Chronik: block {block_hash} invalidated with {num_txs} txs\n",
+        );
+        Ok(())
+    }
+
+    fn finalize_transaction(&self, txid: &TxId) -> Result<()> {
+        let mut indexer = self.indexer.blocking_write();
+        indexer.handle_transaction_finalized(txid)?;
+        log_chronik!(
+            "Chronik: transaction {txid} finalized by pre-consensus\n"
+        );
+        Ok(())
+    }
+
+    fn invalidate_transaction(
+        &self,
+        tx: &ffi::CTransaction,
+        spent_coins: &cxx::CxxVector<ffi::CCoin>,
+    ) -> Result<()> {
+        let mut indexer = self.indexer.blocking_write();
+        let tx = chronik_bridge::ffi::bridge_tx(tx, spent_coins)?;
+        let txid: TxId = TxId::from(tx.txid);
+        indexer.handle_transaction_invalidated(Tx::from(tx))?;
+        log_chronik!(
+            "Chronik: transaction {txid} invalidated by pre-consensus\n"
         );
         Ok(())
     }

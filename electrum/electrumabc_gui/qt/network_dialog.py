@@ -30,9 +30,9 @@ import queue
 import socket
 from functools import partial
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QIcon
+from qtpy import QtWidgets
+from qtpy.QtCore import QObject, Qt, QThread, QTimer, Signal
+from qtpy.QtGui import QIcon
 
 from electrumabc import networks
 from electrumabc.constants import PROJECT_NAME
@@ -68,7 +68,7 @@ protocol_letters = "ts"
 
 
 class NetworkDialog(MessageBoxMixin, QtWidgets.QDialog):
-    network_updated_signal = pyqtSignal()
+    network_updated_signal = Signal()
 
     def __init__(self, network: Network, config):
         QtWidgets.QDialog.__init__(self)
@@ -447,7 +447,7 @@ class ServerListWidget(QtWidgets.QTreeWidget):
                     self.lightenItemText(x, range(1, 4))
                 x.setData(2, Qt.UserRole, server)
                 x.setData(0, Qt.UserRole, flagval)
-                x.setTextAlignment(0, Qt.AlignHCenter)
+                x.setTextAlignment(0, Qt.AlignmentFlag.AlignHCenter)
                 self.addTopLevelItem(x)
 
         h = self.header()
@@ -742,8 +742,16 @@ class NetworkChoiceLayout(QObject, PrintError):
         # Custom Tor port
         hbox = QtWidgets.QHBoxLayout()
         hbox.addSpacing(20)  # indentation
-        hbox.addWidget(self.tor_custom_port_cb, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        hbox.addWidget(self.tor_socks_port, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        hbox.addWidget(
+            self.tor_custom_port_cb,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+        hbox.addWidget(
+            self.tor_socks_port,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
         hbox.addStretch(2)
         hbox.setContentsMargins(0, 0, 0, 6)  # a bit of a "paragraph break" here
         grid.addLayout(hbox, 2, 0, 1, 3)
@@ -838,12 +846,20 @@ class NetworkChoiceLayout(QObject, PrintError):
         hbox.addWidget(QtWidgets.QLabel(_("Limit:")))
         self.req_max_sb = sb = QtWidgets.QSpinBox()
         sb.setRange(1, 2000)
-        sb.setFocusPolicy(Qt.TabFocus | Qt.ClickFocus | Qt.WheelFocus)
+        sb.setFocusPolicy(
+            Qt.FocusPolicy.TabFocus
+            | Qt.FocusPolicy.ClickFocus
+            | Qt.FocusPolicy.WheelFocus
+        )
         hbox.addWidget(sb)
         hbox.addWidget(QtWidgets.QLabel(_("ChunkSize:")))
         self.req_chunk_sb = sb = QtWidgets.QSpinBox()
         sb.setRange(1, 100)
-        sb.setFocusPolicy(Qt.TabFocus | Qt.ClickFocus | Qt.WheelFocus)
+        sb.setFocusPolicy(
+            Qt.FocusPolicy.TabFocus
+            | Qt.FocusPolicy.ClickFocus
+            | Qt.FocusPolicy.WheelFocus
+        )
         hbox.addWidget(sb)
         but = QtWidgets.QPushButton(_("Reset"))
         f = but.font()
@@ -853,7 +869,9 @@ class NetworkChoiceLayout(QObject, PrintError):
         but.setAutoDefault(False)
         hbox.addWidget(but)
         grid.addLayout(hbox, row, 1, 1, 3)
-        grid.setAlignment(hbox, Qt.AlignLeft | Qt.AlignVCenter)
+        grid.setAlignment(
+            hbox, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         grid.setColumnStretch(3, 1)
         grid.addWidget(HelpButton(msg), row, 4)
         row += 1
@@ -1029,7 +1047,8 @@ class NetworkChoiceLayout(QObject, PrintError):
             self.server_port.setText(port)
         self.ssl_cb.setChecked(protocol == "s")
         ssl_disable = (
-            self.ssl_cb.isChecked()
+            host not in ("127.0.0.1", "::1", "localhost")
+            and self.ssl_cb.isChecked()
             and not self.tor_cb.isChecked()
             and not host.lower().endswith(".onion")
         )
@@ -1397,7 +1416,7 @@ class NetworkChoiceLayout(QObject, PrintError):
 
 
 class TorDetector(QThread):
-    found_proxy = pyqtSignal(object)
+    found_proxy = Signal(object)
 
     def __init__(self, parent, network: Network):
         super().__init__(parent)

@@ -42,11 +42,7 @@ const config = {
             {
                 entryPoints: ['../../modules/chronik-client/'],
                 entryPointStrategy: 'packages',
-                out: './1-chronik-js/api',
-                sidebar: {
-                    categoryLabel: 'API Reference',
-                    position: 10,
-                },
+                out: './docs/1-chronik-js/api',
             },
         ],
     ],
@@ -109,8 +105,8 @@ const config = {
                         title: 'Community',
                         items: [
                             {
-                                label: 'Twitter',
-                                href: 'https://twitter.com/eCashOfficial',
+                                label: '𝕏 (Twitter)',
+                                href: 'https://twitter.com/eCash',
                             },
                         ],
                     },

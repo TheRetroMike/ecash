@@ -1,8 +1,8 @@
 from functools import partial
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QEventLoop, QRegExp, Qt, pyqtSignal
-from PyQt5.QtGui import QRegExpValidator
+from qtpy import QtWidgets
+from qtpy.QtCore import QEventLoop, QRegularExpression, Qt, Signal
+from qtpy.QtGui import QRegularExpressionValidator
 
 from electrumabc.bip32 import is_xprv
 from electrumabc.constants import PROJECT_NAME
@@ -19,6 +19,7 @@ from electrumabc_gui.qt.util import (
 
 from ..hw_wallet.plugin import only_hook_if_libraries_available
 from ..hw_wallet.qt import QtHandlerBase, QtPluginBase
+from ..hw_wallet.trezor_qt_pinmatrix import PinMatrixWidget
 from .keepkey import TIM_MNEMONIC, TIM_NEW, TIM_RECOVER, KeepKeyPlugin
 
 PASSPHRASE_HELP_SHORT = _(
@@ -147,9 +148,9 @@ class CharacterDialog(WindowModalDialog):
 
 
 class QtHandler(QtHandlerBase):
-    char_signal = pyqtSignal(object)
-    pin_signal = pyqtSignal(object)
-    close_char_dialog_signal = pyqtSignal()
+    char_signal = Signal(object)
+    pin_signal = Signal(object)
+    close_char_dialog_signal = Signal()
 
     def __init__(self, win, pin_matrix_widget_class, device):
         super(QtHandler, self).__init__(win, device)
@@ -282,7 +283,9 @@ class QtPlugin(QtPluginBase):
             vbox.addWidget(QtWidgets.QLabel(msg))
             vbox.addWidget(text)
             pin = QtWidgets.QLineEdit()
-            pin.setValidator(QRegExpValidator(QRegExp("[1-9]{0,9}")))
+            pin.setValidator(
+                QRegularExpressionValidator(QRegularExpression("[1-9]{0,9}"))
+            )
             pin.setMaximumWidth(100)
             hbox_pin = QtWidgets.QHBoxLayout()
             hbox_pin.addWidget(QtWidgets.QLabel(_("Enter your PIN (digits 1-9):")))
@@ -325,8 +328,6 @@ class Plugin(KeepKeyPlugin, QtPlugin):
 
     @classmethod
     def pin_matrix_widget_class(self):
-        from keepkeylib.qt.pinmatrix import PinMatrixWidget
-
         return PinMatrixWidget
 
 
@@ -612,8 +613,8 @@ class SettingsDialog(WindowModalDialog):
             w = advanced_glayout.itemAt(i).widget()
             if isinstance(w, QtWidgets.QLabel) and w.wordWrap():
                 sp = w.sizePolicy()
-                sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Ignored)
-                sp.setVerticalPolicy(QtWidgets.QSizePolicy.MinimumExpanding)
+                sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Policy.Ignored)
+                sp.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding)
                 w.setSizePolicy(sp)
         advanced_layout.addLayout(advanced_glayout)
         advanced_layout.addStretch(1)

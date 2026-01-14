@@ -30,11 +30,12 @@ import weakref
 from functools import partial
 from typing import TYPE_CHECKING, Optional
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QMargins, QObject, QPoint, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QCursor, QIcon, QImage, QPainter
+from qtpy import QtWidgets
+from qtpy.QtCore import QMargins, QObject, QPoint, QSize, Qt, QTimer, Signal
+from qtpy.QtGui import QCursor, QIcon, QImage, QPainter
 
 from electrumabc.address import Address
+from electrumabc.amount import base_unit, format_amount
 from electrumabc.i18n import _, ngettext
 from electrumabc.plugins import hook, run_hook
 from electrumabc.tor.controller import TorController
@@ -70,8 +71,9 @@ from .server import Params
 from .util import get_coin_name
 
 if TYPE_CHECKING:
-    from electrumabc_gui.qt.address_list import AddressList
+    from electrumabc.simple_config import SimpleConfig
     from electrumabc_gui.qt import ElectrumGui
+    from electrumabc_gui.qt.address_list import AddressList
 
 from pathlib import Path
 
@@ -108,7 +110,7 @@ def get_image_red_exclamation():
 
 
 class Plugin(FusionPlugin, QObject):
-    server_status_changed_signal = pyqtSignal(bool, tuple)
+    server_status_changed_signal = Signal(bool, tuple)
 
     fusions_win = None
     weak_settings_tab = None
@@ -287,8 +289,8 @@ class Plugin(FusionPlugin, QObject):
             return
 
         # NEW! Set up the send tab "Spend only fused coins" checkbox/control
-        if hasattr(window, "send_tab_extra_plugin_controls_hbox"):
-            hbox = window.send_tab_extra_plugin_controls_hbox
+        if hasattr(window.send_tab, "send_tab_extra_plugin_controls_hbox"):
+            hbox = window.send_tab.send_tab_extra_plugin_controls_hbox
             label, tooltip = self.get_spend_only_fused_coins_checkbox_attributes(wallet)
             spend_only_fused_chk = QtWidgets.QCheckBox(label)
             spend_only_fused_chk.setObjectName("spend_only_fused_chk")
@@ -302,7 +304,8 @@ class Plugin(FusionPlugin, QObject):
                 if window:
                     wallet = window.wallet
                     Conf(wallet).spend_only_fused_coins = b
-                    window.do_update_fee()  # trigger send tab to re-calculate things
+                    # trigger send tab to re-calculate things
+                    window.send_tab.do_update_fee()
 
             spend_only_fused_chk.toggled.connect(on_chk)
             self.widgets.add(spend_only_fused_chk)
@@ -426,23 +429,26 @@ class Plugin(FusionPlugin, QObject):
             item.setText(col, _("Unfused"))
 
     @hook
-    def spendable_coin_filter(self, window, coins):
+    def spendable_coin_filter(
+        self,
+        wallet: AbstractWallet,
+        tx_external_keypairs: dict[bytes, tuple[bytes, bool]],
+        coins,
+    ):
         """Invoked by the send tab to filter out coins that aren't fused if the wallet has
         'spend only fused coins' enabled."""
-        if not coins or not hasattr(window, "wallet"):
+        if not coins:
             return
 
-        wallet = window.wallet
         if not Conf(wallet).spend_only_fused_coins or not self.wallet_can_fuse(wallet):
             return
 
         # external_coins_addresses is only ever used if they are doing a sweep. in which case we always allow the coins
         # involved in the sweep
         external_coin_addresses = set()
-        if hasattr(window, "tx_external_keypairs"):
-            for pubkey in window.tx_external_keypairs:
-                a = Address.from_pubkey(pubkey)
-                external_coin_addresses.add(a)
+        for pubkey in tx_external_keypairs:
+            a = Address.from_pubkey(pubkey)
+            external_coin_addresses.add(a)
 
         # we can ONLY spend fused coins + ununfused living on a fused coin address
         fuz_adrs_seen = set()
@@ -481,9 +487,10 @@ class Plugin(FusionPlugin, QObject):
                         fuz_coins_seen.add(name)
 
     @hook
-    def not_enough_funds_extra(self, window) -> Optional[str]:
+    def not_enough_funds_extra(
+        self, wallet: AbstractWallet, config: SimpleConfig
+    ) -> Optional[str]:
         """Called by the Qt UI if there is a "not enough funds" error in the send tab"""
-        wallet = window.wallet
         if not self.wallet_can_fuse(wallet):
             return
         conf = Conf(wallet)
@@ -494,7 +501,7 @@ class Plugin(FusionPlugin, QObject):
             for coin in wallet.get_utxos(
                 exclude_frozen=True,
                 mature=True,
-                confirmed_only=bool(window.config.get("confirmed_only", False)),
+                confirmed_only=bool(config.get("confirmed_only", False)),
             )
             if not self.is_fuz_coin(wallet, coin, require_depth=conf.fuse_depth - 1)
         ]
@@ -506,7 +513,7 @@ class Plugin(FusionPlugin, QObject):
                 "{total_bch} in {n_coins} unfused coins",
                 n_coins,
             ).format(
-                total_bch=window.format_amount(total) + " " + window.base_unit(),
+                total_bch=format_amount(total, config) + " " + base_unit(config),
                 n_coins=n_coins,
             )
 
@@ -883,13 +890,16 @@ class PasswordDialog(WindowModalDialog):
         self.msglabel.setWordWrap(True)
         self.msglabel.setMinimumWidth(250)
         self.msglabel.setSizePolicy(
-            QtWidgets.QSizePolicy.MinimumExpanding, QtWidgets.QSizePolicy.Expanding
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
         )
         hbox = QtWidgets.QHBoxLayout()
         iconlabel = QtWidgets.QLabel()
         iconlabel.setPixmap(get_icon_fusion_logo().pixmap(32))
         hbox.addWidget(iconlabel)
-        hbox.addWidget(self.msglabel, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        hbox.addWidget(
+            self.msglabel, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         cmargins = hbox.contentsMargins()
         cmargins.setBottom(10)
         hbox.setContentsMargins(cmargins)  # pad the bottom a bit
@@ -1168,7 +1178,7 @@ class FusionButton(StatusBarButton):
 
 class SettingsWidget(QtWidgets.QWidget):
     torscanthread = None
-    torscanthread_update = pyqtSignal(object)
+    torscanthread_update = Signal(object)
 
     def __init__(self, plugin, parent=None):
         super().__init__(parent)
@@ -1179,7 +1189,9 @@ class SettingsWidget(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout(self)
 
         box = QtWidgets.QGroupBox(_("Network"))
-        main_layout.addWidget(box, 0, Qt.AlignTop | Qt.AlignHCenter)
+        main_layout.addWidget(
+            box, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter
+        )
         slayout = QtWidgets.QVBoxLayout(box)
 
         grid = QtWidgets.QGridLayout()
@@ -1193,13 +1205,13 @@ class SettingsWidget(QtWidgets.QWidget):
         self.combo_server_host.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
         self.combo_server_host.setCompleter(None)
         self.combo_server_host.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed
         )
         self.combo_server_host.activated.connect(self.combo_server_activated)
         self.combo_server_host.lineEdit().textEdited.connect(self.user_changed_server)
         self.combo_server_host.addItems(
             [
-                f'{s[0]} ({s[1]}{" - ssl" if s[2] else ""})'
+                f"{s[0]} ({s[1]}{' - ssl' if s[2] else ''})"
                 for s in Global.Defaults.ServerList
             ]
         )
@@ -1216,7 +1228,9 @@ class SettingsWidget(QtWidgets.QWidget):
         hbox.addWidget(self.cb_server_ssl)
 
         self.server_error_label = QtWidgets.QLabel()
-        self.server_error_label.setAlignment(Qt.AlignTop | Qt.AlignJustify)
+        self.server_error_label.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignJustify
+        )
         grid.addWidget(self.server_error_label, 1, 0, 1, -1)
 
         grid.addWidget(QtWidgets.QLabel(_("Tor")), 2, 0)
@@ -1250,7 +1264,7 @@ class SettingsWidget(QtWidgets.QWidget):
         btn.setAutoDefault(False)
         btn.clicked.connect(self.plugin.show_util_window)
         buts = Buttons(btn)
-        buts.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        buts.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         main_layout.addLayout(buts)
 
         main_layout.addStretch(1)
@@ -1520,7 +1534,7 @@ class WalletSettingsDialog(WindowModalDialog):
         self.confkey2idx["normal"] = stacked_layout.addWidget(normal_page_w)
         mode_cb.addItem(_("Normal"))
         lbl = QtWidgets.QLabel("- " + _("Normal mode") + " -")
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         normal_page_layout.addWidget(lbl)
 
         # Consolidate
@@ -1529,7 +1543,7 @@ class WalletSettingsDialog(WindowModalDialog):
         self.confkey2idx["consolidate"] = stacked_layout.addWidget(consolidate_page_w)
         mode_cb.addItem(_("Consolidate"))
         lbl = QtWidgets.QLabel("- " + _("Consolidation mode") + " -")
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         consolidate_page_layout.addWidget(lbl)
 
         # Fan-out
@@ -1538,7 +1552,7 @@ class WalletSettingsDialog(WindowModalDialog):
         self.confkey2idx["fan-out"] = stacked_layout.addWidget(fanout_page_w)
         mode_cb.addItem(_("Fan-out"))
         lbl = QtWidgets.QLabel("- " + _("Fan-out mode") + " -")
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         fanout_page_layout.addWidget(lbl)
 
         # Custom
@@ -1604,14 +1618,17 @@ class WalletSettingsDialog(WindowModalDialog):
         )
         self.l_warn_selection.setToolTip(low_warn_tooltip)
         self.l_warn_selection.linkActivated.connect(self._show_low_warn_help)
-        self.l_warn_selection.setAlignment(Qt.AlignJustify | Qt.AlignVCenter)
+        self.l_warn_selection.setAlignment(
+            Qt.AlignmentFlag.AlignJustify | Qt.AlignmentFlag.AlignVCenter
+        )
         qs = QtWidgets.QSizePolicy(
-            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Preferred,
         )
         qs.setRetainSizeWhenHidden(True)
         self.l_warn_selection.setSizePolicy(qs)
         slayout.addWidget(self.l_warn_selection)
-        slayout.setAlignment(self.l_warn_selection, Qt.AlignCenter)
+        slayout.setAlignment(self.l_warn_selection, Qt.AlignmentFlag.AlignCenter)
 
         box = QtWidgets.QGroupBox(_("Auto-Fusion Limits"))
         custom_page_layout.addWidget(box)
@@ -1949,7 +1966,6 @@ class ServerWidget(ServerFusionsBaseMixin, QtWidgets.QWidget):
 
         self.serverbox = QtWidgets.QGroupBox(_("Server"))
         main_layout.addWidget(self.serverbox)
-        # self.serverbox.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         slayout = QtWidgets.QVBoxLayout(self.serverbox)
 

@@ -1,3 +1,7 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 const DEFAULT_ROWS_PER_PAGE = 100;
 
 var tzOffset;
@@ -32,6 +36,8 @@ function formatByteSize(size) {
         );
     }
 }
+
+const renderSize = size => formatByteSize(size);
 
 function renderInteger(number) {
     var fmt = Intl.NumberFormat('en-EN').format(number);
@@ -117,6 +123,13 @@ function renderTxHash(txHash) {
     return txHash.substr(0, 10) + '&hellip;' + txHash.substr(60, 4);
 }
 
+const renderFinal = isFinal => {
+    if (isFinal) {
+        return '<img class="final-icon" src="/assets/checkmark.svg" alt="Finalized by Avalanche" />';
+    }
+    return 'No';
+};
+
 var regHex32 = /^[0-9a-fA-F]{64}$/;
 function searchBarChange() {
     if (event.key == 'Enter') {
@@ -139,12 +152,8 @@ function toggleTransactionScriptData() {
     });
 }
 
-function minifyHash(hash) {
-    return `${hash.slice(0, 1)}...${hash.slice(39, 64)}`;
-}
-
-function minifyBlockID(hash) {
-    return `${hash.slice(0, 6)}...${hash.slice(54, 64)}`;
+function minifyHash(hash, lead, tail) {
+    return `${hash.slice(0, lead)}...${hash.slice(64 - tail, 64)}`;
 }
 
 const generateRange = (start, end) =>

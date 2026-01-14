@@ -41,16 +41,14 @@ echo 'Building Extension...'
 export INLINE_RUNTIME_CHUNK=false
 export GENERATE_SOURCEMAP=false
 
-npm run build
+pnpm run build
 
 # Copy extension build files to extension/ folder
 cp -r build/* extension/dist
 
-# Extension requires some files to have a name and location referenced in the manifest
-# Still need to browserify to pull in imported libraries
-browserify extension/src/contentscript.js -o extension/dist/contentscript.js
-browserify extension/src/service_worker.js -o extension/dist/service_worker.js
-browserify extension/src/script.js -o extension/dist/script.js
+# Build TypeScript files
+echo 'Building TypeScript files...'
+pnpm run extension:tsc
 
 # Delete extension build from build/ folder (reserved for web app builds)
 rm -Rf build

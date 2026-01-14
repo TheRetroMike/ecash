@@ -9,7 +9,6 @@ add_dependencies(check check-bitcoin-qt)
 add_test_to_suite(bitcoin-qt test_bitcoin-qt
 	apptests.cpp
 	bitcoinaddressvalidatortests.cpp
-	compattests.cpp
 	guiutiltests.cpp
 	optiontests.cpp
 	rpcnestedtests.cpp
@@ -21,7 +20,7 @@ add_test_to_suite(bitcoin-qt test_bitcoin-qt
 target_link_libraries(test_bitcoin-qt testutil bitcoin-qt-base Qt5::Test)
 
 # Wallet
-if(BUILD_BITCOIN_WALLET)
+if(BUILD_WALLET)
 	# Add wallet functionality to test_bitcoin-qt
 	target_sources(test_bitcoin-qt
 		PRIVATE

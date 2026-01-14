@@ -24,7 +24,6 @@ QUORUM_NODE_COUNT = 16
 
 
 class LongpollThread(threading.Thread):
-
     def __init__(self, node, longpollid):
         threading.Thread.__init__(self)
         self.longpollid = longpollid
@@ -52,15 +51,17 @@ class AbcMiningHeartbeatTest(BitcoinTestFramework):
                 "-avacooldown=0",
                 "-avaminquorumstake=0",
                 "-avaminavaproofsnodecount=0",
+                "-persistavapeers=0",
             ],
         ]
 
-    def run_test(self):
+    def check_rtt(self):
         node = self.nodes[0]
+
+        now = int(time.time())
 
         node.add_p2p_connection(P2PInterface())
 
-        now = int(time.time())
         node.setmocktime(now)
 
         self.log.info("Check the block template is updated with the relevant RTT info")
@@ -78,14 +79,16 @@ class AbcMiningHeartbeatTest(BitcoinTestFramework):
         self.generate(node, 20)
 
         node.bumpmocktime(10)
-        check_gbt_rtt(node.getblocktemplate(), [now] * 4)
+        check_gbt_rtt(node.getblocktemplate(), [now] * 5)
         node.bumpmocktime(10)
-        check_gbt_rtt(node.getblocktemplate(), [now] * 4)
+        check_gbt_rtt(node.getblocktemplate(), [now] * 5)
 
         self.generate(node, 1)
         now += 20
         gbt = node.getblocktemplate()
-        check_gbt_rtt(gbt, [now - 20] * 4)
+        # The last block (indice 1) is at now, the previous ones (indices 2, 5,
+        # 11, 17) are at now - 20
+        check_gbt_rtt(gbt, [now] + [now - 20] * 4)
 
         self.log.info(
             "Check the node tries to mine blocks with the real time difficulty"
@@ -151,6 +154,8 @@ class AbcMiningHeartbeatTest(BitcoinTestFramework):
 
         self.log.info("Check the RTT is updated when longpoll returns")
 
+        node.bumpmocktime(200)
+
         now = node.gettime()["adjusted"]
 
         wallet = MiniWallet(node)
@@ -160,14 +165,16 @@ class AbcMiningHeartbeatTest(BitcoinTestFramework):
         # associated with the peer, so there is one block mined for each peer in
         # the quorum.
         prev_header_times = [
-            # Block N-2
+            # Block N-1
             now,
-            # Block N-5: 100s + 600s + 100s from the test + 600s from the quorum
-            now - 1400,
-            # Block N-11: 100s + 600s + 100s from the test + 6 * 600s from the quorum
-            now - 5000,
-            # Block N-17: 100s + 600s + 100s from the test + 12 * 600s from the quorum
-            now - 8600,
+            # Block N-2: 200s
+            now - 200,
+            # Block N-5: 200s + 100s + 600s + 100s from the test + 600s from the quorum
+            now - 1600,
+            # Block N-11: 200s + 100s + 600s + 100s from the test + 6 * 600s from the quorum
+            now - 5200,
+            # Block N-17: 200s + 100s + 600s + 100s from the test + 12 * 600s from the quorum
+            now - 8800,
         ]
 
         gbt = node.getblocktemplate()
@@ -192,6 +199,9 @@ class AbcMiningHeartbeatTest(BitcoinTestFramework):
             uint256_from_compact(int(thr.longpoll_template["rtt"]["nexttarget"], 16)),
             uint256_from_compact(int(gbt["rtt"]["nexttarget"], 16)),
         )
+
+    def run_test(self):
+        self.check_rtt()
 
 
 if __name__ == "__main__":

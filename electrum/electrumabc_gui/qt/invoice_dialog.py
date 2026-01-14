@@ -29,7 +29,7 @@ from http.client import InvalidURL
 from typing import TYPE_CHECKING, List, Optional, Union
 from urllib.error import URLError
 
-from PyQt5 import QtCore, QtWidgets
+from qtpy import QtCore, QtWidgets
 
 from electrumabc.address import Address, AddressError
 from electrumabc.i18n import _
@@ -83,7 +83,7 @@ class InvoiceDialog(QtWidgets.QDialog):
                 " unicode characters."
             )
         )
-        layout.addWidget(self.id_edit, alignment=QtCore.Qt.AlignLeft)
+        layout.addWidget(self.id_edit, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
         layout.addSpacing(10)
 
         layout.addWidget(QtWidgets.QLabel(_("Label")))
@@ -220,7 +220,7 @@ class InvoiceDialog(QtWidgets.QDialog):
 
 
 class AmountCurrencyEdit(QtWidgets.QWidget):
-    currencyChanged = QtCore.pyqtSignal(str)
+    currencyChanged = QtCore.Signal(str)
 
     def __init__(
         self, parent: Optional[QtWidgets.QWidget] = None, fx: Optional[FxThread] = None
@@ -274,11 +274,12 @@ class AmountCurrencyEdit(QtWidgets.QWidget):
     def _on_amount_changed(self, value: float):
         if self.fx is None or self.get_currency().lower() != "xec":
             return
+        exchange_rate = self.fx.exchange_rate()
+        if exchange_rate is None:
+            return
 
         fiat_cur = self.fx.get_currency()
-        fiat_amount = self.fx.ccy_amount_str(
-            Decimal(value) * self.fx.exchange_rate(), False
-        )
+        fiat_amount = self.fx.ccy_amount_str(Decimal(value) * exchange_rate, False)
         self.fiat_amount_label.setText(f"{fiat_amount} {fiat_cur}")
 
 
@@ -378,7 +379,9 @@ class ExchangeRateAPIWidget(QtWidgets.QWidget):
         layout.addWidget(self.keys_edit)
 
         self.test_api_button = QtWidgets.QPushButton(_("Test API"))
-        layout.addWidget(self.test_api_button, alignment=QtCore.Qt.AlignLeft)
+        layout.addWidget(
+            self.test_api_button, alignment=QtCore.Qt.AlignmentFlag.AlignLeft
+        )
 
         # signals
         self.request_url_edit.currentIndexChanged.connect(self._on_api_url_selected)

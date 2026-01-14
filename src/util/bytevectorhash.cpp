@@ -7,8 +7,8 @@
 #include <util/bytevectorhash.h>
 
 ByteVectorHash::ByteVectorHash()
-    : m_k0(GetRand<uint64_t>()), m_k1(GetRand<uint64_t>()) {}
+    : m_k0(FastRandomContext().rand64()), m_k1(FastRandomContext().rand64()) {}
 
 size_t ByteVectorHash::operator()(const std::vector<uint8_t> &input) const {
-    return CSipHasher(m_k0, m_k1).Write(input.data(), input.size()).Finalize();
+    return CSipHasher(m_k0, m_k1).Write(input).Finalize();
 }

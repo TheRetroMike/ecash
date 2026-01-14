@@ -13,6 +13,7 @@ this one can be extended, to cover the checks done for bigger blocks
 import random
 import time
 from collections import deque
+from typing import Optional
 
 from test_framework.blocktools import (
     create_block,
@@ -38,7 +39,7 @@ from test_framework.util import assert_equal
 
 
 class PreviousSpendableOutput:
-    def __init__(self, tx=CTransaction(), n=-1):
+    def __init__(self, tx: CTransaction, n=-1):
         self.tx = tx
         # the output we're spending
         self.n = n
@@ -58,15 +59,12 @@ class TestP2PConn(P2PInterface):
 
     def on_cmpctblock(self, message):
         self.last_cmpctblock = message
-        self.last_cmpctblock.header_and_shortids.header.calc_sha256()
 
     def on_getheaders(self, message):
         self.last_getheaders = message
 
     def on_headers(self, message):
         self.last_headers = message
-        for x in self.last_headers.headers:
-            x.calc_sha256()
 
     def clear_block_data(self):
         with p2p_lock:
@@ -94,17 +92,22 @@ class FullBlockTest(BitcoinTestFramework):
         self.rpc_timeout = 180
 
     def add_transactions_to_block(self, block, tx_list):
-        [tx.rehash() for tx in tx_list]
         block.vtx.extend(tx_list)
 
     def next_block(
-        self, number, spend=None, script=CScript([OP_TRUE]), block_size=0, extra_txns=0
+        self,
+        number,
+        spend=None,
+        script: Optional[CScript] = None,
+        block_size=0,
+        extra_txns=0,
     ):
+        script = script or CScript([OP_TRUE])
         if self.tip is None:
             base_block_hash = self.genesis_hash
             block_time = int(time.time()) + 1
         else:
-            base_block_hash = self.tip.sha256
+            base_block_hash = self.tip.hash_int
             block_time = self.tip.nTime + 1
         # First create the coinbase
         height = self.block_heights[base_block_hash] + 1
@@ -116,7 +119,6 @@ class FullBlockTest(BitcoinTestFramework):
         else:
             # all but one satoshi to fees
             coinbase.vout[0].nValue += spend.tx.vout[spend.n].nValue - 1
-            coinbase.rehash()
             block = create_block(base_block_hash, coinbase, block_time)
 
             # Make sure we have plenty enough to spend going forward.
@@ -127,7 +129,7 @@ class FullBlockTest(BitcoinTestFramework):
                 tx = CTransaction()
                 # Spend from one of the spendable outputs
                 spend = spendable_outputs.popleft()
-                tx.vin.append(CTxIn(COutPoint(spend.tx.sha256, spend.n)))
+                tx.vin.append(CTxIn(COutPoint(spend.tx.txid_int, spend.n)))
                 # Add spendable outputs
                 for i in range(4):
                     tx.vout.append(CTxOut(0, CScript([OP_TRUE])))
@@ -136,11 +138,6 @@ class FullBlockTest(BitcoinTestFramework):
                 return tx
 
             tx = get_base_transaction()
-
-            # Make it the same format as transaction added for padding and save the size.
-            # It's missing the padding output, so we add a constant to account
-            # for it.
-            tx.rehash()
 
             # If a specific script is required, add it.
             if script is not None:
@@ -202,7 +199,7 @@ class FullBlockTest(BitcoinTestFramework):
         # Do PoW, which is cheap on regnet
         block.solve()
         self.tip = block
-        self.block_heights[block.sha256] = height
+        self.block_heights[block.hash_int] = height
         assert number not in self.blocks
         self.blocks[number] = block
         return block
@@ -291,8 +288,7 @@ class FullBlockTest(BitcoinTestFramework):
 
         # Was it our block ?
         cmpctblk_header = test_p2p.last_cmpctblock.header_and_shortids.header
-        cmpctblk_header.calc_sha256()
-        assert cmpctblk_header.sha256 == b1.sha256
+        assert cmpctblk_header.hash_int == b1.hash_int
 
         # Send a large block with numerous transactions.
         test_p2p.clear_block_data()
@@ -309,8 +305,7 @@ class FullBlockTest(BitcoinTestFramework):
 
         # Was it our block ?
         cmpctblk_header = test_p2p.last_cmpctblock.header_and_shortids.header
-        cmpctblk_header.calc_sha256()
-        assert cmpctblk_header.sha256 == b2.sha256
+        assert cmpctblk_header.hash_int == b2.hash_int
 
         # In order to avoid having to resend a ton of transactions, we invalidate
         # b2, which will send all its transactions in the mempool. Note that this
@@ -322,7 +317,6 @@ class FullBlockTest(BitcoinTestFramework):
         # Let's modify b2 and use it so that we can reuse the mempool.
         tx = b2.vtx[0]
         tx.vout.append(CTxOut(0, CScript([random.randint(0, 256), OP_RETURN])))
-        tx.rehash()
         b2.vtx[0] = tx
         b2.hashMerkleRoot = b2.calc_merkle_root()
         b2.solve()
@@ -333,7 +327,7 @@ class FullBlockTest(BitcoinTestFramework):
         test_p2p.send_and_ping(msg_cmpctblock(comp_block.to_p2p()))
 
         # Check that compact block is received properly
-        assert int(node.getbestblockhash(), 16) == b2.sha256
+        assert int(node.getbestblockhash(), 16) == b2.hash_int
 
 
 if __name__ == "__main__":

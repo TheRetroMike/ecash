@@ -4,11 +4,7 @@
 
 import {
     getMaxDecimalizedAlpQty,
-    getAlpGenesisTargetOutputs,
-    getAlpSendTargetOutputs,
     getAlpBurnTargetOutputs,
-    getAlpMintTargetOutputs,
-    getAlpAgoraListTargetOutputs,
 } from 'token-protocols/alp';
 import vectors from '../fixtures/vectors';
 
@@ -22,72 +18,6 @@ describe('ALP token methods', () => {
             });
         });
     });
-    describe('We can generate expected ALP genesis target outputs with and without a mint baton', () => {
-        const { expectedReturns, expectedErrors } =
-            vectors.getAlpGenesisTargetOutputs;
-
-        // Successfully created targetOutputs
-        expectedReturns.forEach(expectedReturn => {
-            const {
-                description,
-                genesisInfo,
-                initialQuantity,
-                includeMintBaton,
-                targetOutputs,
-            } = expectedReturn;
-            it(`getAlpGenesisTargetOutputs: ${description}`, () => {
-                expect(
-                    getAlpGenesisTargetOutputs(
-                        genesisInfo,
-                        initialQuantity,
-                        includeMintBaton,
-                    ),
-                ).toStrictEqual(targetOutputs);
-            });
-        });
-
-        // Error cases
-        expectedErrors.forEach(expectedError => {
-            const {
-                description,
-                genesisInfo,
-                initialQuantity,
-                includeMintBaton,
-                errorMsg,
-            } = expectedError;
-            it(`getAlpGenesisTargetOutputs throws error for: ${description}`, () => {
-                expect(() =>
-                    getAlpGenesisTargetOutputs(
-                        genesisInfo,
-                        initialQuantity,
-                        includeMintBaton,
-                    ),
-                ).toThrow(errorMsg);
-            });
-        });
-    });
-    describe('We can build target outputs for a 1-recipient ALP send tx with or without change', () => {
-        const { expectedReturns } = vectors.getAlpSendTargetOutputs;
-        expectedReturns.forEach(expectedReturn => {
-            const {
-                description,
-                tokenInputInfo,
-                destinationAddress,
-                firma,
-                returned,
-            } = expectedReturn;
-
-            it(`getAlpSendTargetOutputs: ${description}`, () => {
-                expect(
-                    getAlpSendTargetOutputs(
-                        tokenInputInfo,
-                        destinationAddress,
-                        firma,
-                    ),
-                ).toStrictEqual(returned);
-            });
-        });
-    });
     describe('We can build target outputs for an ALP burn tx with or without token change', () => {
         const { expectedReturns } = vectors.getAlpBurnTargetOutputs;
         expectedReturns.forEach(expectedReturn => {
@@ -96,29 +26,6 @@ describe('ALP token methods', () => {
                 expect(getAlpBurnTargetOutputs(tokenInputInfo)).toStrictEqual(
                     returned,
                 );
-            });
-        });
-    });
-    describe('We can build target outputs for an ALP mint tx', () => {
-        const { expectedReturns } = vectors.getAlpMintTargetOutputs;
-        expectedReturns.forEach(expectedReturn => {
-            const { description, tokenId, mintQty, returned } = expectedReturn;
-            it(`getAlpMintTargetOutputs: ${description}`, () => {
-                expect(getAlpMintTargetOutputs(tokenId, mintQty)).toStrictEqual(
-                    returned,
-                );
-            });
-        });
-    });
-    describe('We can build target outputs for an ALP Agora Listing tx with or without change', () => {
-        const { expectedReturns } = vectors.getAlpAgoraListTargetOutputs;
-        expectedReturns.forEach(expectedReturn => {
-            const { description, tokenInputInfo, agoraPartial, returned } =
-                expectedReturn;
-            it(`getAlpAgoraListTargetOutputs: ${description}`, () => {
-                expect(
-                    getAlpAgoraListTargetOutputs(tokenInputInfo, agoraPartial),
-                ).toStrictEqual(returned);
             });
         });
     });

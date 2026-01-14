@@ -18,9 +18,10 @@
 
 #include <unordered_map>
 
-CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlock &block)
-    : nonce(GetRand<uint64_t>()), shorttxids(block.vtx.size() - 1),
-      prefilledtxn(1), header(block) {
+CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlock &block,
+                                                     const uint64_t nonce)
+    : nonce(nonce), shorttxids(block.vtx.size() - 1), prefilledtxn(1),
+      header(block) {
     FillShortTxIDSelector();
     // TODO: Use our mempool prior to block acceptance to predictively fill more
     // than just the coinbase.
@@ -32,7 +33,7 @@ CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlock &block)
 }
 
 void CBlockHeaderAndShortTxIDs::FillShortTxIDSelector() const {
-    CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream stream{};
     stream << header << nonce;
     CSHA256 hasher;
     hasher.Write((uint8_t *)&(*stream.begin()), stream.end() - stream.begin());
@@ -50,7 +51,7 @@ uint64_t CBlockHeaderAndShortTxIDs::GetShortID(const TxHash &txhash) const {
 
 ReadStatus PartiallyDownloadedBlock::InitData(
     const CBlockHeaderAndShortTxIDs &cmpctblock,
-    const std::vector<std::pair<TxHash, CTransactionRef>> &extra_txns) {
+    const std::vector<CTransactionRef> &extra_txns) {
     if (cmpctblock.header.IsNull() ||
         (cmpctblock.shorttxids.empty() && cmpctblock.prefilledtxn.empty())) {
         return READ_STATUS_INVALID;
@@ -115,9 +116,12 @@ ReadStatus PartiallyDownloadedBlock::InitData(
     }
 
     for (auto &extra_txn : extra_txns) {
-        uint64_t shortid = cmpctblock.GetShortID(extra_txn.first);
+        if (extra_txn == nullptr) {
+            continue;
+        }
+        uint64_t shortid = cmpctblock.GetShortID(extra_txn->GetHash());
 
-        int count = shortidProcessor->matchKnownItem(shortid, extra_txn.second);
+        int count = shortidProcessor->matchKnownItem(shortid, extra_txn);
         mempool_count += count;
         extra_count += count;
 
@@ -130,7 +134,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(
              "Initialized PartiallyDownloadedBlock for block %s using a "
              "cmpctblock of size %lu\n",
              cmpctblock.header.GetHash().ToString(),
-             GetSerializeSize(cmpctblock, PROTOCOL_VERSION));
+             GetSerializeSize(cmpctblock));
 
     return READ_STATUS_OK;
 }

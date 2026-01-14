@@ -70,7 +70,7 @@ class ChronikPauseTest(BitcoinTestFramework):
 
         self.log.info("Tx not yet picked up by chronik")
         time.sleep(0.1)
-        chronik.tx(tx.hash).err(404)
+        chronik.tx(tx.txid_hex).err(404)
 
         self.log.info("Resume indexing and sync Chronik")
         chronik.resume().ok()
@@ -78,7 +78,7 @@ class ChronikPauseTest(BitcoinTestFramework):
         node.syncwithvalidationinterfacequeue()
 
         self.log.info("Chronik has now indexed the tx")
-        chronik.tx(tx.hash).ok()
+        chronik.tx(tx.txid_hex).ok()
 
         self.log.info("Pause Chronik indexing for block processing")
         chronik.pause().ok()
@@ -86,7 +86,6 @@ class ChronikPauseTest(BitcoinTestFramework):
         self.log.info("Create block with conflicting tx")
         conflict_tx = CTransaction(tx)
         conflict_tx.nVersion = 2
-        conflict_tx.rehash()
         blockA = create_block(
             int(tip, 16), create_coinbase(102, b"\x03" * 33), 1300000500
         )
@@ -98,20 +97,20 @@ class ChronikPauseTest(BitcoinTestFramework):
 
         self.log.info("Block not indexed yet")
         time.sleep(0.1)
-        chronik.block(blockA.hash).err(404)
+        chronik.block(blockA.hash_hex).err(404)
 
         self.log.info("Chronik still believes the old tx exists")
-        chronik.tx(tx.hash).ok()
-        chronik.tx(conflict_tx.hash).err(404)
+        chronik.tx(tx.txid_hex).ok()
+        chronik.tx(conflict_tx.txid_hex).err(404)
 
         self.log.info("Resume indexing and sync Chronik")
         chronik.resume().ok()
         node.syncwithvalidationinterfacequeue()
 
         self.log.info("Block now indexed and tx conflict resolved")
-        chronik.block(blockA.hash).ok()
-        chronik.tx(tx.hash).err(404)
-        chronik.tx(conflict_tx.hash).ok()
+        chronik.block(blockA.hash_hex).ok()
+        chronik.tx(tx.txid_hex).err(404)
+        chronik.tx(conflict_tx.txid_hex).ok()
 
         self.log.info("Pause Chronik for reorg")
         chronik.pause().ok()
@@ -123,26 +122,26 @@ class ChronikPauseTest(BitcoinTestFramework):
         blockB1.solve()
 
         blockB2 = create_block(
-            blockB1.sha256, create_coinbase(103, b"\x03" * 33), 1300000500
+            blockB1.hash_int, create_coinbase(103, b"\x03" * 33), 1300000500
         )
         blockB2.solve()
 
         peer.send_blocks_and_test([blockB1, blockB2], node)
 
         self.log.info("Reorg returns tx to mempool")
-        assert (
-            conflict_tx.hash in node.getrawmempool()
-        ), f"{conflict_tx.hash} not found in mempool"
+        assert conflict_tx.txid_hex in node.getrawmempool(), (
+            f"{conflict_tx.txid_hex} not found in mempool"
+        )
 
         self.log.info("Chronik still thinks blockA exists")
         time.sleep(0.1)
-        chronik.block(blockA.hash).ok()
-        chronik.block(blockB1.hash).err(404)
-        chronik.block(blockB2.hash).err(404)
+        chronik.block(blockA.hash_hex).ok()
+        chronik.block(blockB1.hash_hex).err(404)
+        chronik.block(blockB2.hash_hex).err(404)
 
         self.log.info("Add block that mines the tx")
         blockB3 = create_block(
-            blockB2.sha256, create_coinbase(104, b"\x03" * 33), 1300000500
+            blockB2.hash_int, create_coinbase(104, b"\x03" * 33), 1300000500
         )
         blockB3.vtx += [conflict_tx]
         make_conform_to_ctor(blockB3)
@@ -155,7 +154,7 @@ class ChronikPauseTest(BitcoinTestFramework):
         node.syncwithvalidationinterfacequeue()
 
         # Check if spent coins are indexed correctly
-        tx_proto = chronik.tx(conflict_tx.hash).ok()
+        tx_proto = chronik.tx(conflict_tx.txid_hex).ok()
         assert_equal(tx_proto.inputs[0].output_script, bytes(P2SH_OP_TRUE))
         assert_equal(tx_proto.inputs[0].sats, coinvalue)
 

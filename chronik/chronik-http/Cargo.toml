@@ -28,6 +28,9 @@ chronik-util = { path = "../chronik-util" }
 # Allow traits to use async functions
 async-trait = "0.1"
 
+# Async websocket library
+async-tungstenite = "0.29.1"
+
 # HTTP webapps
 axum = { version = "0.7", features = ["ws"] }
 
@@ -53,7 +56,7 @@ hyper = "1.1"
 itertools = "0.13.0"
 
 # JSON RPC network library
-karyon_jsonrpc = { version = "0.3.2", default-features = false, features = ["tokio", "tcp", "tls"] }
+karyon_jsonrpc = { version = "0.6.1", default-features = false, features = ["tokio", "tcp", "tls", "ws"] }
 
 # Protobuf en-/decoding
 prost = "0.11"
@@ -63,6 +66,9 @@ rustls = "0.23.19"
 
 # JSON en-/decoding
 serde_json = "1.0.133"
+
+# Implementation of SHA-256 etc. cryptographic hash functions
+sha2 = "0.10"
 
 # Derive error enums
 thiserror = "2.0.3"
@@ -75,6 +81,9 @@ tower-service = "0.3"
 
 # Semantic version string parser
 versions = "6.2"
+
+# Root certificates for use with rustls
+webpki-roots = "1.0.1"
 
 # Async runtime
 [dependencies.tokio]

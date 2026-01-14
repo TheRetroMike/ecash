@@ -94,12 +94,12 @@ class BIP68_112_113Test(BitcoinTestFramework):
         self.noban_tx_relay = True
 
     def create_self_transfer_from_utxo(self, input_tx):
-        utxo = self.miniwallet.get_utxo(txid=input_tx.rehash(), mark_as_spent=False)
+        utxo = self.miniwallet.get_utxo(txid=input_tx.txid_hex, mark_as_spent=False)
         tx = self.miniwallet.create_self_transfer(utxo_to_spend=utxo)["tx"]
         return tx
 
     def spend_tx(self, prev_tx):
-        inputs = [{"txid": prev_tx.hash, "vout": 0}]
+        inputs = [{"txid": prev_tx.txid_hex, "vout": 0}]
         outputs = {ADDRESS_ECREG_UNSPENDABLE: (prev_tx.vout[0].nValue - 1000) / XEC}
         rawtx = self.nodes[0].createrawtransaction(inputs, outputs)
         spendtx = FromHex(CTransaction(), rawtx)
@@ -167,7 +167,7 @@ class BIP68_112_113Test(BitcoinTestFramework):
             block = self.create_test_block([])
             test_blocks.append(block)
             self.last_block_time += 600
-            self.tip = block.sha256
+            self.tip = block.hash_int
             self.tipheight += 1
         return test_blocks
 
@@ -191,7 +191,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         block.vtx.extend([self.spend_tx(tx) for tx in txs])
         make_conform_to_ctor(block)
         block.hashMerkleRoot = block.calc_merkle_root()
-        block.rehash()
         block.solve()
         return block
 
@@ -345,7 +344,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         # add BIP113 tx and -1 CSV tx
         # = MTP of prior block (not <) but < time put on current block
         bip113tx_v1.nLockTime = self.last_block_time - 600 * 5
-        bip113tx_v1.rehash()
         success_txs.append(bip113tx_v1)
         success_txs.append(bip112tx_special_v1)
         success_txs.append(self.spend_tx(bip112tx_special_v1))
@@ -379,7 +377,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         # add BIP113 tx and -1 CSV tx
         # = MTP of prior block (not <) but < time put on current block
         bip113tx_v2.nLockTime = self.last_block_time - 600 * 5
-        bip113tx_v2.rehash()
         success_txs.append(bip113tx_v2)
         success_txs.append(bip112tx_special_v2)
         success_txs.append(self.spend_tx(bip112tx_special_v2))
@@ -425,10 +422,8 @@ class BIP68_112_113Test(BitcoinTestFramework):
         # if nLockTime isn't satisfied by new rules
         # = MTP of prior block (not <) but < time put on current block
         bip113tx_v1.nLockTime = self.last_block_time - 600 * 5
-        bip113tx_v1.rehash()
         # = MTP of prior block (not <) but < time put on current block
         bip113tx_v2.nLockTime = self.last_block_time - 600 * 5
-        bip113tx_v2.rehash()
         for bip113tx in [bip113tx_v1, bip113tx_v2]:
             # Test #6, Test #7
             self.send_blocks([self.create_test_block([bip113tx])], success=False)
@@ -436,10 +431,8 @@ class BIP68_112_113Test(BitcoinTestFramework):
 
         # < MTP of prior block
         bip113tx_v1.nLockTime = self.last_block_time - 600 * 5 - 1
-        bip113tx_v1.rehash()
         # < MTP of prior block
         bip113tx_v2.nLockTime = self.last_block_time - 600 * 5 - 1
-        bip113tx_v2.rehash()
         for bip113tx in [bip113tx_v1, bip113tx_v2]:
             # Test #8, Test #9
             self.send_blocks([self.create_test_block([bip113tx])])
@@ -611,7 +604,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         for tx in success_txs:
             raw_tx = self.spend_tx(tx)
             raw_tx.vin[0].nSequence = BASE_RELATIVE_LOCKTIME
-            raw_tx.rehash()
             spend_txs.append(raw_tx)
         # Test #123
         self.send_blocks([self.create_test_block(spend_txs)])
@@ -623,7 +615,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         for tx in [
             tx["tx"] for tx in bip112txs_vary_OP_CSV_v2 if not tx["sdf"] and tx["stf"]
         ]:
-            tx.rehash()
             time_txs.append(tx)
 
         # Test #124
@@ -643,7 +634,6 @@ class BIP68_112_113Test(BitcoinTestFramework):
         for tx in time_txs:
             raw_tx = self.spend_tx(tx)
             raw_tx.vin[0].nSequence = BASE_RELATIVE_LOCKTIME | SEQ_TYPE_FLAG
-            raw_tx.rehash()
             spend_txs.append(raw_tx)
         # Test #126
         self.send_blocks([self.create_test_block(spend_txs)])

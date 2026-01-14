@@ -39,8 +39,8 @@ class CSeederNode {
 
 private:
     std::unique_ptr<Sock> sock;
-    CDataStream vSend;
-    CDataStream vRecv;
+    DataStream vSend{};
+    DataStream vRecv{};
     int nVersion{0};
     std::string strSubVer;
     int nStartingHeight{0};
@@ -54,7 +54,7 @@ private:
 
     std::chrono::seconds GetTimeout() { return you.IsTor() ? 120s : 30s; }
 
-    void BeginMessage(const char *pszCommand);
+    void BeginMessage(const char *msg_type);
 
     void AbortMessage();
 
@@ -67,8 +67,7 @@ private:
     bool ProcessMessages();
 
 protected:
-    PeerMessagingState ProcessMessage(std::string strCommand,
-                                      CDataStream &recv);
+    PeerMessagingState ProcessMessage(std::string strCommand, DataStream &recv);
 
 public:
     CSeederNode(const CService &ip, std::vector<CAddress> *vAddrIn);

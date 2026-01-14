@@ -7,11 +7,11 @@ These are the dependencies currently used by Bitcoin ABC. You can find instructi
 | --- | --- | --- | --- | --- | --- |
 | Berkeley DB | [5.3.28](http://www.oracle.com/technetwork/database/database-technologies/berkeleydb/downloads/index.html) | 5.3 | No |  |  |
 | Boost | [1.81.0](https://www.boost.org/users/download/) | 1.64.0 | No |  |  |
-| Clang |  | [5](https://releases.llvm.org/download.html) (C++17 support) |  |  |  |
+| Clang |  | [10](https://releases.llvm.org/download.html) (C++20 support) |  |  |  |
 | CMake |  | [3.16](https://cmake.org/download/) |  |  |  |
 | fontconfig | [2.12.6](https://www.freedesktop.org/software/fontconfig/release/) |  | No | Yes |  |
 | FreeType | [2.11.0](http://download.savannah.gnu.org/releases/freetype) |  | No |  |  |
-| GCC |  | [8.3](https://gcc.gnu.org/) |  |  |  |
+| GCC |  | [12](https://gcc.gnu.org/) |  |  |  |
 | glibc | | [2.31](https://www.gnu.org/software/libc/) |  |  |  |  |
 | HarfBuzz-NG |  |  |  |  |  |
 | jemalloc | [5.2.1](https://github.com/jemalloc/jemalloc/releases) | 3.6.0 |  |  |  |
@@ -26,7 +26,7 @@ These are the dependencies currently used by Bitcoin ABC. You can find instructi
 | protobuf | [21.12](https://github.com/protocolbuffers/protobuf/releases/tag/v21.12) |  | No |  |  |
 | Python (tests) |  | [3.9](https://www.python.org/downloads) |  |  |  |
 | qrencode | [3.4.4](https://fukuchi.org/works/qrencode) |  | No |  |  |
-| Qt | [5.15.14](https://download.qt.io/official_releases/qt/) | 5.9.5 | No |  |  |
+| Qt | [5.15.16](https://download.qt.io/official_releases/qt/) | 5.9.5 | No |  |  |
 | SQLite | [3.32.1](https://sqlite.org/download.html) | 3.7.17 |  |  |  |
 | systemtap ([tracing](tracing.md))| | | | | |
 | XCB |  |  |  |  | Yes (Linux only) |
@@ -42,10 +42,10 @@ factors that affect the dependency list.
 #### Options passed to `cmake`
 * MiniUPnPc is not needed with  `-DENABLE_UPNP=OFF`.
 * MiniUPnPc is not needed with  `-DENABLE_NATPMP=OFF`.
-* Berkeley DB and SQLite are not needed with `-DBUILD_BITCOIN_WALLET=OFF`.
+* Berkeley DB and SQLite are not needed with `-DBUILD_WALLET=OFF`.
 * OpenSSL is not needed with `-DENABLE_BIP70=OFF`.
 * protobuf is not needed with `-DENABLE_BIP70=OFF`.
-* Qt is not needed with `-DBUILD_BITCOIN_QT=OFF`.
+* Qt is not needed with `-DBUILD_QT=OFF`.
 * qrencode is not needed with `-DENABLE_QRCODE=OFF`.
 * systemtap is not needed with `-DENABLE_TRACING=OFF`.
-* ZeroMQ is not needed with the `-DBUILD_BITCOIN_ZMQ=OFF`.
+* ZeroMQ is not needed with the `-DBUILD_ZMQ=OFF`.

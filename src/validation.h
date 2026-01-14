@@ -31,6 +31,8 @@
 #include <policy/packages.h>
 #include <script/script_error.h>
 #include <script/script_metrics.h>
+#include <script/scriptcache.h>
+#include <script/sigcache.h>
 #include <shutdown.h>
 #include <sync.h>
 #include <txdb.h>
@@ -39,6 +41,7 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/result.h>
+#include <util/time.h>
 #include <util/translation.h>
 
 #include <atomic>
@@ -76,9 +79,11 @@ struct Params;
 namespace avalanche {
 class Processor;
 } // namespace avalanche
+namespace util {
+class SignalInterrupt;
+} // namespace util
 
-#define MIN_TRANSACTION_SIZE                                                   \
-    (::GetSerializeSize(CTransaction(), PROTOCOL_VERSION))
+#define MIN_TRANSACTION_SIZE (::GetSerializeSize(CTransaction{}))
 
 /** Maximum number of dedicated script-checking threads allowed */
 static const int MAX_SCRIPTCHECK_THREADS = 15;
@@ -87,8 +92,6 @@ static const int DEFAULT_SCRIPTCHECK_THREADS = 0;
 
 static const bool DEFAULT_PEERBLOOMFILTERS = true;
 
-/** Default for -stopatheight */
-static const int DEFAULT_STOPATHEIGHT = 0;
 /**
  * Block files containing a block-height within MIN_BLOCKS_TO_KEEP of
  * ActiveChain().Tip() will not be pruned.
@@ -167,8 +170,9 @@ void StopScriptCheckWorkerThreads();
 
 Amount GetBlockSubsidy(int nHeight, const Consensus::Params &consensusParams);
 
-bool AbortNode(BlockValidationState &state, const std::string &strMessage,
-               const bilingual_str &userMessage = bilingual_str{});
+bool FatalError(kernel::Notifications &notifications,
+                BlockValidationState &state, const std::string &strMessage,
+                const bilingual_str &userMessage = {});
 
 /**
  * Guess verification progress (as a fraction between 0.0=genesis and
@@ -419,6 +423,33 @@ public:
 };
 
 /**
+ * Convenience class for initializing and passing the script execution cache
+ * and signature cache.
+ */
+class ValidationCache {
+private:
+    //! Pre-initialized hasher to avoid having to recreate it for every hash
+    //! calculation.
+    CSHA256 m_script_execution_cache_hasher;
+
+public:
+    CuckooCache::cache<ScriptCacheElement, ScriptCacheHasher>
+        m_script_execution_cache;
+    SignatureCache m_signature_cache;
+
+    ValidationCache(size_t script_execution_cache_bytes,
+                    size_t signature_cache_bytes);
+
+    ValidationCache(const ValidationCache &) = delete;
+    ValidationCache &operator=(const ValidationCache &) = delete;
+
+    //! Return a copy of the pre-initialized hasher.
+    CSHA256 ScriptExecutionCacheHasher() const {
+        return m_script_execution_cache_hasher;
+    }
+};
+
+/**
  * Check whether all of this transaction's input scripts succeed.
  *
  * This involves ECDSA signature checks so can be computationally intensive.
@@ -451,7 +482,8 @@ bool CheckInputScripts(const CTransaction &tx, TxValidationState &state,
                        const CCoinsViewCache &view, const uint32_t flags,
                        bool sigCacheStore, bool scriptCacheStore,
                        const PrecomputedTransactionData &txdata,
-                       int &nSigChecksOut, TxSigCheckLimiter &txLimitSigChecks,
+                       ValidationCache &validation_cache, int &nSigChecksOut,
+                       TxSigCheckLimiter &txLimitSigChecks,
                        CheckInputsLimiter *pBlockLimitSigChecks,
                        std::vector<CScriptCheck> *pvChecks)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -463,12 +495,13 @@ static inline bool
 CheckInputScripts(const CTransaction &tx, TxValidationState &state,
                   const CCoinsViewCache &view, const uint32_t flags,
                   bool sigCacheStore, bool scriptCacheStore,
-                  const PrecomputedTransactionData &txdata, int &nSigChecksOut)
+                  const PrecomputedTransactionData &txdata,
+                  ValidationCache &validation_cache, int &nSigChecksOut)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
     TxSigCheckLimiter nSigChecksTxLimiter;
-    return CheckInputScripts(tx, state, view, flags, sigCacheStore,
-                             scriptCacheStore, txdata, nSigChecksOut,
-                             nSigChecksTxLimiter, nullptr, nullptr);
+    return CheckInputScripts(
+        tx, state, view, flags, sigCacheStore, scriptCacheStore, txdata,
+        validation_cache, nSigChecksOut, nSigChecksTxLimiter, nullptr, nullptr);
 }
 
 /**
@@ -482,6 +515,12 @@ void SpendCoins(CCoinsViewCache &view, const CTransaction &tx, CTxUndo &txundo,
  */
 void UpdateCoins(CCoinsViewCache &view, const CTransaction &tx, CTxUndo &txundo,
                  int nHeight);
+
+/**
+ * Get the coins spent by ptx from the coins_view. Assumes coins are present.
+ */
+std::vector<Coin> GetSpentCoins(const CTransactionRef &ptx,
+                                const CCoinsViewCache &coins_view);
 
 /**
  * Calculate LockPoints required to check if transaction will be BIP68 final in
@@ -530,20 +569,22 @@ private:
     unsigned int nIn;
     uint32_t nFlags;
     bool cacheStore;
-    ScriptError error{ScriptError::UNKNOWN};
     ScriptExecutionMetrics metrics;
     PrecomputedTransactionData txdata;
+    SignatureCache *m_signature_cache;
     TxSigCheckLimiter *pTxLimitSigChecks;
     CheckInputsLimiter *pBlockLimitSigChecks;
 
 public:
     CScriptCheck(const CTxOut &outIn, const CTransaction &txToIn,
-                 unsigned int nInIn, uint32_t nFlagsIn, bool cacheIn,
+                 SignatureCache &signature_cache, unsigned int nInIn,
+                 uint32_t nFlagsIn, bool cacheIn,
                  const PrecomputedTransactionData &txdataIn,
                  TxSigCheckLimiter *pTxLimitSigChecksIn = nullptr,
                  CheckInputsLimiter *pBlockLimitSigChecksIn = nullptr)
         : m_tx_out(outIn), ptxTo(&txToIn), nIn(nInIn), nFlags(nFlagsIn),
           cacheStore(cacheIn), txdata(txdataIn),
+          m_signature_cache(&signature_cache),
           pTxLimitSigChecks(pTxLimitSigChecksIn),
           pBlockLimitSigChecks(pBlockLimitSigChecksIn) {}
 
@@ -552,9 +593,7 @@ public:
     CScriptCheck(CScriptCheck &&) = default;
     CScriptCheck &operator=(CScriptCheck &&) = default;
 
-    bool operator()();
-
-    ScriptError GetScriptError() const { return error; }
+    std::optional<std::pair<ScriptError, std::string>> operator()();
 
     ScriptExecutionMetrics GetScriptExecutionMetrics() const { return metrics; }
 };
@@ -575,17 +614,6 @@ static_assert(std::is_nothrow_destructible_v<CScriptCheck>);
 bool CheckBlock(const CBlock &block, BlockValidationState &state,
                 const Consensus::Params &params,
                 BlockValidationOptions validationOptions);
-
-/**
- * This is a variant of ContextualCheckTransaction which computes the contextual
- * check for a transaction based on the chain tip.
- *
- * See consensus/consensus.h for flag definitions.
- */
-bool ContextualCheckTransactionForCurrentBlock(
-    const CBlockIndex &active_chain_tip, const Consensus::Params &params,
-    const CTransaction &tx, TxValidationState &state)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 /**
  * Check a block is completely valid from start to finish (only works on top of
@@ -959,7 +987,7 @@ public:
      */
     bool AvalancheFinalizeBlock(CBlockIndex *pindex,
                                 avalanche::Processor &avalanche)
-        EXCLUSIVE_LOCKS_REQUIRED(!cs_avalancheFinalizedBlockIndex);
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !cs_avalancheFinalizedBlockIndex);
 
     /**
      * Clear avalanche finalization.
@@ -1094,8 +1122,7 @@ private:
     void UpdateTip(const CBlockIndex *pindexNew)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    std::chrono::microseconds m_last_write{0};
-    std::chrono::microseconds m_last_flush{0};
+    NodeClock::time_point m_next_write{NodeClock::time_point::max()};
 
     /**
      * In case of an invalid snapshot, rename the coins leveldb directory so
@@ -1238,7 +1265,8 @@ private:
 public:
     using Options = kernel::ChainstateManagerOpts;
 
-    explicit ChainstateManager(Options options,
+    explicit ChainstateManager(const util::SignalInterrupt &interrupt,
+                               Options options,
                                node::BlockManager::Options blockman_options);
 
     //! Function to restart active indexes; set dynamically to avoid a circular
@@ -1264,7 +1292,8 @@ public:
     }
     kernel::Notifications &GetNotifications() const {
         return m_options.notifications;
-    };
+    }
+    int StopAtHeight() const { return m_options.stop_at_height; }
 
     /**
      * Make various assertions about the state of the block index.
@@ -1289,11 +1318,14 @@ public:
         return ::cs_main;
     }
 
+    const util::SignalInterrupt &m_interrupt;
     const Options m_options;
     std::thread m_thread_load;
     //! A single BlockManager instance is shared across each constructed
     //! chainstate to avoid duplicating block metadata.
     node::BlockManager m_blockman;
+
+    ValidationCache m_validation_cache;
 
     /**
      * Whether initial block download has ended and IsInitialBlockDownload
@@ -1353,11 +1385,11 @@ public:
 
     //! The total number of bytes available for us to use across all in-memory
     //! coins caches. This will be split somehow across chainstates.
-    int64_t m_total_coinstip_cache{0};
+    size_t m_total_coinstip_cache{0};
     //
     //! The total number of bytes available for us to use across all leveldb
     //! coins databases. This will be split somehow across chainstates.
-    int64_t m_total_coinsdb_cache{0};
+    size_t m_total_coinsdb_cache{0};
 
     //! Instantiate a new chainstate.
     //!
@@ -1393,9 +1425,7 @@ public:
     //! If the coins match (expected), then mark the validation chainstate for
     //! deletion and continue using the snapshot chainstate as active.
     //! Otherwise, revert to using the ibd chainstate and shutdown.
-    SnapshotCompletionResult MaybeCompleteSnapshotValidation(
-        std::function<void(bilingual_str)> shutdown_fnc =
-            [](bilingual_str msg) { AbortNode(msg.original, msg); })
+    SnapshotCompletionResult MaybeCompleteSnapshotValidation()
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Returns nullptr if no snapshot has been loaded.
@@ -1413,6 +1443,8 @@ public:
     CBlockIndex *ActiveTip() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) {
         return ActiveChain().Tip();
     }
+
+    const CBlockIndex *GetAvalancheFinalizedTip() const;
 
     //! The state of a background sync (for net processing)
     bool BackgroundSyncInProgress() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) {
@@ -1474,14 +1506,14 @@ public:
      * so the last two arguments are omitted.
      *
      *
-     * @param[in]     fileIn  FILE handle to file containing blocks to read
+     * @param[in]     file_in File containing blocks to read
      * @param[in]     dbp     (optional) Disk block position (only for reindex)
      * @param[in,out] blocks_with_unknown_parent
      *                        (optional) Map of disk positions for blocks with
      *                        unknown parent, key is parent block hash
      *                        (only used for reindex)
      */
-    void LoadExternalBlockFile(FILE *fileIn, FlatFilePos *dbp = nullptr,
+    void LoadExternalBlockFile(AutoFile &file_in, FlatFilePos *dbp = nullptr,
                                std::multimap<BlockHash, FlatFilePos>
                                    *blocks_with_unknown_parent = nullptr,
                                avalanche::Processor *const avalanche = nullptr);

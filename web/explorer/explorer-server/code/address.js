@@ -1,3 +1,7 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 const getAddress = () => window.location.pathname.split('/')[2];
 
 function renderTxHashCoins(row) {
@@ -5,7 +9,7 @@ function renderTxHashCoins(row) {
         '<a href="/tx/' +
         row.txHash +
         '">' +
-        minifyBlockID(row.txHash) +
+        minifyHash(row.txHash, 6, 10) +
         ':' +
         row.outIdx +
         (row.isCoinbase
@@ -248,8 +252,6 @@ const renderBlockHeight = (_value, _type, row) => {
     );
 };
 
-const renderSize = size => formatByteSize(size);
-
 const renderAmountXEC = (_value, _type, row) => {
     if (row.stats.deltaSats < 0) {
         return (
@@ -343,6 +345,12 @@ const datatable = () => {
                 // in the sorted column (and not only the hidden one). See
                 // https://datatables.net/forums/discussion/comment/236616
                 orderData: [0, 1],
+            },
+            {
+                name: 'final',
+                data: 'isFinal',
+                orderable: false,
+                render: renderFinal,
             },
             {
                 name: 'datetime',

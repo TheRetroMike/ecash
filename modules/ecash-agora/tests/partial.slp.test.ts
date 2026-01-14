@@ -23,6 +23,7 @@ import { TestRunner } from 'ecash-lib/dist/test/testRunner.js';
 import { AgoraPartial } from '../src/partial.js';
 import { makeSlpOffer, takeSlpOffer } from './partial-helper-slp.js';
 import { Agora, TakenInfo } from '../src/agora.js';
+import { Wallet } from 'ecash-wallet/src/wallet.js';
 
 use(chaiAsPromised);
 
@@ -53,10 +54,15 @@ describe('AgoraPartial SLP', () => {
     let runner: TestRunner;
     let chronik: ChronikClient;
 
+    async function makeTakerInputs(sats: bigint[]): Promise<void> {
+        await runner.sendToScript(sats, takerScript);
+    }
+
     async function makeBuilderInputs(
         values: bigint[],
     ): Promise<TxBuilderInput[]> {
         const txid = await runner.sendToScript(values, makerScript);
+
         return values.map((sats, outIdx) => ({
             input: {
                 prevOut: {
@@ -472,6 +478,7 @@ describe('AgoraPartial SLP', () => {
         },
     ];
 
+    let cancelTxsMatchCount = 0;
     for (const testCase of TEST_CASES) {
         it(`AgoraPartial SLP ${testCase.offeredAtoms} for ${testCase.info}`, async () => {
             const agora = new Agora(chronik);
@@ -484,11 +491,8 @@ describe('AgoraPartial SLP', () => {
             });
             const askedSats = agoraPartial.askedSats(testCase.acceptedAtoms);
             const requiredSats = askedSats + 2000n;
-            const [fuelInput, takerInput] = await makeBuilderInputs([
-                4000n,
-                requiredSats,
-            ]);
-
+            const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
+            await makeTakerInputs([10_000n, requiredSats]);
             const offer = await makeSlpOffer({
                 chronik,
                 agoraPartial,
@@ -499,7 +503,6 @@ describe('AgoraPartial SLP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: testCase.acceptedAtoms,
                 allowUnspendable: testCase.allowUnspendable,
             });
@@ -586,17 +589,40 @@ describe('AgoraPartial SLP', () => {
                 recipientScript: makerScript,
                 extraInputs: [fuelInput], // dummy input for measuring
             });
-            const cancelTxSer = newOffer
-                .cancelTx({
-                    cancelSk: makerSk,
-                    fuelInputs: await makeBuilderInputs([cancelFeeSats]),
-                    recipientScript: makerScript,
-                })
-                .ser();
-            const cancelTxid = (await chronik.broadcastTx(cancelTxSer)).txid;
-            const cancelTx = await chronik.tx(cancelTxid);
-            expect(cancelTx.outputs[1].token?.atoms).to.equal(leftoverTokens);
-            expect(cancelTx.outputs[1].outputScript).to.equal(makerScriptHex);
+            const cancelTx = newOffer.cancelTx({
+                cancelSk: makerSk,
+                fuelInputs: await makeBuilderInputs([cancelFeeSats]),
+                recipientScript: makerScript,
+            });
+            const cancelTxid = cancelTx.txid();
+
+            // Let's build and broadcast using cancel() instead
+            const cancelWallet = Wallet.fromSk(makerSk, chronik);
+            await cancelWallet.sync();
+            const cancelResult = await newOffer.cancel({
+                wallet: cancelWallet,
+            });
+            const broadcastCancelTxid = cancelResult.broadcasted[0];
+            if (broadcastCancelTxid === cancelTxid) {
+                cancelTxsMatchCount++;
+                console.log(
+                    `${cancelTxsMatchCount} of ${TEST_CASES.length} produce equal txids with cancelTx() and cancel()`,
+                );
+
+                // Between ~5 and ~8 of 46 of these txs are identical from each method
+
+                // On inspection, when cancel() txid does not match,
+                // it is because cancel has selected different fuel inputs
+                // This is expected behavior, these txs still show change
+                // going to the cancel wallet as expected
+            }
+            const cancelChronikTx = await chronik.tx(broadcastCancelTxid);
+            expect(cancelChronikTx.outputs[1].token?.atoms).to.equal(
+                leftoverTokens,
+            );
+            expect(cancelChronikTx.outputs[1].outputScript).to.equal(
+                makerScriptHex,
+            );
 
             // takerIndex is 2 for full accept, 3 for partial accept
             const takerIndex = isFullAccept ? 2 : 3;
@@ -655,10 +681,7 @@ describe('AgoraPartial SLP', () => {
         });
         const askedSats = agoraPartial.askedSats(thisTestCase.acceptedAtoms);
         const requiredSats = askedSats + 2000n;
-        const [fuelInput, takerInput] = await makeBuilderInputs([
-            4000n,
-            requiredSats,
-        ]);
+        const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
 
         const offer = await makeSlpOffer({
             chronik,
@@ -683,7 +706,6 @@ describe('AgoraPartial SLP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: thisTestCase.acceptedAtoms,
                 allowUnspendable: false,
             }),
@@ -713,10 +735,7 @@ describe('AgoraPartial SLP', () => {
         const acceptedAtoms = 500n;
         const askedSats = agoraPartial.askedSats(acceptedAtoms);
         const requiredSats = askedSats + 2000n;
-        const [fuelInput, takerInput] = await makeBuilderInputs([
-            4000n,
-            requiredSats,
-        ]);
+        const [fuelInput] = await makeBuilderInputs([4000n, requiredSats]);
 
         const offer = await makeSlpOffer({
             chronik,
@@ -739,7 +758,6 @@ describe('AgoraPartial SLP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: acceptedAtoms,
                 allowUnspendable: false,
             }),
@@ -752,7 +770,6 @@ describe('AgoraPartial SLP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: acceptedAtoms,
                 allowUnspendable: undefined,
             }),
@@ -765,7 +782,6 @@ describe('AgoraPartial SLP', () => {
                 chronik,
                 takerSk,
                 offer,
-                takerInput,
                 acceptedAtoms: acceptedAtoms,
             }),
             expectedError,

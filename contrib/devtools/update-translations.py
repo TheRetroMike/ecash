@@ -15,6 +15,7 @@ It will do the following automatically:
 TODO:
 - auto-add new translations to the build system according to the translation process
 """
+
 import io
 import os
 import re
@@ -95,9 +96,7 @@ def check_format_specifiers(source, translation, errors, numerus):
         translation_f = split_format_specifiers(find_format_specifiers(translation))
     except IndexError:
         errors.append(
-            "Parse error in translation for '{}': '{}'".format(
-                sanitize_string(source), sanitize_string(translation)
-            )
+            f"Parse error in translation for '{sanitize_string(source)}': '{sanitize_string(translation)}'"
         )
         return False
     else:
@@ -112,9 +111,7 @@ def check_format_specifiers(source, translation, errors, numerus):
                 # it only has one possible value)
                 return True
             errors.append(
-                "Mismatch between '{}' and '{}'".format(
-                    sanitize_string(source), sanitize_string(translation)
-                )
+                f"Mismatch between '{sanitize_string(source)}' and '{sanitize_string(translation)}'"
             )
             return False
     return True

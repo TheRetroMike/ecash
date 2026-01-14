@@ -3,18 +3,18 @@
 from decimal import Decimal
 from typing import Optional, Union
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPainter
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QPainter
 
+from electrumabc.amount import format_satoshis_plain
 from electrumabc.constants import BASE_UNITS_BY_DECIMALS
-from electrumabc.util import format_satoshis_plain
 
 from .util import ColorScheme, char_width_in_lineedit
 
 
 class MyLineEdit(QtWidgets.QLineEdit):
-    frozen = pyqtSignal()
+    frozen = Signal()
 
     def setFrozen(self, b: bool):
         self.setReadOnly(b)
@@ -23,7 +23,7 @@ class MyLineEdit(QtWidgets.QLineEdit):
 
 
 class AmountEdit(MyLineEdit):
-    shortcut = pyqtSignal()
+    shortcut = Signal()
 
     def __init__(
         self,
@@ -71,7 +71,11 @@ class AmountEdit(MyLineEdit):
             textRect.adjust(2, 0, -10, 0)
             painter = QPainter(self)
             painter.setPen(ColorScheme.GRAY.as_color())
-            painter.drawText(textRect, Qt.AlignRight | Qt.AlignVCenter, self.base_unit)
+            painter.drawText(
+                textRect,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                self.base_unit,
+            )
 
     def get_amount(self) -> Optional[Union[int, Decimal]]:
         try:
@@ -88,8 +92,8 @@ class XECAmountEdit(AmountEdit):
     def __init__(self, decimal_point: int, is_int=False, parent=None):
         if decimal_point not in BASE_UNITS_BY_DECIMALS:
             raise Exception("Unknown base unit")
-        self._base_unit: str = BASE_UNITS_BY_DECIMALS[decimal_point]
-        AmountEdit.__init__(self, self._base_unit, is_int, parent)
+        base_unit: str = BASE_UNITS_BY_DECIMALS[decimal_point]
+        AmountEdit.__init__(self, base_unit, is_int, parent)
         self.decimal_point = decimal_point
 
     def get_amount(self) -> Optional[int]:
@@ -108,11 +112,17 @@ class XECAmountEdit(AmountEdit):
         else:
             self.setText(format_satoshis_plain(amount, self.decimal_point))
 
+    def update_unit(self, decimal_point: int):
+        sats = self.get_amount()
+        self.decimal_point = decimal_point
+        self.set_base_unit(BASE_UNITS_BY_DECIMALS[decimal_point])
+        self.setAmount(sats)
+
 
 class XECSatsByteEdit(XECAmountEdit):
     def __init__(self, parent=None):
         XECAmountEdit.__init__(self, decimal_point=2, is_int=False, parent=parent)
-        self._base_unit = "sats/B"
+        self.set_base_unit("sats/B")
 
     def get_amount(self) -> Optional[float]:
         try:

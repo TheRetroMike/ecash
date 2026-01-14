@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 
 use bitcoinsuite_core::{
     block::BlockHash,
-    tx::{OutPoint, Tx},
+    tx::{OutPoint, Tx, TxId},
 };
 use chronik_db::{
-    groups::{LokadIdGroup, ScriptGroup, TokenIdGroup, TokenIdGroupAux},
+    groups::{
+        LokadIdGroup, ScriptGroup, TokenIdGroup, TokenIdGroupAux, TxIdGroup,
+    },
     io::BlockHeight,
     plugins::PluginsGroup,
 };
@@ -19,7 +21,7 @@ use chronik_plugin::data::PluginOutput;
 use chronik_util::log_chronik;
 use tokio::sync::broadcast;
 
-use crate::subs_group::{SubsGroup, TxMsgType};
+use crate::subs_group::{SubsGroup, TxMsg, TxMsgType};
 
 /// Block update message.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,11 +53,14 @@ pub enum BlockMsgType {
 }
 
 const BLOCK_CHANNEL_CAPACITY: usize = 16;
+const TXS_CHANNEL_CAPACITY: usize = 32;
 
 /// Struct for managing subscriptions to e.g. block updates.
 #[derive(Debug)]
 pub struct Subs {
     subs_block: broadcast::Sender<BlockMsg>,
+    subs_txs: broadcast::Sender<TxMsg>,
+    subs_txid: SubsGroup<TxIdGroup>,
     subs_script: SubsGroup<ScriptGroup>,
     subs_token_id: SubsGroup<TokenIdGroup>,
     subs_lokad_id: SubsGroup<LokadIdGroup>,
@@ -67,6 +72,8 @@ impl Subs {
     pub fn new(script_group: ScriptGroup) -> Self {
         Subs {
             subs_block: broadcast::channel(BLOCK_CHANNEL_CAPACITY).0,
+            subs_txs: broadcast::channel(TXS_CHANNEL_CAPACITY).0,
+            subs_txid: SubsGroup::new(TxIdGroup),
             subs_script: SubsGroup::new(script_group),
             subs_token_id: SubsGroup::new(TokenIdGroup),
             subs_lokad_id: SubsGroup::new(LokadIdGroup),
@@ -77,6 +84,16 @@ impl Subs {
     /// Add a subscriber to block messages.
     pub fn sub_to_block_msgs(&self) -> broadcast::Receiver<BlockMsg> {
         self.subs_block.subscribe()
+    }
+
+    /// Add a subscriber to all tx messages.
+    pub fn sub_to_tx_msgs(&self) -> broadcast::Receiver<TxMsg> {
+        self.subs_txs.subscribe()
+    }
+
+    /// Mutable reference to the txid subscribers.
+    pub fn subs_txid_mut(&mut self) -> &mut SubsGroup<TxIdGroup> {
+        &mut self.subs_txid
     }
 
     /// Mutable reference to the script subscribers.
@@ -107,6 +124,8 @@ impl Subs {
         token_id_aux: &TokenIdGroupAux,
         plugin_outputs: &BTreeMap<OutPoint, PluginOutput>,
     ) {
+        self.broadcast_tx_msg(tx.txid(), msg_type);
+        self.subs_txid.handle_tx_event(tx, &(), msg_type);
         self.subs_script.handle_tx_event(tx, &(), msg_type);
         self.subs_token_id
             .handle_tx_event(tx, token_id_aux, msg_type);
@@ -123,7 +142,8 @@ impl Subs {
         token_id_aux: &TokenIdGroupAux,
         plugin_outputs: &BTreeMap<OutPoint, PluginOutput>,
     ) {
-        if self.subs_script.is_empty()
+        if self.subs_txid.is_empty()
+            && self.subs_script.is_empty()
             && self.subs_token_id.is_empty()
             && self.subs_lokad_id.is_empty()
             && self.subs_plugins.is_empty()
@@ -131,7 +151,10 @@ impl Subs {
             // Short-circuit if no subscriptions
             return;
         }
+
         for tx in txs {
+            self.broadcast_tx_msg(tx.txid(), msg_type);
+            self.subs_txid.handle_tx_event(tx, &(), msg_type);
             self.subs_script.handle_tx_event(tx, &(), msg_type);
             self.subs_token_id
                 .handle_tx_event(tx, token_id_aux, msg_type);
@@ -144,6 +167,15 @@ impl Subs {
     pub(crate) fn broadcast_block_msg(&self, msg: BlockMsg) {
         if self.subs_block.receiver_count() > 0 {
             if let Err(err) = self.subs_block.send(msg) {
+                log_chronik!("Unexpected send error: {}\n", err);
+            }
+        }
+    }
+
+    pub(crate) fn broadcast_tx_msg(&self, txid: TxId, msg_type: TxMsgType) {
+        if self.subs_txs.receiver_count() > 0 {
+            let msg = TxMsg { msg_type, txid };
+            if let Err(err) = self.subs_txs.send(msg) {
                 log_chronik!("Unexpected send error: {}\n", err);
             }
         }

@@ -41,10 +41,6 @@ static void RunCheckOnBlock(const GlobalConfig &config, const CBlock &block,
     BOOST_CHECK_EQUAL(state.GetRejectReason(), reason);
 }
 
-static COutPoint InsecureRandOutPoint() {
-    return COutPoint(TxId(InsecureRand256()), 0);
-}
-
 BOOST_AUTO_TEST_CASE(blockfail) {
     SelectParams(ChainType::MAIN);
 
@@ -68,6 +64,10 @@ BOOST_AUTO_TEST_CASE(blockfail) {
     block.vtx[0] = MakeTransactionRef(tx);
     RunCheckOnBlock(config, block);
 
+    auto InsecureRandOutPoint = [this]() -> COutPoint {
+        return COutPoint(TxId(m_rng.rand256()), 0);
+    };
+
     // No coinbase
     tx.vin[0].prevout = InsecureRandOutPoint();
     block.vtx[0] = MakeTransactionRef(tx);
@@ -84,7 +84,7 @@ BOOST_AUTO_TEST_CASE(blockfail) {
     // Oversize block.
     tx = CMutableTransaction(coinbaseTx);
     block.vtx[0] = MakeTransactionRef(tx);
-    auto txSize = ::GetSerializeSize(tx, PROTOCOL_VERSION);
+    auto txSize = ::GetSerializeSize(tx);
     auto maxTxCount = ((DEFAULT_MAX_BLOCK_SIZE - 1) / txSize) - 1;
 
     for (size_t i = 1; i < maxTxCount; i++) {

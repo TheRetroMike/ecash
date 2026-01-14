@@ -6,6 +6,7 @@
 #ifndef BITCOIN_NODE_MINER_H
 #define BITCOIN_NODE_MINER_H
 
+#include <common/args.h>
 #include <consensus/amount.h>
 #include <kernel/mempool_entry.h>
 #include <node/blockfitter.h>
@@ -66,12 +67,26 @@ private:
 
     const bool fPrintPriority;
 
+    // Whether to call TestBlockValidity() at the end of CreateNewBlock().
+    const bool test_block_validity;
+
+    const bool add_finalized_txs;
+
 public:
+    struct Options {
+        bool fPrintPriority{DEFAULT_PRINTPRIORITY};
+        bool test_block_validity{true};
+        bool add_finalized_txs{false};
+    };
+
     BlockAssembler(const Config &config, Chainstate &chainstate,
                    const CTxMemPool *mempool,
                    const avalanche::Processor *avalanche = nullptr);
     BlockAssembler(const node::BlockFitter &fitter, Chainstate &chainstate,
                    const CTxMemPool *mempool,
+                   const avalanche::Processor *avalanche = nullptr);
+    BlockAssembler(const node::BlockFitter &fitter, Chainstate &chainstate,
+                   const CTxMemPool *mempool, const Options &options,
                    const avalanche::Processor *avalanche = nullptr);
 
     /** Construct a new block template with coinbase to scriptPubKeyIn */
@@ -86,6 +101,12 @@ public:
      * Add transactions from the mempool based on individual tx feerate.
      */
     void addTxs(const CTxMemPool &mempool) EXCLUSIVE_LOCKS_REQUIRED(mempool.cs);
+
+    /**
+     * Add the finalized transactions to the block template
+     */
+    void addFinalizedTxs(const CTxMemPool &mempool)
+        EXCLUSIVE_LOCKS_REQUIRED(mempool.cs);
 
     // The constructed block template
     std::unique_ptr<CBlockTemplate> pblocktemplate;
@@ -108,6 +129,9 @@ private:
 
 int64_t UpdateTime(CBlockHeader *pblock, const CChainParams &chainParams,
                    const CBlockIndex *pindexPrev, int64_t adjustedTime);
+/** Apply options from ArgsManager to BlockAssembler options. */
+void ApplyArgsManOptions(const ArgsManager &args,
+                         BlockAssembler::Options &options);
 } // namespace node
 
 #endif // BITCOIN_NODE_MINER_H

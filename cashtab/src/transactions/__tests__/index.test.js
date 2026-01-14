@@ -9,10 +9,7 @@ import {
     getMaxSendAmountSatoshis,
     isFinalizedInput,
 } from 'transactions';
-import {
-    getSlpSendTargetOutputs,
-    getSlpBurnTargetOutputs,
-} from 'token-protocols/slpv1';
+import { getSlpBurnTargetOutputs } from 'token-protocols/slpv1';
 import { getSendTokenInputs } from 'token-protocols';
 import { MockChronikClient } from '../../../../modules/mock-chronik-client';
 import vectors, {
@@ -21,9 +18,9 @@ import vectors, {
     ignoreUnspendableUtxosVectors,
     sendSlp,
 } from '../fixtures/vectors';
-import slpv1Vectors from 'token-protocols/slpv1/fixtures/vectors';
 import { wallet, walletWithTokensInNode } from 'transactions/fixtures/mocks';
-import { Ecc, SLP_FUNGIBLE, Script, fromHex } from 'ecash-lib';
+import { Ecc, SLP_FUNGIBLE, Script, fromHex, slpSend } from 'ecash-lib';
+import appConfig from 'config/app';
 
 describe('Cashtab functions that build and broadcast rawtxs', () => {
     const ecc = new Ecc();
@@ -38,6 +35,7 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                 description,
                 wallet,
                 targetOutputs,
+                requiredInputs,
                 satsPerKb,
                 chaintipBlockheight,
                 txid,
@@ -54,6 +52,7 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         targetOutputs,
                         satsPerKb,
                         chaintipBlockheight,
+                        requiredInputs,
                     ),
                 ).toStrictEqual({ hex, response: { txid } });
             });
@@ -61,8 +60,16 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
 
         // Error cases
         errors.forEach(async error => {
-            const { description, wallet, targetOutputs, satsPerKb, msg, hex } =
-                error;
+            const {
+                description,
+                wallet,
+                targetOutputs,
+                requiredInputs,
+                satsPerKb,
+                chaintipBlockheight,
+                msg,
+                hex,
+            } = error;
 
             it(`sendXec: ${description}`, async () => {
                 const chronik = new MockChronikClient();
@@ -74,7 +81,15 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                 }
 
                 await expect(
-                    sendXec(chronik, ecc, wallet, targetOutputs, satsPerKb),
+                    sendXec(
+                        chronik,
+                        ecc,
+                        wallet,
+                        targetOutputs,
+                        satsPerKb,
+                        chaintipBlockheight,
+                        requiredInputs,
+                    ),
                 ).rejects.toThrow(msg);
             });
         });
@@ -108,7 +123,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         isCoinbase: false,
                         isFinal: false,
                         sats: 1000n,
-                        path: 1899,
                     },
                     {
                         outpoint: {
@@ -119,7 +133,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         isCoinbase: false,
                         isFinal: false,
                         sats: 1001n,
-                        path: 1899,
                     },
                     {
                         outpoint: {
@@ -130,7 +143,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         isCoinbase: false,
                         isFinal: false,
                         sats: 1000n,
-                        path: 1899,
                     },
                 ],
             },
@@ -180,7 +192,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         isCoinbase: false,
                         sats: 1000n,
                         network: 'XEC',
-                        path: 1899,
                     },
                     {
                         outpoint: {
@@ -191,7 +202,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                         isCoinbase: false,
                         sats: 1001n,
                         network: 'XEC',
-                        path: 1899,
                     },
                 ],
             },
@@ -300,12 +310,24 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                 expect(tokenInputInfo.tokenInputs).toStrictEqual(tokenInputs);
                 expect(tokenInputInfo.sendAmounts).toStrictEqual(sendAmounts);
 
-                // Get the targetOutputs
-                const tokenSendTargetOutputs = getSlpSendTargetOutputs(
-                    tokenInputInfo,
-                    destinationAddress,
+                // Construct targetOutputs for SLP send (replacing removed getSlpSendTargetOutputs)
+                const script = slpSend(
+                    tokenId,
                     SLP_FUNGIBLE,
+                    tokenInputInfo.sendAmounts,
                 );
+                const tokenSendTargetOutputs = [
+                    { sats: 0n, script },
+                    {
+                        sats: BigInt(appConfig.dustSats),
+                        script: Script.fromAddress(destinationAddress),
+                    },
+                ];
+                if (tokenInputInfo.sendAmounts.length > 1) {
+                    tokenSendTargetOutputs.push({
+                        sats: BigInt(appConfig.dustSats),
+                    });
+                }
 
                 // SLP v1 SEND
                 expect(
@@ -342,42 +364,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
                     hex: burn.hex,
                     response: { txid: burn.txid },
                 });
-            });
-        });
-    });
-    describe('We can build and broadcast NFT1 parent fan-out txs', () => {
-        const { expectedReturns } = slpv1Vectors.getNftParentFanTxTargetOutputs;
-        const CHAINTIP = 800000;
-        const FEE_RATE_SATS_PER_KB = 1000n;
-
-        // Successfully built and broadcast txs
-        expectedReturns.forEach(async tx => {
-            const { description, fanInputs, returned, rawTx } = tx;
-
-            const { hex, txid } = rawTx;
-            it(`sendXec: ${description}`, async () => {
-                const chronik = new MockChronikClient();
-                chronik.setBroadcastTx(hex, txid);
-                expect(
-                    await sendXec(
-                        chronik,
-                        ecc,
-                        {
-                            ...walletWithTokensInNode,
-                            state: {
-                                ...walletWithTokensInNode.state,
-                                slpUtxos: [
-                                    ...walletWithTokensInNode.state.slpUtxos,
-                                    ...fanInputs,
-                                ],
-                            },
-                        },
-                        returned,
-                        FEE_RATE_SATS_PER_KB,
-                        CHAINTIP,
-                        fanInputs,
-                    ),
-                ).toStrictEqual({ hex, response: { txid } });
             });
         });
     });
@@ -428,7 +414,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
         it('We must adjust for a higher fee if we have more utxos', () => {
             const SATOSHIS_PER_KB = 1000n;
             const MOCK_BASE_XEC_UTXO = {
-                path: 1899,
                 outpoint: {
                     txid: '1111111111111111111111111111111111111111111111111111111111111111',
                 },
@@ -456,7 +441,6 @@ describe('Cashtab functions that build and broadcast rawtxs', () => {
         it('An immature Coinbase utxo will be ignored in the onMax calculation', () => {
             const SATOSHIS_PER_KB = 2000n;
             const MOCK_STAKING_REWARD_UTXO = {
-                path: 1899,
                 outpoint: {
                     txid: '1111111111111111111111111111111111111111111111111111111111111111',
                 },

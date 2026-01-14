@@ -54,10 +54,6 @@ from .caches import ExpiringCache
 from .constants import DEFAULT_TXIN_SEQUENCE
 from .crypto import Hash, hash_160
 from .ecc import ECPrivkey, ECPubkey, sig_string_from_der_sig
-
-#
-# Workalike python implementation of Bitcoin's CDataStream class.
-#
 from .keystore import xpubkey_to_address, xpubkey_to_pubkey
 from .printerror import print_error
 from .serialize import (
@@ -660,6 +656,9 @@ class TxInput:
         return s
 
 
+#
+# Workalike python implementation of Bitcoin's DataStream class.
+#
 class BCDataStream(object):
     def __init__(self):
         self.input = None
@@ -862,7 +861,7 @@ def matches_p2pkh_scriptsig(script_ops: List[Tuple[OpCodes, Optional[bytes]]]) -
 
 
 def matches_p2sh_ecdsa_multisig_scriptsig(
-    script_ops: List[Tuple[OpCodes, Optional[bytes]]]
+    script_ops: List[Tuple[OpCodes, Optional[bytes]]],
 ) -> bool:
     """Return True if the script operations match a P2SH multisig scriptSig:
 
@@ -1824,7 +1823,7 @@ class Transaction:
                                 repr(e),
                             )
 
-                    for txid, l in need_dl_txids.items():
+                    for txid, _prevout_n in need_dl_txids.items():
                         wallet.network.queue_request(
                             "blockchain.transaction.get",
                             [txid],

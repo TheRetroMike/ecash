@@ -7,6 +7,7 @@
 #include <key.h>
 #include <primitives/transaction.h>
 #include <primitives/txid.h>
+#include <pubkey.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/standard.h>
@@ -23,6 +24,8 @@ BOOST_FIXTURE_TEST_SUITE(orphanage_tests, TestingSetup)
 
 class TxOrphanageTest : public TxOrphanage {
 public:
+    TxOrphanageTest(FastRandomContext &rng) : m_rng{rng} {}
+
     inline size_t CountOrphans() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) {
         LOCK(m_mutex);
         return m_pool_txs.size();
@@ -31,16 +34,18 @@ public:
     CTransactionRef RandomOrphan() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) {
         LOCK(m_mutex);
         std::map<TxId, PoolTx>::iterator it;
-        it = m_pool_txs.lower_bound(TxId{InsecureRand256()});
+        it = m_pool_txs.lower_bound(TxId{m_rng.rand256()});
         if (it == m_pool_txs.end()) {
             it = m_pool_txs.begin();
         }
         return it->second.tx;
     }
+
+    FastRandomContext &m_rng;
 };
 
-static void MakeNewKeyWithFastRandomContext(
-    CKey &key, FastRandomContext &rand_ctx = g_insecure_rand_ctx) {
+static void MakeNewKeyWithFastRandomContext(CKey &key,
+                                            FastRandomContext &rand_ctx) {
     std::vector<uint8_t> keydata;
     keydata = rand_ctx.randbytes(32);
     key.Set(keydata.data(), keydata.data() + keydata.size(),
@@ -107,9 +112,17 @@ EqualTxns(const std::set<CTransactionRef> &set_txns,
 }
 
 BOOST_AUTO_TEST_CASE(DoS_mapOrphans) {
-    TxOrphanageTest orphanage;
+    // This test had non-deterministic coverage due to
+    // randomly selected seeds.
+    // This seed is chosen so that all branches of the function
+    // ecdsa_signature_parse_der_lax are executed during this test.
+    // Specifically branches that run only when an ECDSA
+    // signature's R and S values have leading zeros.
+    m_rng.Reseed(uint256{33});
+
+    TxOrphanageTest orphanage{m_rng};
     CKey key;
-    key.MakeNewKey(true);
+    MakeNewKeyWithFastRandomContext(key, m_rng);
     FillableSigningProvider keystore;
     BOOST_CHECK(keystore.AddKey(key));
 
@@ -117,7 +130,7 @@ BOOST_AUTO_TEST_CASE(DoS_mapOrphans) {
     for (int i = 0; i < 50; i++) {
         CMutableTransaction tx;
         tx.vin.resize(1);
-        tx.vin[0].prevout = COutPoint(TxId(InsecureRand256()), 0);
+        tx.vin[0].prevout = COutPoint(TxId(m_rng.rand256()), 0);
         tx.vin[0].scriptSig << OP_1;
         tx.vout.resize(1);
         tx.vout[0].nValue = 1 * CENT;

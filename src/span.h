@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <type_traits>
 
 #ifdef DEBUG
@@ -305,12 +306,18 @@ template <typename V> Span<std::byte> MakeWritableByteSpan(V &&v) noexcept {
     return AsWritableBytes(Span(std::forward<V>(v)));
 }
 
-// Helper functions to safely cast to uint8_t pointers.
+// Helper functions to safely cast basic byte pointers to uint8_t pointers.
 inline uint8_t *UCharCast(char *c) {
     return (uint8_t *)c;
 }
 inline uint8_t *UCharCast(uint8_t *c) {
     return c;
+}
+inline uint8_t *UCharCast(signed char *c) {
+    return reinterpret_cast<uint8_t *>(c);
+}
+inline uint8_t *UCharCast(std::byte *c) {
+    return (uint8_t *)c;
 }
 inline const uint8_t *UCharCast(const char *c) {
     return (uint8_t *)c;
@@ -318,9 +325,15 @@ inline const uint8_t *UCharCast(const char *c) {
 inline const uint8_t *UCharCast(const uint8_t *c) {
     return c;
 }
+inline const uint8_t *UCharCast(const signed char *c) {
+    return reinterpret_cast<const uint8_t *>(c);
+}
 inline const uint8_t *UCharCast(const std::byte *c) {
     return reinterpret_cast<const uint8_t *>(c);
 }
+// Helper concept for the basic byte types.
+template <typename B>
+concept BasicByte = requires { UCharCast(std::span<B>{}.data()); };
 
 // Helper function to safely convert a Span to a Span<[const] uint8_t>.
 template <typename T>

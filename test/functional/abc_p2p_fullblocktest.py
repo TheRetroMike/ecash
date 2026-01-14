@@ -35,7 +35,7 @@ from test_framework.util import assert_equal
 
 
 class PreviousSpendableOutput:
-    def __init__(self, tx=CTransaction(), n=-1):
+    def __init__(self, tx: CTransaction, n=-1):
         self.tx = tx
         # the output we're spending
         self.n = n
@@ -57,15 +57,15 @@ class FullBlockTest(BitcoinTestFramework):
         self.rpc_timeout = 360
 
     def add_transactions_to_block(self, block, tx_list):
-        [tx.rehash() for tx in tx_list]
         block.vtx.extend(tx_list)
 
-    def next_block(self, number, spend=None, script=CScript([OP_TRUE]), block_size=0):
+    def next_block(self, number, spend=None, script=None, block_size=0):
+        script = script or CScript([OP_TRUE])
         if self.tip is None:
             base_block_hash = self.genesis_hash
             block_time = int(time.time()) + 1
         else:
-            base_block_hash = self.tip.sha256
+            base_block_hash = self.tip.hash_int
             block_time = self.tip.nTime + 1
         # First create the coinbase
         height = self.block_heights[base_block_hash] + 1
@@ -77,7 +77,6 @@ class FullBlockTest(BitcoinTestFramework):
         else:
             # all but one satoshi to fees
             coinbase.vout[0].nValue += spend.tx.vout[spend.n].nValue - 1
-            coinbase.rehash()
             block = create_block(base_block_hash, coinbase, block_time)
 
             # Make sure we have plenty engough to spend going forward.
@@ -88,7 +87,7 @@ class FullBlockTest(BitcoinTestFramework):
                 tx = CTransaction()
                 # Spend from one of the spendable outputs
                 spend = spendable_outputs.popleft()
-                tx.vin.append(CTxIn(COutPoint(spend.tx.sha256, spend.n)))
+                tx.vin.append(CTxIn(COutPoint(spend.tx.txid_int, spend.n)))
                 # Add spendable outputs
                 for i in range(4):
                     tx.vout.append(CTxOut(0, CScript([OP_TRUE])))
@@ -100,7 +99,6 @@ class FullBlockTest(BitcoinTestFramework):
             # Make it the same format as transaction added for padding and save the size.
             # It's missing the padding output, so we add a constant to account
             # for it.
-            tx.rehash()
             base_tx_size = len(tx.serialize()) + 18
 
             # If a specific script is required, add it.
@@ -158,7 +156,7 @@ class FullBlockTest(BitcoinTestFramework):
         # Do PoW, which is cheap on regnet
         block.solve()
         self.tip = block
-        self.block_heights[block.sha256] = height
+        self.block_heights[block.hash_int] = height
         assert number not in self.blocks
         self.blocks[number] = block
         return block

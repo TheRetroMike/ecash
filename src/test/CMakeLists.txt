@@ -64,7 +64,7 @@ add_library(testutil OBJECT
 
 target_link_libraries(testutil server)
 
-if(BUILD_BITCOIN_WALLET)
+if(BUILD_WALLET)
 	set(BITCOIN_WALLET_TEST_FIXTURE
 		../wallet/test/init_test_fixture.cpp
 		../wallet/test/wallet_test_fixture.cpp
@@ -108,7 +108,7 @@ gen_asmap_headers(ASMAP_HEADERS
 	data/asmap.raw
 )
 
-if(BUILD_BITCOIN_CHRONIK)
+if(BUILD_CHRONIK)
 	set(BITCOIN_CHRONIK_TESTS
 		../../chronik/test/bridgecompression_tests.cpp
 		../../chronik/test/bridgeprimitives_tests.cpp
@@ -136,6 +136,7 @@ add_boost_unit_tests_to_suite(bitcoin test_bitcoin
 		allocator_tests.cpp
 		amount_tests.cpp
 		arith_uint256_tests.cpp
+		banman_tests.cpp
 		base32_tests.cpp
 		base58_tests.cpp
 		base64_tests.cpp
@@ -154,10 +155,12 @@ add_boost_unit_tests_to_suite(bitcoin test_bitcoin
 		bswap_tests.cpp
 		cashaddr_tests.cpp
 		cashaddrenc_tests.cpp
+		chainstate_write_tests.cpp
 		checkdatasig_tests.cpp
 		checkpoints_tests.cpp
 		checkqueue_tests.cpp
 		coins_tests.cpp
+		coinscachepair_tests.cpp
 		coinstatsindex_tests.cpp
 		compilerbug_tests.cpp
 		compress_tests.cpp
@@ -221,6 +224,7 @@ add_boost_unit_tests_to_suite(bitcoin test_bitcoin
 		script_standard_tests.cpp
 		script_tests.cpp
 		scriptnum_tests.cpp
+		scriptnum_63bit_tests.cpp
 		scriptinterpreter_tests.cpp
 		serialize_tests.cpp
 		serialize_intcode_tests.cpp
@@ -255,7 +259,7 @@ add_boost_unit_tests_to_suite(bitcoin test_bitcoin
 		validation_flush_tests.cpp
 		validation_tests.cpp
 		validationinterface_tests.cpp
-        blockindex_comparator_tests.cpp
+		blockindex_comparator_tests.cpp
 
 		# RPC Tests
 		../rpc/test/server_tests.cpp
@@ -303,8 +307,8 @@ function(add_boost_test_runners_with_upgrade_activated SUITE EXECUTABLE)
 			--
 			"-printtoconsole=1"
 			"-testsuitename=Bitcoin ABC unit tests with next upgrade activated"
-			# Nov. 16th, 2024 at 08:00:00
-			-schumpeteractivationtime=1731744000
+			# May. 16th, 2025 at 08:00:00
+			-obolenskyactivationtime=1747382400
 		)
 	endforeach()
 endfunction()

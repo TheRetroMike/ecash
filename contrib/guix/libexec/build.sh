@@ -231,10 +231,10 @@ mkdir -p source_package
 pushd source_package
 cmake -GNinja .. \
     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} \
-    -DBUILD_BITCOIN_WALLET=OFF \
-    -DBUILD_BITCOIN_CHRONIK=OFF \
-    -DBUILD_BITCOIN_QT=OFF \
-    -DBUILD_BITCOIN_ZMQ=OFF \
+    -DBUILD_WALLET=OFF \
+    -DBUILD_CHRONIK=OFF \
+    -DBUILD_QT=OFF \
+    -DBUILD_ZMQ=OFF \
     -DENABLE_QRCODE=OFF \
     -DENABLE_NATPMP=OFF \
     -DENABLE_UPNP=OFF \
@@ -297,7 +297,7 @@ export LD_LIBRARY_PATH="${LIBRARY_PATH}"
 # CMake flags
 case "$HOST" in
     *mingw*)
-        CMAKE_EXTRA_OPTIONS=(-DBUILD_BITCOIN_SEEDER=OFF -DCPACK_STRIP_FILES=ON -DCPACK_PACKAGE_FILE_NAME="${DISTNAME}-win64-setup-unsigned")
+        CMAKE_EXTRA_OPTIONS=(-DBUILD_SEEDER=OFF -DCPACK_STRIP_FILES=ON -DCPACK_PACKAGE_FILE_NAME="${DISTNAME}-win64-setup-unsigned")
         ;;
     *linux*)
         CMAKE_EXTRA_OPTIONS=(-DENABLE_STATIC_LIBSTDCXX=ON -DUSE_LINKER=)
@@ -365,7 +365,8 @@ mkdir -p "$DISTSRC"
       -DENABLE_REDUCE_EXPORTS=ON \
       -DCMAKE_INSTALL_PREFIX="${INSTALLPATH}" \
       -DCCACHE=OFF \
-      -DBUILD_BITCOIN_CHRONIK=ON \
+      -DBUILD_CHRONIK=ON \
+      -DBUILD_PROOF_MANAGER_CLI=ON \
       "${CMAKE_EXTRA_OPTIONS[@]}" \
       "${CMAKE_C_FLAGS}" \
       "${CMAKE_CXX_FLAGS}" \
@@ -391,6 +392,7 @@ EOF
     case "$HOST" in
         *mingw*)
             ninja install-debug
+            ninja install-proof-manager-cli
             # Generate NSIS installer
             ninja package
             mv ${DISTNAME}*setup-unsigned.exe ${OUTDIR}/
@@ -408,6 +410,7 @@ EOF
             ;;
         *linux*)
             ninja install-debug
+            ninja install-proof-manager-cli
             pushd installed
             find ${DISTNAME} -not -name "*.dbg" -print0 | sort --zero-terminated | tar --create --no-recursion --mode='u+rw,go+r-w,a+X' --null --files-from=- | gzip -9n > ${OUTDIR}/${DISTNAME}-${HOST}.tar.gz
             find ${DISTNAME} -name "*.dbg" -print0 | sort --zero-terminated | tar --create --no-recursion --mode='u+rw,go+r-w,a+X' --null --files-from=- | gzip -9n > ${OUTDIR}/${DISTNAME}-${HOST}-debug.tar.gz
@@ -432,6 +435,8 @@ EOF
 
             ninja osx-zip
             mv "${OSX_VOLNAME}.zip" ${OUTDIR}/${DISTNAME}-osx-unsigned.zip
+
+            ninja install-proof-manager-cli
 
             pushd installed
             find . -path "*.app*" -type f -executable -exec mv {} ${DISTNAME}/bin/bitcoin-qt \;

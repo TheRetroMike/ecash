@@ -17,6 +17,7 @@ use axum::{
 };
 use bitcoinsuite_core::tx::TxId;
 use chronik_bridge::ffi;
+use chronik_indexer::query::verify_timeout_finalization;
 use chronik_indexer::{
     indexer::{ChronikIndexer, Node},
     pause::PauseNotify,
@@ -167,6 +168,7 @@ impl ChronikServer {
                 "/block-headers/:start/:end",
                 routing::get(handle_block_headers),
             )
+            .route("/unconfirmed-txs", routing::get(handle_unconfirmed_txs))
             .route("/chronik-info", routing::get(handle_chronik_info))
             .route("/tx/:txid", routing::get(handle_tx))
             .route("/token/:txid", routing::get(handle_token_info))
@@ -362,6 +364,16 @@ async fn handle_block_txs(
     ))
 }
 
+async fn handle_unconfirmed_txs(
+    Extension(indexer): Extension<ChronikIndexerRef>,
+    Extension(node): Extension<NodeRef>,
+) -> Result<Protobuf<proto::TxHistoryPage>, ReportError> {
+    let indexer = indexer.read().await;
+    Ok(Protobuf(
+        handlers::handle_unconfirmed_txs(&indexer, &node).await?,
+    ))
+}
+
 async fn handle_tx(
     Path(txid): Path<String>,
     Extension(indexer): Extension<ChronikIndexerRef>,
@@ -387,18 +399,28 @@ async fn handle_broadcast_tx(
     Extension(node): Extension<NodeRef>,
     Protobuf(request): Protobuf<proto::BroadcastTxRequest>,
 ) -> Result<Protobuf<proto::BroadcastTxResponse>, ReportError> {
+    let timeout_finalization =
+        verify_timeout_finalization(request.finalization_timeout_secs)?;
     let indexer = indexer.read().await;
-    let txids_result = indexer
+    let broadcast_result = indexer
         .broadcast(node.as_ref())
-        .broadcast_txs(&[request.raw_tx.into()], request.skip_token_checks);
+        .broadcast_txs(
+            &[request.raw_tx.into()],
+            request.skip_token_checks,
+            !timeout_finalization.is_zero(),
+        )
+        .await;
     // Drop indexer before syncing otherwise we get a deadlock
     drop(indexer);
     // Block for indexer being synced before returning so the user can query
     // the broadcast txs right away
     ffi::sync_with_validation_interface_queue();
-    let txids = txids_result?;
+    let mut broadcast_result = broadcast_result?;
+    broadcast_result
+        .wait_for_finalization(timeout_finalization)
+        .await?;
     Ok(Protobuf(proto::BroadcastTxResponse {
-        txid: txids[0].to_vec(),
+        txid: broadcast_result.txids[0].to_vec(),
     }))
 }
 
@@ -407,23 +429,36 @@ async fn handle_broadcast_txs(
     Extension(node): Extension<NodeRef>,
     Protobuf(request): Protobuf<proto::BroadcastTxsRequest>,
 ) -> Result<Protobuf<proto::BroadcastTxsResponse>, ReportError> {
+    let timeout_finalization =
+        verify_timeout_finalization(request.finalization_timeout_secs)?;
     let indexer = indexer.read().await;
-    let txids_result = indexer.broadcast(node.as_ref()).broadcast_txs(
-        &request
-            .raw_txs
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>(),
-        request.skip_token_checks,
-    );
+    let broadcast_result = indexer
+        .broadcast(node.as_ref())
+        .broadcast_txs(
+            &request
+                .raw_txs
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+            request.skip_token_checks,
+            !timeout_finalization.is_zero(),
+        )
+        .await;
     // Drop indexer before syncing otherwise we get a deadlock
     drop(indexer);
     // Block for indexer being synced before returning so the user can query
     // the broadcast txs right away
     ffi::sync_with_validation_interface_queue();
-    let txids = txids_result?;
+    let mut broadcast_result = broadcast_result?;
+    broadcast_result
+        .wait_for_finalization(timeout_finalization)
+        .await?;
     Ok(Protobuf(proto::BroadcastTxsResponse {
-        txids: txids.into_iter().map(|txid| txid.to_vec()).collect(),
+        txids: broadcast_result
+            .txids
+            .into_iter()
+            .map(|txid| txid.to_vec())
+            .collect(),
     }))
 }
 
@@ -508,10 +543,12 @@ async fn handle_script_unconfirmed_txs(
 async fn handle_script_utxos(
     Path((script_type, payload)): Path<(String, String)>,
     Extension(indexer): Extension<ChronikIndexerRef>,
+    Extension(node): Extension<NodeRef>,
 ) -> Result<Protobuf<proto::ScriptUtxos>, ReportError> {
     let indexer = indexer.read().await;
     Ok(Protobuf(
-        handlers::handle_script_utxos(&script_type, &payload, &indexer).await?,
+        handlers::handle_script_utxos(&script_type, &payload, &indexer, &node)
+            .await?,
     ))
 }
 
@@ -570,10 +607,11 @@ async fn handle_token_id_unconfirmed_txs(
 async fn handle_token_id_utxos(
     Path(token_id_hex): Path<String>,
     Extension(indexer): Extension<ChronikIndexerRef>,
+    Extension(node): Extension<NodeRef>,
 ) -> Result<Protobuf<proto::Utxos>, ReportError> {
     let indexer = indexer.read().await;
     Ok(Protobuf(
-        handlers::handle_token_id_utxos(&token_id_hex, &indexer).await?,
+        handlers::handle_token_id_utxos(&token_id_hex, &indexer, &node).await?,
     ))
 }
 
@@ -632,10 +670,12 @@ async fn handle_lokad_id_unconfirmed_txs(
 async fn handle_plugin_utxos(
     Path((plugin_name, payload)): Path<(String, String)>,
     Extension(indexer): Extension<ChronikIndexerRef>,
+    Extension(node): Extension<NodeRef>,
 ) -> Result<Protobuf<proto::Utxos>, ReportError> {
     let indexer = indexer.read().await;
     Ok(Protobuf(
-        handlers::handle_plugin_utxos(&plugin_name, &payload, &indexer).await?,
+        handlers::handle_plugin_utxos(&plugin_name, &payload, &indexer, &node)
+            .await?,
     ))
 }
 

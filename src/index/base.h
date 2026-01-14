@@ -7,7 +7,7 @@
 
 #include <dbwrapper.h>
 #include <interfaces/chain.h>
-#include <threadinterrupt.h>
+#include <util/threadinterrupt.h>
 #include <validationinterface.h>
 
 #include <string>
@@ -93,6 +93,9 @@ private:
     bool Commit();
 
     virtual bool AllowPrune() const = 0;
+
+    template <typename... Args>
+    void FatalErrorf(const char *fmt, const Args &...args);
 
 protected:
     std::unique_ptr<interfaces::Chain> m_chain;

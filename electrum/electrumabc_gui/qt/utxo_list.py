@@ -30,21 +30,27 @@ from enum import IntEnum
 from functools import wraps
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from qtpy import QtWidgets
+from qtpy.QtCore import QPoint, Qt, Signal
+from qtpy.QtGui import QColor, QFont
 
 from electrumabc.address import Address
+from electrumabc.amount import format_satoshis
 from electrumabc.bitcoin import COINBASE_MATURITY
 from electrumabc.i18n import _
 from electrumabc.plugins import run_hook
-from electrumabc.util import format_satoshis
 from electrumabc.wallet import ImportedAddressWallet, ImportedPrivkeyWallet
 
 from .avalanche.proof_editor import AvaProofDialog
 from .consolidate_coins_dialog import ConsolidateCoinsWizard
 from .tree_widget import MyTreeWidget
-from .util import MONOSPACE_FONT, ColorScheme, SortableTreeWidgetItem, rate_limited
+from .util import (
+    MONOSPACE_FONT,
+    ColorScheme,
+    SortableTreeWidgetItem,
+    copy_to_clipboard,
+    rate_limited,
+)
 
 if TYPE_CHECKING:
     from .main_window import ElectrumWindow
@@ -92,8 +98,8 @@ class UTXOList(MyTreeWidget):
     # sort by amount, descending
     default_sort = MyTreeWidget.SortSpec(Col.amount, Qt.DescendingOrder)
 
-    selected_amount_changed = pyqtSignal("quint64")
-    selection_cleared = pyqtSignal()
+    selected_amount_changed = Signal("quint64")
+    selection_cleared = Signal()
 
     def __init__(self, main_window: ElectrumWindow):
         columns = [
@@ -148,10 +154,10 @@ class UTXOList(MyTreeWidget):
         return wrapper
 
     def get_name(self, x):
-        return x.get("prevout_hash") + f':{x.get("prevout_n")}'
+        return x.get("prevout_hash") + f":{x.get('prevout_n')}"
 
     def get_name_short(self, x):
-        return x.get("prevout_hash")[:10] + "..." + f':{x.get("prevout_n")}'
+        return x.get("prevout_hash")[:10] + "..." + f":{x.get('prevout_n')}"
 
     @rate_limited(1.0, ts_after=True)
     def update(self):
@@ -189,8 +195,8 @@ class UTXOList(MyTreeWidget):
             label = self.wallet.get_label(x["prevout_hash"])
             amount = format_satoshis(
                 x["value"],
-                int(self.config.get("num_zeros", 2)),
-                self.config.get("decimal_point", 2),
+                self.config.get_num_zeros(),
+                self.config.get_decimal_point(),
                 whitespaces=True,
             )
             utxo_item = SortableTreeWidgetItem(
@@ -296,7 +302,7 @@ class UTXOList(MyTreeWidget):
                 warning_dialog.exec_()
                 if warning_dialog.has_cancelled():
                     return
-            self.main_window.spend_coins(spendable_coins)
+            self.main_window.send_tab.spend_coins(spendable_coins)
 
         # Unconditionally add the "Spend" option but leave it disabled if there are no spendable_coins
         spend_action = menu.addAction(_("Spend"), warn_if_tokens_and_spend)
@@ -336,29 +342,27 @@ class UTXOList(MyTreeWidget):
                 # Determine the "alt copy text" "Legacy Address" or "Cash Address"
                 copy_text = coin.address.to_ui_string()
                 if Address.FMT_UI == Address.FMT_LEGACY:
-                    alt_copy_text, alt_column_title = coin.address.to_full_string(
-                        Address.FMT_CASHADDR
-                    ), _("Cash Address")
+                    alt_copy_text, alt_column_title = (
+                        coin.address.to_full_string(Address.FMT_CASHADDR),
+                        _("Cash Address"),
+                    )
                 else:
-                    alt_copy_text, alt_column_title = coin.address.to_full_string(
-                        Address.FMT_LEGACY
-                    ), _("Legacy Address")
+                    alt_copy_text, alt_column_title = (
+                        coin.address.to_full_string(Address.FMT_LEGACY),
+                        _("Legacy Address"),
+                    )
             else:
                 copy_text = item.text(col)
             if copy_text:
                 copy_text = copy_text.strip()
             menu.addAction(
                 _("Copy {}").format(column_title),
-                lambda: QtWidgets.QApplication.instance()
-                .clipboard()
-                .setText(copy_text),
+                lambda: copy_to_clipboard(copy_text),
             )
             if alt_copy_text and alt_column_title:
                 menu.addAction(
                     _("Copy {}").format(alt_column_title),
-                    lambda: QtWidgets.QApplication.instance()
-                    .clipboard()
-                    .setText(alt_copy_text),
+                    lambda: copy_to_clipboard(alt_copy_text),
                 )
 
             # single selection, offer them the "Details" option and also
@@ -516,6 +520,7 @@ class UTXOList(MyTreeWidget):
         """
         dialog = AvaProofDialog(
             wallet=self.wallet,
+            config=self.config,
             receive_address=self.main_window.receive_address,
             parent=self,
         )

@@ -1,3 +1,7 @@
+// Copyright (c) 2025 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 // data table rendering utilities
 const MAX_ROWS_RENDER = 250;
 const renderInt = number => {
@@ -13,16 +17,10 @@ const renderInt = number => {
 const renderAge = timestamp => moment(timestamp * 1000).fromNow();
 const renderTemplate = height =>
     '<a href="/block-height/' + height + '">' + renderInt(height) + '</a>';
-const renderFinal = isFinal => {
-    if (isFinal) {
-        return 'Yes';
-    }
-    return 'No';
-};
 const renderHash = (hash, _type, _row, meta) => {
     const api = new $.fn.dataTable.Api(meta.settings);
     const isHidden = !api.column(4).responsiveHidden();
-    let minifiedHash = minifyHash(hash);
+    let minifiedHash = minifyHash(hash, 1, 25);
 
     if (isHidden) {
         minifiedHash = '0...' + minifiedHash.slice(minifiedHash.length - 6);
@@ -31,15 +29,7 @@ const renderHash = (hash, _type, _row, meta) => {
     return `<a href="/block/${hash}">${minifiedHash}</a>`;
 };
 const renderNumtTxs = numTxs => renderInt(numTxs);
-const renderSize = size => {
-    if (size < 1024) {
-        return size + ' B';
-    } else if (size < 1024 * 1024) {
-        return (size / 1000).toFixed(2) + ' kB';
-    } else {
-        return (size / 1000000).toFixed(2) + ' MB';
-    }
-};
+
 const renderDifficulty = difficulty => {
     const estHashrate = (difficulty * 0xffffffff) / 600;
 

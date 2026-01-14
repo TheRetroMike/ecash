@@ -2,22 +2,27 @@
 
 project(bitcoind)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Default visibility is hidden on all targets.
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-option(BUILD_BITCOIN_WALLET "Activate the wallet functionality" ON)
-option(BUILD_BITCOIN_ZMQ "Activate the ZeroMQ functionalities" ON)
-option(BUILD_BITCOIN_CLI "Build bitcoin-cli" ON)
-option(BUILD_BITCOIN_TX "Build bitcoin-tx" ON)
-option(BUILD_BITCOIN_QT "Build bitcoin-qt" ON)
-option(BUILD_BITCOIN_SEEDER "Build bitcoin-seeder" ON)
+include(Deprecation)
+foreach(FEATURE WALLET ZMQ CLI TX QT SEEDER CHAINSTATE IGUANA)
+	deprecate_build_flag("BUILD_BITCOIN_${FEATURE}" "BUILD_${FEATURE}")
+endforeach()
+
+option(BUILD_WALLET "Activate the wallet functionality" ON)
+option(BUILD_ZMQ "Activate the ZeroMQ functionalities" ON)
+option(BUILD_CLI "Build bitcoin-cli" ON)
+option(BUILD_TX "Build bitcoin-tx" ON)
+option(BUILD_QT "Build bitcoin-qt" ON)
+option(BUILD_SEEDER "Build bitcoin-seeder" ON)
 option(BUILD_LIBBITCOINCONSENSUS "Build the bitcoinconsenus shared library" ON)
-option(BUILD_BITCOIN_CHAINSTATE "Build bitcoin-chainstate" OFF)
-option(BUILD_BITCOIN_IGUANA "Activate the Iguana debugger" ON)
+option(BUILD_CHAINSTATE "Build bitcoin-chainstate" OFF)
+option(BUILD_IGUANA "Activate the Iguana debugger" ON)
 option(ENABLE_BIP70 "Enable BIP70 (payment protocol) support in GUI" ON)
 option(ENABLE_HARDENING "Harden the executables" ON)
 option(ENABLE_REDUCE_EXPORTS "Reduce the amount of exported symbols" OFF)
@@ -76,10 +81,10 @@ endif(CCACHE)
 # Disable what we do not need for the native build.
 include(NativeExecutable)
 native_add_cmake_flags(
-	"-DBUILD_BITCOIN_WALLET=OFF"
-	"-DBUILD_BITCOIN_CHRONIK=OFF"
-	"-DBUILD_BITCOIN_QT=OFF"
-	"-DBUILD_BITCOIN_ZMQ=OFF"
+	"-DBUILD_WALLET=OFF"
+	"-DBUILD_CHRONIK=OFF"
+	"-DBUILD_QT=OFF"
+	"-DBUILD_ZMQ=OFF"
 	"-DENABLE_QRCODE=OFF"
 	"-DENABLE_NATPMP=OFF"
 	"-DENABLE_UPNP=OFF"
@@ -258,6 +263,9 @@ add_compiler_flags(
 	-Wcast-align
 	-Wunused-parameter
 	-Wmissing-braces
+	-Wno-implicit-fallthrough
+	-Wno-psabi
+	-Wno-unused-parameter
 	-Wthread-safety
 	-Wrange-loop-analysis
 	-Wredundant-decls
@@ -272,6 +280,7 @@ add_compiler_flags(
 add_compiler_flag_group(-Wformat -Wformat-security)
 add_cxx_compiler_flags(
 	-Wredundant-move
+	-Wsuggest-override
 	-Woverloaded-virtual
 )
 
@@ -282,17 +291,6 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 	add_compiler_flags(
 		-Wshadow
 		-Wshadow-field
-	)
-endif()
-
-option(EXTRA_WARNINGS "Enable extra warnings" OFF)
-if(EXTRA_WARNINGS)
-	add_cxx_compiler_flags(-Wsuggest-override)
-else()
-	add_compiler_flags(
-		-Wno-unused-parameter
-		-Wno-implicit-fallthrough
-		-Wno-psabi
 	)
 endif()
 
@@ -338,6 +336,7 @@ endif()
 
 
 # libraries
+add_subdirectory(crc32c)
 add_subdirectory(crypto)
 add_subdirectory(leveldb)
 add_subdirectory(secp256k1)
@@ -410,11 +409,9 @@ add_library(util
 	random.cpp
 	randomenv.cpp
 	rcu.cpp
-	rpc/request.cpp
 	support/cleanse.cpp
 	support/lockedpool.cpp
 	sync.cpp
-	threadinterrupt.cpp
 	uint256.cpp
 	util/asmap.cpp
 	util/batchpriority.cpp
@@ -432,6 +429,7 @@ add_library(util
 	util/moneystr.cpp
 	util/readwritefile.cpp
 	util/settings.cpp
+	util/signalinterrupt.cpp
 	util/string.cpp
 	util/sock.cpp
 	util/spanparsing.cpp
@@ -439,6 +437,7 @@ add_library(util
 	util/string.cpp
 	util/syserror.cpp
 	util/thread.cpp
+	util/threadinterrupt.cpp
 	util/threadnames.cpp
 	util/time.cpp
 	util/tokenpipe.cpp
@@ -523,6 +522,7 @@ add_library(common
 	base58.cpp
 	common/args.cpp
 	common/bloom.cpp
+	common/init.cpp
 	common/configfile.cpp
 	common/system.cpp
 	cashaddr.cpp
@@ -549,6 +549,7 @@ add_library(common
 	protocol.cpp
 	psbt.cpp
 	rpc/rawtransaction_util.cpp
+	rpc/request.cpp
 	rpc/util.cpp
 	scheduler.cpp
 	warnings.cpp
@@ -654,6 +655,7 @@ add_library(server
 	minerfund.cpp
 	net.cpp
 	net_processing.cpp
+	node/abort.cpp
 	node/blockfitter.cpp
 	node/blockmanager_args.cpp
 	node/blockstorage.cpp
@@ -663,8 +665,10 @@ add_library(server
 	node/coin.cpp
 	node/coinstats.cpp
 	node/coins_view_args.cpp
+	node/connection_types.cpp
 	node/context.cpp
 	node/database_args.cpp
+	node/eviction.cpp
 	node/interfaces.cpp
 	node/kernel_notifications.cpp
 	node/mempool_persist_args.cpp
@@ -674,7 +678,6 @@ add_library(server
 	node/transaction.cpp
 	node/ui_interface.cpp
 	node/utxo_snapshot.cpp
-	node/validation_cache_args.cpp
 	noui.cpp
 	policy/block/minerfund.cpp
 	policy/block/preconsensus.cpp
@@ -704,6 +707,7 @@ add_library(server
 	script/scriptcache.cpp
 	script/sigcache.cpp
 	shutdown.cpp
+	streams.cpp
 	timedata.cpp
 	torcontrol.cpp
 	txdb.cpp
@@ -719,7 +723,6 @@ target_include_directories(server PRIVATE leveldb/helpers/memenv)
 target_link_libraries(server
 	bitcoinconsensus
 	leveldb
-	memenv
 )
 
 link_event(server event)
@@ -766,7 +769,7 @@ include(BinaryTest)
 include(WindowsVersionInfo)
 
 # Wallet
-if(BUILD_BITCOIN_WALLET)
+if(BUILD_WALLET)
 	add_subdirectory(wallet)
 	target_link_libraries(server wallet)
 
@@ -788,7 +791,7 @@ else()
 endif()
 
 # ZeroMQ
-if(BUILD_BITCOIN_ZMQ)
+if(BUILD_ZMQ)
 	add_subdirectory(zmq)
 	target_link_libraries(server zmq)
 
@@ -806,12 +809,12 @@ add_library(rpcclient
 target_link_libraries(rpcclient univalue util)
 
 # bitcoin-seeder
-if(BUILD_BITCOIN_SEEDER)
+if(BUILD_SEEDER)
 	add_subdirectory(seeder)
 endif()
 
 # bitcoin-cli
-if(BUILD_BITCOIN_CLI)
+if(BUILD_CLI)
 	add_executable(bitcoin-cli bitcoin-cli.cpp)
 	generate_windows_version_info(bitcoin-cli
 		DESCRIPTION "JSON-RPC client for ${PACKAGE_NAME}"
@@ -828,7 +831,7 @@ if(BUILD_BITCOIN_CLI)
 endif()
 
 # bitcoin-tx
-if(BUILD_BITCOIN_TX)
+if(BUILD_TX)
 	add_executable(bitcoin-tx bitcoin-tx.cpp)
 	generate_windows_version_info(bitcoin-tx
 		DESCRIPTION "CLI Bitcoin transaction editor utility"
@@ -844,7 +847,7 @@ if(BUILD_BITCOIN_TX)
 endif()
 
 # bitcoin-chainstate
-if(BUILD_BITCOIN_CHAINSTATE)
+if(BUILD_CHAINSTATE)
 	# TODO: libbitcoinkernel is a work in progress consensus engine library, as more
 	#       and more modules are decoupled from the consensus engine, this list will
 	#       shrink to only those which are absolutely necessary. For example, things
@@ -893,7 +896,6 @@ if(BUILD_BITCOIN_CHAINSTATE)
 		node/blockfitter.cpp
 		node/blockstorage.cpp
 		node/chainstate.cpp
-		node/ui_interface.cpp
 		node/utxo_snapshot.cpp
 		policy/fees.cpp
 		policy/packages.cpp
@@ -912,6 +914,7 @@ if(BUILD_BITCOIN_CHAINSTATE)
 		scheduler.cpp
 		script/bitfield.cpp
 		script/interpreter.cpp
+		script/intmath.cpp
 		script/script.cpp
 		script/scriptcache.cpp
 		script/script_error.cpp
@@ -919,10 +922,10 @@ if(BUILD_BITCOIN_CHAINSTATE)
 		script/sigencoding.cpp
 		script/standard.cpp
 		shutdown.cpp
+		streams.cpp
 		support/cleanse.cpp
 		support/lockedpool.cpp
 		sync.cpp
-		threadinterrupt.cpp
 		txdb.cpp
 		txmempool.cpp
 		txpool.cpp
@@ -938,10 +941,12 @@ if(BUILD_BITCOIN_CHAINSTATE)
 		util/hasher.cpp
 		util/moneystr.cpp
 		util/settings.cpp
+		util/signalinterrupt.cpp
 		util/strencodings.cpp
 		util/string.cpp
 		util/syserror.cpp
 		util/thread.cpp
+		util/threadinterrupt.cpp
 		util/threadnames.cpp
 		util/time.cpp
 		util/tokenpipe.cpp
@@ -967,13 +972,16 @@ if(BUILD_BITCOIN_CHAINSTATE)
 		cashaddr.cpp         # via cashaddrenc.cpp
 		cashaddrenc.cpp      # via key_io.cpp
 		dnsseeds.cpp         # via net.cpp (GetRandomizedDNSSeeds)
-		i2p.cpp              # via net.cppTx
+		i2p.cpp              # via net.cpp
 		key_io.cpp           # avalanche/processor.cpp uses DecodeSecret
 		minerfund.cpp        # via policy/block/minerfund.cpp
 		net.cpp              # avalanche uses CConnman
 		netaddress.cpp       # via net.cpp
 		netbase.cpp          # via net.cpp
 		net_permissions.cpp  # via net.cpp
+		node/eviction.cpp    # via net.cpp
+		node/connection_types.cpp  # via net.cpp
+		node/ui_interface.cpp  # via net.cpp and banman.cpp
 		policy/block/minerfund.cpp
 		policy/block/preconsensus.cpp
 		policy/block/rtt.cpp
@@ -993,7 +1001,7 @@ if(BUILD_BITCOIN_CHAINSTATE)
 			# To access the config/ and obj/ directories
 			${CMAKE_CURRENT_BINARY_DIR}
 	)
-	target_link_libraries(bitcoinkernel crypto univalue secp256k1 leveldb memenv)
+	target_link_libraries(bitcoinkernel crypto univalue secp256k1 leveldb)
 	link_boost_headers_only(bitcoinkernel headers)
 
 	if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
@@ -1025,10 +1033,10 @@ install_target(bitcoind)
 install_manpages(bitcoind)
 
 # Bitcoin-qt
-if(BUILD_BITCOIN_QT)
+if(BUILD_QT)
 	add_subdirectory(qt)
 endif()
 
-if(BUILD_BITCOIN_IGUANA)
+if(BUILD_IGUANA)
 	add_subdirectory(iguana)
 endif()

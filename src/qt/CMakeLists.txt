@@ -303,7 +303,7 @@ if(ENABLE_BIP70)
 endif()
 
 # Wallet
-if(BUILD_BITCOIN_WALLET)
+if(BUILD_WALLET)
 	# Automoc option.
 	set(AUTOMOC_MOC_OPTIONS -DENABLE_WALLET=1)
 
@@ -512,22 +512,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 			"${STRIPPED_BUNDLE}"
 	)
 
-	set(OSX_APPLICATION_DIR "Applications")
-	set(OSX_APPLICATION_SYMLINK "${APP_DIST_DIR}/${OSX_APPLICATION_DIR}")
-	add_custom_command(
-		OUTPUT
-			"${OSX_APPLICATION_SYMLINK}"
-		COMMAND
-			${CMAKE_COMMAND} -E create_symlink "/${OSX_APPLICATION_DIR}" "${OSX_APPLICATION_SYMLINK}"
-		DEPENDS
-			"${APP_DIST_DIR}"
-	)
-
-	add_custom_target(osx-deploydir
-		DEPENDS
-			"${OSX_APPLICATION_SYMLINK}"
-			"${APP_DSSTORE}"
-	)
+	add_custom_target(osx-deploydir DEPENDS "${APP_DSSTORE}")
 
 	if(CMAKE_CROSSCOMPILING)
 		include(DoOrFail)

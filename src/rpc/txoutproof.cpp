@@ -123,7 +123,7 @@ static RPCHelpMan gettxoutproof() {
             }
 
             CBlock block;
-            if (!chainman.m_blockman.ReadBlockFromDisk(block, *pblockindex)) {
+            if (!chainman.m_blockman.ReadBlock(block, *pblockindex)) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR,
                                    "Can't read block from disk");
             }
@@ -141,7 +141,7 @@ static RPCHelpMan gettxoutproof() {
                                    "retrieved block");
             }
 
-            CDataStream ssMB(SER_NETWORK, PROTOCOL_VERSION);
+            DataStream ssMB{};
             CMerkleBlock mb(block, setTxIds);
             ssMB << mb;
             std::string strHex = HexStr(ssMB);
@@ -171,8 +171,7 @@ static RPCHelpMan verifytxoutproof() {
         RPCExamples{""},
         [&](const RPCHelpMan &self, const Config &config,
             const JSONRPCRequest &request) -> UniValue {
-            CDataStream ssMB(ParseHexV(request.params[0], "proof"), SER_NETWORK,
-                             PROTOCOL_VERSION);
+            DataStream ssMB{ParseHexV(request.params[0], "proof")};
             CMerkleBlock merkleBlock;
             ssMB >> merkleBlock;
 

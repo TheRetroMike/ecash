@@ -1,19 +1,17 @@
-// Copyright (c) 2024 The Bitcoin developers
+// Copyright (c) 2024-2025 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-import React, { useState, useEffect } from 'react';
-import Modal from 'components/Common/Modal';
-import { Alert } from 'components/Common/Atoms';
+import React from 'react';
+import {
+    CapacitorBarcodeScanner,
+    CapacitorBarcodeScannerTypeHint,
+    CapacitorBarcodeScannerCameraDirection,
+    CapacitorBarcodeScannerScanOrientation,
+} from '@capacitor/barcode-scanner';
 import { QRCodeIcon } from 'components/Common/CustomIcons';
 import styled from 'styled-components';
-import { BrowserQRCodeReader, IScannerControls } from '@zxing/browser';
-import {
-    NotFoundException,
-    FormatException,
-    ChecksumException,
-    Result,
-} from '@zxing/library';
+import { Capacitor } from '@capacitor/core';
 
 const StyledScanQRCode = styled.button`
     cursor: pointer;
@@ -23,161 +21,71 @@ const StyledScanQRCode = styled.button`
     padding: 0 12px;
 `;
 
-const QRPreview = styled.video`
-    width: 100%;
-`;
+interface ScanQRCodeProps {
+    onScan: (value: string) => void;
+}
 
 /**
- * This interesting interface results from ts throwing issues because the
- * Result interface from @zxing/library apparently has text as private
- * The docs of the lib say to access it with result.text
- * would probably need to contact authors to update
+ * Component to scan QR codes using Capacitor's native barcode scanner
+ * This provides a native UI experience with better performance and reliability
+ * compared to the web-based html5-qrcode or zxing implementations
  */
-class ZxingResult {
-    private _result: Result;
-
-    constructor(result: Result) {
-        this._result = result;
-    }
-
-    /**
-     * Gets the text from the result if available.
-     * @returns The text content if it exists, otherwise undefined.
-     */
-    get text(): string | undefined {
-        try {
-            // Assuming 'text' might not be string, but we cast to string | undefined
-            return (this._result as unknown as { text?: string }).text;
-        } catch {
-            // In case accessing .text throws an error
-            return undefined;
-        }
-    }
-}
-
-interface ScanQRCodeProps {
-    onScan: React.ChangeEventHandler<HTMLInputElement>;
-}
 const ScanQRCode: React.FC<ScanQRCodeProps> = ({
     onScan = () => null,
     ...otherProps
 }) => {
-    const [codeReaderControls, setCodeReaderControls] =
-        useState<null | IScannerControls>(null);
-    const [visible, setVisible] = useState(false);
-    const [error, setError] = useState<false | Error>(false);
+    const [isScanning, setIsScanning] = React.useState(false);
 
-    const codeReader = new BrowserQRCodeReader();
+    const startScanning = async () => {
+        try {
+            setIsScanning(true);
 
-    const scanForQrCode = async () => {
-        // https://www.npmjs.com/package/@zxing/browser
+            // Start scanning with native UI
+            const result = await CapacitorBarcodeScanner.scanBarcode({
+                scanInstructions: 'Point your camera at a QR code',
+                scanButton: false,
+                scanText: 'Scanning...',
+                hint: CapacitorBarcodeScannerTypeHint.QR_CODE,
 
-        const controls = await codeReader.decodeFromVideoDevice(
-            // This is the video input device ID
-            // If undefined, app will use the user's default device
-            undefined,
-            'test-area-qr-code-webcam',
-            (result: Result | ZxingResult | undefined, error, controls) => {
-                if (error) {
-                    // If an error is raised
-                    if (
-                        error instanceof NotFoundException ||
-                        error instanceof FormatException ||
-                        error instanceof ChecksumException
-                    ) {
-                        // These are the three subclasses of the ReaderException class in original Java implementation
-                        // https://zxing.github.io/zxing/apidocs/com/google/zxing/ReaderException.html
+                // Force back camera for better quality
+                cameraDirection: CapacitorBarcodeScannerCameraDirection.BACK,
 
-                        // NotFoundException error
-                        // https://zxing.github.io/zxing/apidocs/com/google/zxing/NotFoundException.html
-                        // The camera is scanning for a QR code every 0.5s
-                        // It throws this error if it doesn't find one
+                // Adaptive orientation for better detection
+                scanOrientation:
+                    CapacitorBarcodeScannerScanOrientation.ADAPTIVE,
 
-                        // FormatException
-                        // https://zxing.github.io/zxing/apidocs/com/google/zxing/FormatException.html
-                        // This can occur if the camera reads a non-QR code, or misreads a QR code
-                        // In either case, we want to keep scanning
+                ...(Capacitor.getPlatform() === 'web' && {
+                    web: {
+                        // Lower FPS for more processing time per frame
+                        scannerFPS: 17,
+                        // Allow camera selection for better quality
+                        showCameraSelection: true,
+                    },
+                }),
+            });
 
-                        // ChecksumException
-                        // https://zxing.github.io/zxing/apidocs/com/google/zxing/ChecksumException.html
-                        // In this case, it is not returning anything, so just keep scanning until you get it right
-                        // This happens when the camera misreads a barcode even if the checksum was good
-                        // Since no result is returned in this case, we want to keep scanning and ignore error
-                        return;
-                    }
-                    // Other errors come from input device, permissions
-                    // These are issues where the user should be notified that the scanning
-                    // ain't gonna work
-                    console.error(`Error scanning for QR code`, error);
-                    // The error will be displayed in the modal area
-                    setError(error);
-
-                    // Stop scanning
-                    return controls.stop();
-                }
-
-                if (
-                    typeof (result as unknown as ZxingResult)?.text !==
-                    'undefined'
-                ) {
-                    // Pass the result to the Send To input field
-                    // We will pass the result of any scanned QR code
-                    // and allow validation in SendXec and SendToken to handle
-                    onScan(
-                        (result as unknown as ZxingResult)
-                            .text as unknown as React.ChangeEvent<HTMLInputElement>,
-                    );
-                    // Stop the camera
-                    controls.stop();
-                    // Hide the scanning modal
-                    return setVisible(false);
-                }
-            },
-        );
-        // Add to state so you can call controls.stop() if the user closes the modal
-        setCodeReaderControls(controls);
+            if (result.ScanResult) {
+                console.log('QR Code detected:', result.ScanResult);
+                onScan(result.ScanResult);
+            }
+            // If no result, user cancelled or no QR code found
+        } catch (err) {
+            console.error('Failed to start QR scanner:', err);
+            // Close on any error (permission denied, etc.)
+        } finally {
+            setIsScanning(false);
+        }
     };
 
-    useEffect(() => {
-        if (!visible) {
-            setError(false);
-            if (
-                codeReaderControls !== null &&
-                typeof codeReaderControls !== 'undefined'
-            ) {
-                codeReaderControls.stop();
-            }
-        } else {
-            scanForQrCode();
-        }
-    }, [visible]);
-
     return (
-        <>
-            <StyledScanQRCode
-                title="Scan QR Code"
-                {...otherProps}
-                onClick={() => setVisible(!visible)}
-            >
-                <QRCodeIcon />
-            </StyledScanQRCode>
-            {visible === true && (
-                <Modal
-                    handleCancel={() => setVisible(false)}
-                    showButtons={false}
-                    height={250}
-                >
-                    {error ? (
-                        <Alert>{`Error in QR scanner: ${error}.\n\nPlease ensure your camera is not in use.`}</Alert>
-                    ) : (
-                        <QRPreview
-                            title="Video Preview"
-                            id="test-area-qr-code-webcam"
-                        ></QRPreview>
-                    )}
-                </Modal>
-            )}
-        </>
+        <StyledScanQRCode
+            title="Scan QR Code"
+            disabled={isScanning}
+            {...otherProps}
+            onClick={startScanning}
+        >
+            <QRCodeIcon />
+        </StyledScanQRCode>
     );
 };
 

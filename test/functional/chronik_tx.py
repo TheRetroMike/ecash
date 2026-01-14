@@ -46,7 +46,7 @@ class ChronikTxTest(BitcoinTestFramework):
         assert_equal(chronik.tx("123").err(400).msg, "400: Not a txid: 123")
         assert_equal(chronik.tx("1234f").err(400).msg, "400: Not a txid: 1234f")
         assert_equal(
-            chronik.tx("00" * 31).err(400).msg, f'400: Not a txid: {"00" * 31}'
+            chronik.tx("00" * 31).err(400).msg, f"400: Not a txid: {'00' * 31}"
         )
         assert_equal(chronik.tx("01").err(400).msg, "400: Not a txid: 01")
         assert_equal(
@@ -55,7 +55,7 @@ class ChronikTxTest(BitcoinTestFramework):
 
         assert_equal(
             chronik.tx("00" * 32).err(404).msg,
-            f'404: Transaction {"00" * 32} not found in the index',
+            f"404: Transaction {'00' * 32} not found in the index",
         )
 
         from test_framework.chronik.test_data import genesis_cb_tx
@@ -206,18 +206,18 @@ class ChronikTxTest(BitcoinTestFramework):
             chronik.tx(txid2).err(404).msg,
             f"404: Transaction {txid2} not found in the index",
         )
-        proto_tx2.txid = bytes.fromhex(conflict_tx.hash)[::-1]
+        proto_tx2.txid = bytes.fromhex(conflict_tx.txid_hex)[::-1]
         proto_tx2.lock_time = 13
         proto_tx2.time_first_seen = 0
         proto_tx2.block.CopyFrom(
             pb.BlockMetadata(
-                hash=bytes.fromhex(block.hash)[::-1],
+                hash=bytes.fromhex(block.hash_hex)[::-1],
                 height=103,
                 timestamp=1333333500,
             )
         )
 
-        assert_equal(chronik.tx(conflict_tx.hash).ok(), proto_tx2)
+        assert_equal(chronik.tx(conflict_tx.txid_hex).ok(), proto_tx2)
 
 
 if __name__ == "__main__":

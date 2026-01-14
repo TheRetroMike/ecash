@@ -22,10 +22,10 @@ PACKAGES=(
   clang-tools-16
   cmake
   curl
-  default-jdk
   devscripts
   doxygen
   dput
+  e2fsprogs
   g++-aarch64-linux-gnu
   g++-mingw-w64
   gcc-aarch64-linux-gnu
@@ -45,6 +45,7 @@ PACKAGES=(
   libboost-dev
   libbz2-dev
   libcap-dev
+  libclang-dev
   libdb++-dev
   libdb-dev
   libevent-dev
@@ -104,7 +105,9 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y $(join_by ' ' "${PACKAGES[@]}"
 mkdir -p /opt
 pushd /opt
 # Pinpoint the version to the latest tag at the time of writing
-git clone --depth 1 --branch 2024.19 https://we.phorge.it/source/arcanist.git
+# We use the github mirror for now:
+# https://we.phorge.it/phame/post/view/8/anonymous_cloning_disabled_on_phorge.it/
+git clone --depth 1 --branch 2024.19 https://github.com/phorgeit/arcanist.git
 git config --system --add safe.directory /opt/arcanist
 echo "export PATH=\"/opt/arcanist/bin:\$PATH\"" >> ~/.bashrc
 popd
@@ -114,6 +117,7 @@ popd
 update-alternatives --install /usr/bin/clang clang "$(command -v clang-16)" 100
 update-alternatives --install /usr/bin/clang++ clang++ "$(command -v clang++-16)" 100
 update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer "$(command -v llvm-symbolizer-16)" 100
+update-alternatives --install /usr/bin/llvm-config llvm-config "$(command -v llvm-config-16)" 100
 
 # Use the mingw posix variant
 update-alternatives --set x86_64-w64-mingw32-g++ $(command -v x86_64-w64-mingw32-g++-posix)
@@ -131,7 +135,7 @@ pip3 install pytest
 # For en/-decoding protobuf messages
 pip3 install protobuf
 # For security-check.py and symbol-check.py
-pip3 install "lief==0.13.2"
+pip3 install "lief==0.16.6"
 # For Chronik WebSocket endpoint
 pip3 install websocket-client
 
@@ -152,18 +156,21 @@ pip3 install -r "${SCRIPT_DIR}/../../electrum/contrib/requirements/requirements-
 pip3 install -r "${SCRIPT_DIR}/../../electrum/contrib/requirements/requirements-hw.txt"
 
 # Required python linters
-pip3 install black==24.4.2 isort==5.6.4 mypy==0.910 flynt==0.78 flake8==6.0.0 flake8-builtins==2.5.0 flake8-comprehensions==3.14.0 djlint==1.34.1
+pip3 install ruff==0.14.4 mypy==0.910 djlint==1.34.1
 echo "export PATH=\"$(python3 -m site --user-base)/bin:\$PATH\"" >> ~/.bashrc
 
-# Install npm v10.x and nodejs v20.x
-wget https://deb.nodesource.com/setup_20.x -O nodesetup.sh
-echo "dd3bc508520fcdfdc8c4360902eac90cba411a7e59189a80fb61fcbea8f4199c nodesetup.sh" | sha256sum -c
+# Install nodejs v22.x (includes npm v10.x)
+wget https://deb.nodesource.com/setup_22.x -O nodesetup.sh
+echo "02983a54150ea7e5072bbb06b655be7a8c628e4556e85fb0942f719ec50a1d3a nodesetup.sh" | sha256sum -c
 chmod +x nodesetup.sh
 ./nodesetup.sh
 apt-get install -y nodejs
 
-# Install nyc for mocha unit test reporting
-npm i -g nyc
+# Enable corepack for pnpm
+corepack enable
+corepack prepare pnpm@10.24.0 --activate
+
+# nyc is installed as a dev dependency in the root package.json and accessed via pnpm exec
 
 # Install Rust stable 1.87.0 and nightly from the 2023-12-29
 curl -sSf https://static.rust-lang.org/rustup/archive/1.26.0/x86_64-unknown-linux-gnu/rustup-init -o rustup-init

@@ -3,12 +3,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 import { Bytes } from './io/bytes.js';
-import { fromHexRev } from './io/hex.js';
-import { writeVarSize } from './io/varsize.js';
+import { fromHexRev, toHexRev, fromHex, toHex } from './io/hex.js';
+import { writeVarSize, readVarSize } from './io/varsize.js';
 import { Writer } from './io/writer.js';
 import { WriterBytes } from './io/writerbytes.js';
 import { WriterLength } from './io/writerlength.js';
 import { Script } from './script.js';
+import { sha256d } from './hash.js';
 
 /**
  * Default value for nSequence of inputs if left undefined; this opts out of
@@ -97,6 +98,11 @@ export class Tx {
         return writerBytes.data;
     }
 
+    /** Serialize the tx to a hex string */
+    public toHex(): string {
+        return toHex(this.ser());
+    }
+
     /** Calculate the serialized size of the tx */
     public serSize(): number {
         const writerLength = new WriterLength();
@@ -116,6 +122,58 @@ export class Tx {
             writeTxOutput(output, writer);
         }
         writer.putU32(this.locktime);
+    }
+
+    /** Deserialize a Tx from a Uint8Array */
+    public static deser(data: Uint8Array): Tx {
+        const bytes = new Bytes(data);
+        const version = bytes.readU32();
+        const numInputs = readVarSize(bytes);
+        const inputs: TxInput[] = [];
+        for (let i = 0; i < numInputs; ++i) {
+            // Read OutPoint
+            const txid = bytes.readBytes(32);
+            const outIdx = bytes.readU32();
+            // Read script
+            const script = Script.readWithSize(bytes);
+            // Read sequence
+            const sequence = bytes.readU32();
+            inputs.push({
+                prevOut: {
+                    txid,
+                    outIdx,
+                },
+                script,
+                sequence,
+            });
+        }
+        const numOutputs = readVarSize(bytes);
+        const outputs: TxOutput[] = [];
+        for (let i = 0; i < numOutputs; ++i) {
+            outputs.push(readTxOutput(bytes));
+        }
+        const locktime = bytes.readU32();
+        return new Tx({
+            version,
+            inputs,
+            outputs,
+            locktime,
+        });
+    }
+
+    /** Deserialize a Tx from a hex string */
+    public static fromHex(hex: string): Tx {
+        return Tx.deser(fromHex(hex));
+    }
+
+    /**
+     * Compute the transaction ID (TxId) as a hex string (little-endian).
+     * This follows the eCash convention: the TxId is the double SHA256 of the
+     * serialized transaction, returned as a hex string in little-endian (reversed) order.
+     * See the node src/primitives/txid.h for more details.
+     */
+    public txid(): string {
+        return toHexRev(sha256d(this.ser()));
     }
 }
 

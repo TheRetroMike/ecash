@@ -51,6 +51,11 @@ describe('<OnBoarding />', () => {
             localforage,
         );
 
+        mockedChronik.setTxHistoryByAddress(
+            'ecash:qrj4phtd5fyz024uvstcmuf06urmhhgjvv5d0ammua',
+            [],
+        );
+
         render(<CashtabTestWrapper ecc={ecc} chronik={mockedChronik} />);
 
         // Wait for the app to load
@@ -77,13 +82,21 @@ describe('<OnBoarding />', () => {
 
         // New wallet is added in localforage
         const walletsAfterAdd = await localforage.getItem('wallets');
-        expect(walletsAfterAdd[walletsAfterAdd.length - 1].name).toBe('qrj4p');
+        expect(walletsAfterAdd[walletsAfterAdd.length - 1].name).toBe(
+            'qrj...mua',
+        );
     });
     it('We can import a wallet', async () => {
         // localforage defaults
         const mockedChronik = await initializeCashtabStateForTests(
             false,
             localforage,
+        );
+
+        // Set empty tx history for the wallet
+        mockedChronik.setTxHistoryByAddress(
+            'ecash:qzxep3zqcpnuwzx5krsv9hgczv274v4yd50sl0hl7c',
+            [],
         );
 
         render(<CashtabTestWrapper ecc={ecc} chronik={mockedChronik} />);
@@ -145,10 +158,13 @@ describe('<OnBoarding />', () => {
         // Click import
         await userEvent.click(importBtn);
 
+        // A spinner shows and the button is disabled while the wallet imports
+        expect(importBtn).toBeDisabled();
+
         // The wallet is in localforage
         const walletsAfterImport = await localforage.getItem('wallets');
         expect(walletsAfterImport[walletsAfterImport.length - 1].name).toBe(
-            'qzxep',
+            'qzx...l7c',
         );
 
         // The modal will be closed after a successful import

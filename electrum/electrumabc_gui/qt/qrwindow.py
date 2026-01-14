@@ -22,37 +22,46 @@
 # ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+from __future__ import annotations
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
+from typing import TYPE_CHECKING
 
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt
+
+from electrumabc.amount import format_amount
 from electrumabc.constants import PROJECT_NAME
 from electrumabc.i18n import _
+from electrumabc.simple_config import SimpleConfig
 from electrumabc.util import Weak
 
 from .qrcodewidget import QRCodeWidget, copy_to_clipboard, save_to_file
 from .util import Buttons, MessageBoxMixin, WWLabel
 
+if TYPE_CHECKING:
+    from .main_window import ElectrumWindow
+
 
 class QRWindow(QtWidgets.QWidget, MessageBoxMixin):
-    def __init__(self):
+    def __init__(self, config: SimpleConfig):
         # Top-level window.
         super().__init__()
         self.setWindowTitle(f"{PROJECT_NAME} - " + _("Payment Request"))
         self.label = ""
         self.amount = 0
-        self.setFocusPolicy(Qt.NoFocus)
+        self.config = config
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSizePolicy(
-            QtWidgets.QSizePolicy.MinimumExpanding,
-            QtWidgets.QSizePolicy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
         )
 
         main_box = QtWidgets.QHBoxLayout(self)
         main_box.setContentsMargins(12, 12, 12, 12)
         self.qrw = QRCodeWidget()
         self.qrw.setSizePolicy(
-            QtWidgets.QSizePolicy.MinimumExpanding,
-            QtWidgets.QSizePolicy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
         )
         main_box.addWidget(self.qrw, 2)
 
@@ -87,11 +96,11 @@ class QRWindow(QtWidgets.QWidget, MessageBoxMixin):
         weakQ = Weak.ref(self.qrw)
         weakBut = Weak.ref(copyBut)
         copyBut.clicked.connect(lambda: copy_to_clipboard(weakQ(), weakBut()))
-        saveBut.clicked.connect(lambda: save_to_file(weakQ(), weakSelf()))
+        saveBut.clicked.connect(lambda: save_to_file(weakQ(), weakSelf(), self.config))
 
     def set_content(
         self,
-        win,
+        win: ElectrumWindow,
         address_text,
         amount,
         message,
@@ -107,7 +116,9 @@ class QRWindow(QtWidgets.QWidget, MessageBoxMixin):
             )
         self.address_label.setText(address_text)
         if amount:
-            amount_text = "{} {}".format(win.format_amount(amount), win.base_unit())
+            amount_text = "{} {}".format(
+                format_amount(amount, win.config), win.base_unit()
+            )
         else:
             amount_text = ""
         self.amount_label.setText(amount_text)

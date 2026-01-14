@@ -6,7 +6,7 @@
 from test_framework.messages import CTransaction, FromHex
 from test_framework.p2p import P2PDataStore
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import assert_equal, sync_txindex
 from test_framework.wallet import MiniWallet
 
 
@@ -23,9 +23,7 @@ class GetTransactionStatusTest(BitcoinTestFramework):
         self.generate(wallet, 2)
 
         def from_wallet_tx(wallet_tx):
-            tx_obj = FromHex(CTransaction(), wallet_tx["hex"])
-            tx_obj.rehash()
-            return tx_obj
+            return FromHex(CTransaction(), wallet_tx["hex"])
 
         self.log.info("Tx doesn't exist in any memory pool")
         assert_equal(node.gettransactionstatus("0" * 64)["pool"], "none")
@@ -80,7 +78,7 @@ class GetTransactionStatusTest(BitcoinTestFramework):
         self.log.info("Check the block field when the txindex is enabled")
 
         self.restart_node(0, extra_args=["-txindex=1"])
-        self.wait_until(lambda: node.getindexinfo("txindex")["txindex"]["synced"])
+        sync_txindex(self, node)
         assert_equal(node.gettransactionstatus(mempool_tx["txid"])["block"], tip)
 
         # A non-mined tx will return none

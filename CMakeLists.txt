@@ -7,7 +7,7 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE
 )
 
 project(bitcoin-abc
-	VERSION 0.31.5
+	VERSION 0.32.6
 	DESCRIPTION "Bitcoin ABC is a full node implementation of the eCash protocol."
 	HOMEPAGE_URL "https://www.bitcoinabc.org"
 )
@@ -27,7 +27,7 @@ set(PACKAGE_NAME "Bitcoin ABC")
 set(PACKAGE_BUGREPORT "https://github.com/Bitcoin-ABC/bitcoin-abc/issues")
 
 # Copyright
-set(COPYRIGHT_YEAR 2025)
+set(COPYRIGHT_YEAR 2026)
 set(COPYRIGHT_HOLDERS "The %s developers")
 set(COPYRIGHT_HOLDERS_SUBSTITUTION Bitcoin)
 string(REPLACE "%s" ${COPYRIGHT_HOLDERS_SUBSTITUTION} COPYRIGHT_HOLDERS_FINAL ${COPYRIGHT_HOLDERS})
@@ -138,11 +138,16 @@ if(ENABLE_COVERAGE)
 	add_custom_target_coverage(check-upgrade-activated-extended)
 endif()
 
-add_subdirectory(src)
 
-option(BUILD_BITCOIN_CHRONIK "Activate the Chronik indexer" OFF)
-option(BUILD_BITCOIN_CHRONIK_PLUGINS "Activate the plugin system for Chronik" OFF)
-if(BUILD_BITCOIN_CHRONIK)
+include(Deprecation)
+deprecate_build_flag(BUILD_BITCOIN_CHRONIK BUILD_CHRONIK)
+deprecate_build_flag(BUILD_BITCOIN_CHRONIK_PLUGINS BUILD_CHRONIK_PLUGINS)
+
+option(BUILD_CHRONIK "Activate the Chronik indexer" OFF)
+option(BUILD_CHRONIK_PLUGINS "Activate the plugin system for Chronik" OFF)
+
+add_subdirectory(src)
+if(BUILD_CHRONIK)
 	add_subdirectory(chronik)
 endif()
 
@@ -152,5 +157,10 @@ add_subdirectory(electrum)
 
 add_subdirectory(contrib)
 add_subdirectory(doc)
+
+option(BUILD_PROOF_MANAGER_CLI "Build the proof-manager-cli tool" OFF)
+if (BUILD_PROOF_MANAGER_CLI)
+    add_subdirectory(apps/proof-manager-cli)
+endif()
 
 include(PackageOptions.cmake)

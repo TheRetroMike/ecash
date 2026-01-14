@@ -40,14 +40,14 @@ const Wrapper = styled.div`
 // not specified here
 // It is a prop of the component, we just happen to not have conditional style rules
 // based on this prop
-const Finalized = styled.svg<{ displayed: boolean; title: string }>`
-    display: ${props => (props.displayed ? 'inherit' : 'none')};
+const Finalized = styled.svg<{ title: string }>`
     border-radius: 50%;
     stroke-width: 2;
     stroke: #fff;
     stroke-miterlimit: 10;
     box-shadow: inset 0px 0px 0px ${props => props.theme.secondaryText};
-    animation: ${fill} 0.4s ease-in-out 0.4s forwards,
+    animation:
+        ${fill} 0.4s ease-in-out 0.4s forwards,
         ${scale} 0.3s ease-in-out 0.9s both;
 `;
 
@@ -71,17 +71,11 @@ const Check = styled.path`
     stroke: ${props => props.theme.primaryBackground};
 `;
 
-interface AvalancheFinalizedProps {
-    displayed: boolean;
-}
-export const AvalancheFinalized: React.FC<AvalancheFinalizedProps> = ({
-    displayed = true,
-}) => {
+export const AvalancheFinalized: React.FC = () => {
     return (
         <Wrapper>
             <Finalized
                 title="Finalized by Avalanche"
-                displayed={displayed}
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 52 52"
             >

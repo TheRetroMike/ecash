@@ -7,7 +7,10 @@
 
 #include <crypto/chacha20.h>
 #include <crypto/common.h>
+#include <span.h>
+#include <support/cleanse.h>
 
+#include <algorithm>
 #include <cstring>
 
 constexpr static inline uint32_t rotl32(uint32_t v, int c) {
@@ -26,95 +29,84 @@ constexpr static inline uint32_t rotl32(uint32_t v, int c) {
         b = rotl32(b ^ c, 7);                                                  \
     } while (0)
 
-static const uint8_t sigma[] = "expand 32-byte k";
-static const uint8_t tau[] = "expand 16-byte k";
+#define REPEAT10(a)                                                            \
+    do {                                                                       \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+        {a};                                                                   \
+    } while (0)
 
-void ChaCha20::SetKey(const uint8_t *k, size_t keylen) {
-    const uint8_t *constants;
-
-    input[4] = ReadLE32(k + 0);
-    input[5] = ReadLE32(k + 4);
-    input[6] = ReadLE32(k + 8);
-    input[7] = ReadLE32(k + 12);
-    if (keylen == 32) {
-        // recommended
-        k += 16;
-        constants = sigma;
-    } else {
-        // keylen == 16
-        constants = tau;
-    }
-    input[8] = ReadLE32(k + 0);
-    input[9] = ReadLE32(k + 4);
-    input[10] = ReadLE32(k + 8);
-    input[11] = ReadLE32(k + 12);
-    input[0] = ReadLE32(constants + 0);
-    input[1] = ReadLE32(constants + 4);
-    input[2] = ReadLE32(constants + 8);
-    input[3] = ReadLE32(constants + 12);
-    input[12] = 0;
-    input[13] = 0;
-    input[14] = 0;
-    input[15] = 0;
+void ChaCha20Aligned::SetKey(Span<const std::byte> key) noexcept {
+    // TODO: after we switch from Span to std::span, we can enforce this at
+    //       compile time via std::span<const std::byte, KEYLEN>
+    assert(key.size() == KEYLEN);
+    input[0] = ReadLE32(UCharCast(key.data() + 0));
+    input[1] = ReadLE32(UCharCast(key.data() + 4));
+    input[2] = ReadLE32(UCharCast(key.data() + 8));
+    input[3] = ReadLE32(UCharCast(key.data() + 12));
+    input[4] = ReadLE32(UCharCast(key.data() + 16));
+    input[5] = ReadLE32(UCharCast(key.data() + 20));
+    input[6] = ReadLE32(UCharCast(key.data() + 24));
+    input[7] = ReadLE32(UCharCast(key.data() + 28));
+    input[8] = 0;
+    input[9] = 0;
+    input[10] = 0;
+    input[11] = 0;
 }
 
-ChaCha20::ChaCha20() {
-    memset(input, 0, sizeof(input));
+ChaCha20Aligned::~ChaCha20Aligned() {
+    memory_cleanse(input, sizeof(input));
 }
 
-ChaCha20::ChaCha20(const uint8_t *k, size_t keylen) {
-    SetKey(k, keylen);
+ChaCha20Aligned::ChaCha20Aligned(Span<const std::byte> key) noexcept {
+    SetKey(key);
 }
 
-void ChaCha20::SetIV(uint64_t iv) {
-    input[14] = iv;
-    input[15] = iv >> 32;
+void ChaCha20Aligned::Seek(Nonce96 nonce, uint32_t block_counter) noexcept {
+    input[8] = block_counter;
+    input[9] = nonce.first;
+    input[10] = nonce.second;
+    input[11] = nonce.second >> 32;
 }
 
-void ChaCha20::Seek(uint64_t pos) {
-    input[12] = pos;
-    input[13] = pos >> 32;
-}
+inline void ChaCha20Aligned::Keystream(Span<std::byte> output) noexcept {
+    uint8_t *c = UCharCast(output.data());
+    size_t blocks = output.size() / BLOCKLEN;
+    assert(blocks * BLOCKLEN == output.size());
 
-void ChaCha20::Keystream(uint8_t *c, size_t bytes) {
     uint32_t x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14,
         x15;
-    uint32_t j0, j1, j2, j3, j4, j5, j6, j7, j8, j9, j10, j11, j12, j13, j14,
-        j15;
-    uint8_t *ctarget = nullptr;
-    uint8_t tmp[64];
-    unsigned int i;
+    uint32_t j4, j5, j6, j7, j8, j9, j10, j11, j12, j13, j14, j15;
 
-    if (!bytes) {
+    if (!blocks) {
         return;
     }
 
-    j0 = input[0];
-    j1 = input[1];
-    j2 = input[2];
-    j3 = input[3];
-    j4 = input[4];
-    j5 = input[5];
-    j6 = input[6];
-    j7 = input[7];
-    j8 = input[8];
-    j9 = input[9];
-    j10 = input[10];
-    j11 = input[11];
-    j12 = input[12];
-    j13 = input[13];
-    j14 = input[14];
-    j15 = input[15];
+    j4 = input[0];
+    j5 = input[1];
+    j6 = input[2];
+    j7 = input[3];
+    j8 = input[4];
+    j9 = input[5];
+    j10 = input[6];
+    j11 = input[7];
+    j12 = input[8];
+    j13 = input[9];
+    j14 = input[10];
+    j15 = input[11];
 
     for (;;) {
-        if (bytes < 64) {
-            ctarget = c;
-            c = tmp;
-        }
-        x0 = j0;
-        x1 = j1;
-        x2 = j2;
-        x3 = j3;
+        x0 = 0x61707865;
+        x1 = 0x3320646e;
+        x2 = 0x79622d32;
+        x3 = 0x6b206574;
         x4 = j4;
         x5 = j5;
         x6 = j6;
@@ -127,20 +119,17 @@ void ChaCha20::Keystream(uint8_t *c, size_t bytes) {
         x13 = j13;
         x14 = j14;
         x15 = j15;
-        for (i = 20; i > 0; i -= 2) {
-            QUARTERROUND(x0, x4, x8, x12);
-            QUARTERROUND(x1, x5, x9, x13);
-            QUARTERROUND(x2, x6, x10, x14);
-            QUARTERROUND(x3, x7, x11, x15);
-            QUARTERROUND(x0, x5, x10, x15);
-            QUARTERROUND(x1, x6, x11, x12);
-            QUARTERROUND(x2, x7, x8, x13);
-            QUARTERROUND(x3, x4, x9, x14);
-        }
-        x0 += j0;
-        x1 += j1;
-        x2 += j2;
-        x3 += j3;
+
+        // The 20 inner ChaCha20 rounds are unrolled here for performance.
+        REPEAT10(QUARTERROUND(x0, x4, x8, x12); QUARTERROUND(x1, x5, x9, x13);
+                 QUARTERROUND(x2, x6, x10, x14); QUARTERROUND(x3, x7, x11, x15);
+                 QUARTERROUND(x0, x5, x10, x15); QUARTERROUND(x1, x6, x11, x12);
+                 QUARTERROUND(x2, x7, x8, x13); QUARTERROUND(x3, x4, x9, x14););
+
+        x0 += 0x61707865;
+        x1 += 0x3320646e;
+        x2 += 0x79622d32;
+        x3 += 0x6b206574;
         x4 += j4;
         x5 += j5;
         x6 += j6;
@@ -176,66 +165,50 @@ void ChaCha20::Keystream(uint8_t *c, size_t bytes) {
         WriteLE32(c + 56, x14);
         WriteLE32(c + 60, x15);
 
-        if (bytes <= 64) {
-            if (bytes < 64) {
-                for (i = 0; i < bytes; ++i) {
-                    ctarget[i] = c[i];
-                }
-            }
-            input[12] = j12;
-            input[13] = j13;
+        if (blocks == 1) {
+            input[8] = j12;
+            input[9] = j13;
             return;
         }
-        bytes -= 64;
-        c += 64;
+        blocks -= 1;
+        c += BLOCKLEN;
     }
 }
 
-void ChaCha20::Crypt(const uint8_t *m, uint8_t *c, size_t bytes) {
+inline void ChaCha20Aligned::Crypt(Span<const std::byte> in_bytes,
+                                   Span<std::byte> out_bytes) noexcept {
+    assert(in_bytes.size() == out_bytes.size());
+    const uint8_t *m = UCharCast(in_bytes.data());
+    uint8_t *c = UCharCast(out_bytes.data());
+    size_t blocks = out_bytes.size() / BLOCKLEN;
+    assert(blocks * BLOCKLEN == out_bytes.size());
+
     uint32_t x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14,
         x15;
-    uint32_t j0, j1, j2, j3, j4, j5, j6, j7, j8, j9, j10, j11, j12, j13, j14,
-        j15;
-    uint8_t *ctarget = nullptr;
-    uint8_t tmp[64];
-    unsigned int i;
+    uint32_t j4, j5, j6, j7, j8, j9, j10, j11, j12, j13, j14, j15;
 
-    if (!bytes) {
+    if (!blocks) {
         return;
     }
 
-    j0 = input[0];
-    j1 = input[1];
-    j2 = input[2];
-    j3 = input[3];
-    j4 = input[4];
-    j5 = input[5];
-    j6 = input[6];
-    j7 = input[7];
-    j8 = input[8];
-    j9 = input[9];
-    j10 = input[10];
-    j11 = input[11];
-    j12 = input[12];
-    j13 = input[13];
-    j14 = input[14];
-    j15 = input[15];
+    j4 = input[0];
+    j5 = input[1];
+    j6 = input[2];
+    j7 = input[3];
+    j8 = input[4];
+    j9 = input[5];
+    j10 = input[6];
+    j11 = input[7];
+    j12 = input[8];
+    j13 = input[9];
+    j14 = input[10];
+    j15 = input[11];
 
     for (;;) {
-        if (bytes < 64) {
-            // if m has fewer than 64 bytes available, copy m to tmp and
-            // read from tmp instead
-            for (i = 0; i < bytes; ++i) {
-                tmp[i] = m[i];
-            }
-            m = tmp;
-            ctarget = c;
-            c = tmp;
-        }
-        x0 = j0;
-        x1 = j1;
-        x2 = j2;
-        x3 = j3;
+        x0 = 0x61707865;
+        x1 = 0x3320646e;
+        x2 = 0x79622d32;
+        x3 = 0x6b206574;
         x4 = j4;
         x5 = j5;
         x6 = j6;
@@ -248,20 +221,17 @@ void ChaCha20::Crypt(const uint8_t *m, uint8_t *c, size_t bytes) {
         x13 = j13;
         x14 = j14;
         x15 = j15;
-        for (i = 20; i > 0; i -= 2) {
-            QUARTERROUND(x0, x4, x8, x12);
-            QUARTERROUND(x1, x5, x9, x13);
-            QUARTERROUND(x2, x6, x10, x14);
-            QUARTERROUND(x3, x7, x11, x15);
-            QUARTERROUND(x0, x5, x10, x15);
-            QUARTERROUND(x1, x6, x11, x12);
-            QUARTERROUND(x2, x7, x8, x13);
-            QUARTERROUND(x3, x4, x9, x14);
-        }
-        x0 += j0;
-        x1 += j1;
-        x2 += j2;
-        x3 += j3;
+
+        // The 20 inner ChaCha20 rounds are unrolled here for performance.
+        REPEAT10(QUARTERROUND(x0, x4, x8, x12); QUARTERROUND(x1, x5, x9, x13);
+                 QUARTERROUND(x2, x6, x10, x14); QUARTERROUND(x3, x7, x11, x15);
+                 QUARTERROUND(x0, x5, x10, x15); QUARTERROUND(x1, x6, x11, x12);
+                 QUARTERROUND(x2, x7, x8, x13); QUARTERROUND(x3, x4, x9, x14););
+
+        x0 += 0x61707865;
+        x1 += 0x3320646e;
+        x2 += 0x79622d32;
+        x3 += 0x6b206574;
         x4 += j4;
         x5 += j5;
         x6 += j6;
@@ -314,18 +284,110 @@ void ChaCha20::Crypt(const uint8_t *m, uint8_t *c, size_t bytes) {
         WriteLE32(c + 56, x14);
         WriteLE32(c + 60, x15);
 
-        if (bytes <= 64) {
-            if (bytes < 64) {
-                for (i = 0; i < bytes; ++i) {
-                    ctarget[i] = c[i];
-                }
-            }
-            input[12] = j12;
-            input[13] = j13;
+        if (blocks == 1) {
+            input[8] = j12;
+            input[9] = j13;
             return;
         }
-        bytes -= 64;
-        c += 64;
-        m += 64;
+        blocks -= 1;
+        c += BLOCKLEN;
+        m += BLOCKLEN;
+    }
+}
+
+void ChaCha20::Keystream(Span<std::byte> out) noexcept {
+    if (out.empty()) {
+        return;
+    }
+    if (m_bufleft) {
+        unsigned reuse = std::min<size_t>(m_bufleft, out.size());
+        std::copy(m_buffer.end() - m_bufleft,
+                  m_buffer.end() - m_bufleft + reuse, out.begin());
+        m_bufleft -= reuse;
+        out = out.subspan(reuse);
+    }
+    if (out.size() >= m_aligned.BLOCKLEN) {
+        size_t blocks = out.size() / m_aligned.BLOCKLEN;
+        m_aligned.Keystream(out.first(blocks * m_aligned.BLOCKLEN));
+        out = out.subspan(blocks * m_aligned.BLOCKLEN);
+    }
+    if (!out.empty()) {
+        m_aligned.Keystream(m_buffer);
+        std::copy(m_buffer.begin(), m_buffer.begin() + out.size(), out.begin());
+        m_bufleft = m_aligned.BLOCKLEN - out.size();
+    }
+}
+
+void ChaCha20::Crypt(Span<const std::byte> input,
+                     Span<std::byte> output) noexcept {
+    assert(input.size() == output.size());
+
+    if (!input.size()) {
+        return;
+    }
+    if (m_bufleft) {
+        unsigned reuse = std::min<size_t>(m_bufleft, input.size());
+        for (unsigned i = 0; i < reuse; i++) {
+            output[i] = input[i] ^ m_buffer[m_aligned.BLOCKLEN - m_bufleft + i];
+        }
+        m_bufleft -= reuse;
+        output = output.subspan(reuse);
+        input = input.subspan(reuse);
+    }
+    if (input.size() >= m_aligned.BLOCKLEN) {
+        size_t blocks = input.size() / m_aligned.BLOCKLEN;
+        m_aligned.Crypt(input.first(blocks * m_aligned.BLOCKLEN),
+                        output.first(blocks * m_aligned.BLOCKLEN));
+        output = output.subspan(blocks * m_aligned.BLOCKLEN);
+        input = input.subspan(blocks * m_aligned.BLOCKLEN);
+    }
+    if (!input.empty()) {
+        m_aligned.Keystream(m_buffer);
+        for (unsigned i = 0; i < input.size(); i++) {
+            output[i] = input[i] ^ m_buffer[i];
+        }
+        m_bufleft = m_aligned.BLOCKLEN - input.size();
+    }
+}
+
+ChaCha20::~ChaCha20() {
+    memory_cleanse(m_buffer.data(), m_buffer.size());
+}
+
+void ChaCha20::SetKey(Span<const std::byte> key) noexcept {
+    m_aligned.SetKey(key);
+    m_bufleft = 0;
+    memory_cleanse(m_buffer.data(), m_buffer.size());
+}
+
+FSChaCha20::FSChaCha20(Span<const std::byte> key,
+                       uint32_t rekey_interval) noexcept
+    : m_chacha20(key), m_rekey_interval(rekey_interval) {
+    // TODO: after we switch from Span to std::span, we can enforce this at
+    //       compile time via std::span<const std::byte, KEYLEN>
+    assert(key.size() == KEYLEN);
+}
+
+void FSChaCha20::Crypt(Span<const std::byte> input,
+                       Span<std::byte> output) noexcept {
+    assert(input.size() == output.size());
+
+    // Invoke internal stream cipher for actual encryption/decryption.
+    m_chacha20.Crypt(input, output);
+
+    // Rekey after m_rekey_interval encryptions/decryptions.
+    if (++m_chunk_counter == m_rekey_interval) {
+        // Get new key from the stream cipher.
+        std::byte new_key[KEYLEN];
+        m_chacha20.Keystream(new_key);
+        // Update its key.
+        m_chacha20.SetKey(new_key);
+        // Wipe the key (a copy remains inside m_chacha20, where it'll be wiped
+        // on the next rekey or on destruction).
+        memory_cleanse(new_key, sizeof(new_key));
+        // Set the nonce for the new section of output.
+        m_chacha20.Seek({0, ++m_rekey_counter}, 0);
+        // Reset the chunk counter.
+        m_chunk_counter = 0;
     }
 }

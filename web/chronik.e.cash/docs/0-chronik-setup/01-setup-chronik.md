@@ -11,13 +11,13 @@ This tutorial is about how to run a bitcoind instance with Chronik enabled.
 This requires a decent server and may take days to sync. Recommended for advanced users.
 You can already get started by using one of our pre-synced instances:
 
--   **If you want to know how to use `chronik-client` in your eCash apps**, go to [Chronik - JS/TS Client](/chronik-js/install).
+- **If you want to know how to use `chronik-client` in your eCash apps**, go to [Chronik - JS/TS Client](/chronik-js/install).
 
 :::
 
 ## Getting started
 
-Make sure you downloaded Bitcoin ABC Chronik in the [previous step](download). In there, you will find an executable `bitcoind`.
+Make sure you downloaded Bitcoin ABC Chronik in the [previous step](/chronik-setup/download). In there, you will find an executable `bitcoind`.
 
 To enable Chronik, simply pass `-chronik` as CLI argument:
 

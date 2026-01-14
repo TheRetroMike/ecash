@@ -5,8 +5,10 @@
 #ifndef BITCOIN_NODE_BLOCKSTORAGE_H
 #define BITCOIN_NODE_BLOCKSTORAGE_H
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -39,6 +41,9 @@ struct Params;
 namespace avalanche {
 class Processor;
 }
+namespace util {
+class SignalInterrupt;
+} // namespace util
 
 namespace node {
 
@@ -49,9 +54,16 @@ static const unsigned int UNDOFILE_CHUNK_SIZE = 0x100000; // 1 MiB
 /** The maximum size of a blk?????.dat file (since 0.8) */
 static const unsigned int MAX_BLOCKFILE_SIZE = 0x8000000; // 128 MiB
 
-/** Size of header written by WriteBlockToDisk before a serialized CBlock */
-static constexpr size_t BLOCK_SERIALIZATION_HEADER_SIZE =
-    CMessageHeader::MESSAGE_START_SIZE + sizeof(unsigned int);
+/** Size of header written by WriteBlock before a serialized CBlock */
+static constexpr size_t BLOCK_SERIALIZATION_HEADER_SIZE{
+    CMessageHeader::MESSAGE_START_SIZE + sizeof(unsigned int)};
+
+/**
+ * Total overhead when writing undo data: header (8 bytes) plus checksum (32
+ * bytes)
+ */
+static constexpr size_t UNDO_DATA_DISK_OVERHEAD{
+    BLOCK_SERIALIZATION_HEADER_SIZE + uint256::size()};
 
 extern std::atomic_bool fReindex;
 
@@ -125,9 +137,20 @@ private:
     /** Return false if undo file flushing fails. */
     [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false);
 
-    [[nodiscard]] bool FindBlockPos(FlatFilePos &pos, unsigned int nAddSize,
-                                    unsigned int nHeight, uint64_t nTime,
-                                    bool fKnown);
+    /**
+     * Helper function performing various preparations before a block can be
+     * saved to disk: Returns the correct position for the block to be saved,
+     * which may be in the current or a new block file depending on nAddSize.
+     * May flush the previous blockfile to disk if full, updates blockfile info,
+     * and checks if there is enough disk space to save the block.
+     *
+     * The nAddSize argument passed to this function should include not just the
+     * size of the serialized CBlock, but also the size of separator fields
+     * (BLOCK_SERIALIZATION_HEADER_SIZE).
+     */
+    [[nodiscard]] FlatFilePos FindNextBlockPos(unsigned int nAddSize,
+                                               unsigned int nHeight,
+                                               uint64_t nTime);
     [[nodiscard]] bool FlushChainstateBlockFile(int tip_height);
     bool FindUndoPos(BlockValidationState &state, int nFile, FlatFilePos &pos,
                      unsigned int nAddSize);
@@ -135,15 +158,7 @@ private:
     FlatFileSeq BlockFileSeq() const;
     FlatFileSeq UndoFileSeq() const;
 
-    FILE *OpenUndoFile(const FlatFilePos &pos, bool fReadOnly = false) const;
-
-    bool
-    WriteBlockToDisk(const CBlock &block, FlatFilePos &pos,
-                     const CMessageHeader::MessageMagic &messageStart) const;
-    bool
-    UndoWriteToDisk(const CBlockUndo &blockundo, FlatFilePos &pos,
-                    const BlockHash &hashBlock,
-                    const CMessageHeader::MessageMagic &messageStart) const;
+    AutoFile OpenUndoFile(const FlatFilePos &pos, bool fReadOnly = false) const;
 
     /**
      * Calculate the block/rev files to delete based on height specified
@@ -190,7 +205,7 @@ private:
     //!
     //! This data structure maintains separate blockfile number cursors for each
     //! BlockfileType. The ASSUMED state is initialized, when necessary, in
-    //! FindBlockPos().
+    //! FindNextBlockPos().
     //!
     //! The first element is the NORMAL cursor, second is ASSUMED.
     std::array<std::optional<BlockfileCursor>, BlockfileType::NUM_TYPES>
@@ -239,9 +254,11 @@ private:
 public:
     using Options = kernel::BlockManagerOpts;
 
-    explicit BlockManager(Options opts)
-        : m_prune_mode{opts.prune_target > 0}, m_opts{std::move(opts)} {};
+    explicit BlockManager(const util::SignalInterrupt &interrupt, Options opts)
+        : m_prune_mode{opts.prune_target > 0}, m_opts{std::move(opts)},
+          m_interrupt{interrupt} {};
 
+    const util::SignalInterrupt &m_interrupt;
     std::atomic<bool> m_importing{false};
 
     BlockMap m_block_index GUARDED_BY(cs_main);
@@ -302,16 +319,32 @@ public:
     /** Get block file info entry for one block file */
     CBlockFileInfo *GetBlockFileInfo(size_t n);
 
-    bool WriteUndoDataForBlock(const CBlockUndo &blockundo,
-                               BlockValidationState &state, CBlockIndex &block)
+    bool WriteBlockUndo(const CBlockUndo &blockundo,
+                        BlockValidationState &state, CBlockIndex &block)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /**
-     * Store block on disk. If dbp is not nullptr, then it provides the known
-     * position of the block within a block file on disk.
+     * Store block on disk and update block file statistics.
+     *
+     * @param[in]  block        the block to be stored
+     * @param[in]  nHeight      the height of the block
+     *
+     * @returns in case of success, the position to which the block was written
+     *          to
+     *          in case of an error, an empty FlatFilePos
      */
-    FlatFilePos SaveBlockToDisk(const CBlock &block, int nHeight,
-                                const FlatFilePos *dbp);
+    FlatFilePos WriteBlock(const CBlock &block, int nHeight);
+
+    /**
+     * Update blockfile info while processing a block during reindex. The block
+     * must be available on disk.
+     *
+     * @param[in]  block        the block being processed
+     * @param[in]  nHeight      the height of the block
+     * @param[in]  pos          the position of the serialized CBlock on disk
+     */
+    void UpdateBlockInfo(const CBlock &block, unsigned int nHeight,
+                         const FlatFilePos &pos);
 
     /** Whether running in -prune mode. */
     [[nodiscard]] bool IsPruneMode() const { return m_prune_mode; }
@@ -380,7 +413,7 @@ public:
 
     //! Check whether the block associated with this index entry is pruned or
     //! not.
-    bool IsBlockPruned(const CBlockIndex *pblockindex)
+    bool IsBlockPruned(const CBlockIndex &block) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Create or update a prune lock identified by its name
@@ -389,7 +422,8 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /** Open a block file (blk?????.dat) */
-    FILE *OpenBlockFile(const FlatFilePos &pos, bool fReadOnly = false) const;
+    AutoFile OpenBlockFile(const FlatFilePos &pos,
+                           bool fReadOnly = false) const;
 
     /** Translation to a filesystem path. */
     fs::path GetBlockPosFilename(const FlatFilePos &pos) const;
@@ -400,10 +434,11 @@ public:
     void UnlinkPrunedFiles(const std::set<int> &setFilesToPrune) const;
 
     /** Functions for disk access for blocks */
-    bool ReadBlockFromDisk(CBlock &block, const FlatFilePos &pos) const;
-    bool ReadBlockFromDisk(CBlock &block, const CBlockIndex &index) const;
-    bool UndoReadFromDisk(CBlockUndo &blockundo,
-                          const CBlockIndex &index) const;
+    bool ReadBlock(CBlock &block, const FlatFilePos &pos) const;
+    bool ReadBlock(CBlock &block, const CBlockIndex &index) const;
+    bool ReadRawBlock(std::vector<uint8_t> &block,
+                      const FlatFilePos &pos) const;
+    bool ReadBlockUndo(CBlockUndo &blockundo, const CBlockIndex &index) const;
 
     /** Functions for disk access for txs */
     bool ReadTxFromDisk(CMutableTransaction &tx, const FlatFilePos &pos) const;

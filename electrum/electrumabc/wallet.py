@@ -59,6 +59,7 @@ from weakref import ref
 
 from . import avalanche, bitcoin, coinchooser, keystore, mnemo, paymentrequest
 from .address import Address, PublicKey, Script
+from .amount import format_satoshis
 from .avalanche.proof import StakeAndSigningData
 from .bip32 import xpub_type
 from .bitcoin import ScriptType
@@ -111,7 +112,6 @@ from .util import (
     WalletFileException,
     bh2u,
     finalization_print_error,
-    format_satoshis,
     format_time,
     multisig_type,
     profiler,
@@ -1337,9 +1337,8 @@ class AbstractWallet(PrintError, SPVDelegate):
                             ":",
                             repr(e),
                         )
-                        if (
-                            not keep_running()
-                        ):  # in case we got a network timeout *and* the wallet was closed
+                        # in case we got a network timeout *and* the wallet was closed
+                        if not keep_running():
                             return
                         continue
                     if not keep_running():

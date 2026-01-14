@@ -4,6 +4,7 @@
 
 import mainLogo from 'assets/logo_primary.png';
 import tokenLogo from 'assets/logo_secondary.png';
+import { FEE_SATS_PER_KB_XEC_MINIMUM } from 'constants/transactions';
 
 interface AppConfig {
     name: string;
@@ -13,8 +14,7 @@ interface AppConfig {
     prefix: string;
     coingeckoId: string;
     fiatUpdateIntervalMs: number;
-    defaultFee: bigint;
-    minFee: bigint;
+    satsPerKb: number;
     dustSats: number;
     cashDecimals: number;
     fiatDecimals: number;
@@ -23,7 +23,8 @@ interface AppConfig {
     tokenTicker: string;
     tokenLogo: string; // path to png file
     localStorageMaxCharacters: number;
-    monitorExtension: false;
+    monitorExtension: boolean;
+    scriptIntegerBits: bigint;
     vipTokens: {
         grumpy: {
             tokenId: string;
@@ -51,8 +52,7 @@ const appConfig: AppConfig = {
     prefix: process.env.REACT_APP_TESTNET === 'true' ? 'ectest' : 'ecash',
     coingeckoId: 'ecash',
     fiatUpdateIntervalMs: 90000,
-    defaultFee: 2010n, // satoshis per kb
-    minFee: 1000n, // satoshis per kb
+    satsPerKb: FEE_SATS_PER_KB_XEC_MINIMUM,
     dustSats: 546,
     cashDecimals: 2,
     fiatDecimals: 2,
@@ -61,7 +61,8 @@ const appConfig: AppConfig = {
     tokenTicker: 'eToken',
     tokenLogo: tokenLogo,
     localStorageMaxCharacters: 24,
-    monitorExtension: false,
+    monitorExtension: true,
+    scriptIntegerBits: 64n,
     vipTokens: {
         grumpy: {
             tokenId:

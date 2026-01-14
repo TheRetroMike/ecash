@@ -126,7 +126,7 @@ private:
     /** Libevent event base */
     struct event_base *base;
     /** Connection to control socket */
-    struct bufferevent *b_conn;
+    struct bufferevent *b_conn{nullptr};
     /** Message being received */
     TorControlReply message;
     /** Response handlers */
@@ -138,7 +138,7 @@ private:
 };
 
 TorControlConnection::TorControlConnection(struct event_base *_base)
-    : base(_base), b_conn(nullptr) {}
+    : base(_base) {}
 
 TorControlConnection::~TorControlConnection() {
     if (b_conn) {
@@ -162,7 +162,7 @@ void TorControlConnection::readcb(struct bufferevent *bev, void *ctx) {
             continue;
         }
         // <status>(-|+| )<data><CRLF>
-        self->message.code = atoi(s.substr(0, 3));
+        self->message.code = LocaleIndependentAtoi<int>(s.substr(0, 3));
         self->message.lines.push_back(s.substr(4));
         // '-','+' or ' '
         char ch = s[3];
@@ -432,9 +432,9 @@ private:
     TorControlConnection conn;
     std::string private_key;
     std::string service_id;
-    bool reconnect;
+    bool reconnect{true};
     struct event *reconnect_ev;
-    float reconnect_timeout;
+    float reconnect_timeout{RECONNECT_TIMEOUT_START};
     CService service;
     const CService m_target;
     /** Cookie for SAFECOOKIE auth */
@@ -465,8 +465,7 @@ TorController::TorController(struct event_base *_base,
                              const std::string &tor_control_center,
                              const CService &target)
     : base(_base), m_tor_control_center(tor_control_center), conn(base),
-      reconnect(true), reconnect_ev(0),
-      reconnect_timeout(RECONNECT_TIMEOUT_START), m_target(target) {
+      m_target(target) {
     reconnect_ev = event_new(base, -1, 0, reconnect_cb, this);
     if (!reconnect_ev) {
         LogPrintf(
@@ -523,9 +522,8 @@ void TorController::add_onion_cb(TorControlConnection &_conn,
         }
         service = LookupNumeric(std::string(service_id + ".onion"),
                                 Params().GetDefaultPort());
-        LogPrintfCategory(BCLog::TOR,
-                          "Got service ID %s, advertising service %s\n",
-                          service_id, service.ToString());
+        LogInfo("Got tor service ID %s, advertising service %s\n", service_id,
+                service.ToString());
         if (WriteBinaryFile(GetPrivateKeyFile(), private_key)) {
             LogPrint(BCLog::TOR, "tor: Cached service private key to %s\n",
                      fs::PathToString(GetPrivateKeyFile()));

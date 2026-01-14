@@ -55,6 +55,8 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
             if "fees" in r:
                 r["fees"].pop("effective-feerate")
                 r["fees"].pop("effective-includes")
+            if "reject-details" in r:
+                r.pop("reject-details")
         assert_equal(result_expected, result_test)
         # Must not change mempool state
         assert_equal(self.nodes[0].getmempoolinfo()["size"], self.mempool_size)
@@ -123,7 +125,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
             )
         )["hex"]
         tx = FromHex(CTransaction(), raw_tx_0)
-        txid_0 = tx.rehash()
+        txid_0 = tx.txid_hex
         self.check_mempool_result(
             result_expected=[
                 {
@@ -154,7 +156,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": True,
                     "size": tx.billable_size(),
                     "fees": {"base": fee_expected},
@@ -194,7 +196,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "txn-mempool-conflict",
                 }
@@ -210,7 +212,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "missing-inputs",
                 }
@@ -270,7 +272,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": True,
                     "size": tx.billable_size(),
                     "fees": {"base": Decimal(100_000 - 50_000)},
@@ -288,7 +290,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-vout-empty",
                 }
@@ -302,7 +304,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-oversize",
                 }
@@ -316,7 +318,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-vout-negative",
                 }
@@ -332,7 +334,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-vout-toolarge",
                 }
@@ -347,7 +349,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-txouttotal-toolarge",
                 }
@@ -361,7 +363,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-inputs-duplicate",
                 }
@@ -375,7 +377,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-prevout-null",
                 }
@@ -393,7 +395,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-tx-coinbase",
                 }
@@ -406,7 +408,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         tx.nVersion = 3  # A version currently non-standard
         self.check_mempool_result(
             result_expected=[
-                {"txid": tx.rehash(), "allowed": False, "reject-reason": "version"}
+                {"txid": tx.txid_hex, "allowed": False, "reject-reason": "version"}
             ],
             rawtxs=[ToHex(tx)],
         )
@@ -414,7 +416,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         tx.vout[0].scriptPubKey = CScript([OP_0])  # Some non-standard script
         self.check_mempool_result(
             result_expected=[
-                {"txid": tx.rehash(), "allowed": False, "reject-reason": "scriptpubkey"}
+                {"txid": tx.txid_hex, "allowed": False, "reject-reason": "scriptpubkey"}
             ],
             rawtxs=[ToHex(tx)],
         )
@@ -429,7 +431,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bare-multisig",
                 }
@@ -442,7 +444,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "scriptsig-not-pushonly",
                 }
@@ -455,7 +457,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "scriptsig-size",
                 }
@@ -471,7 +473,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         tx.vout = [output_p2sh_burn] * num_scripts
         self.check_mempool_result(
             result_expected=[
-                {"txid": tx.rehash(), "allowed": False, "reject-reason": "tx-size"}
+                {"txid": tx.txid_hex, "allowed": False, "reject-reason": "tx-size"}
             ],
             rawtxs=[ToHex(tx)],
         )
@@ -481,7 +483,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         tx.vout[0].nValue -= 1
         self.check_mempool_result(
             result_expected=[
-                {"txid": tx.rehash(), "allowed": False, "reject-reason": "dust"}
+                {"txid": tx.txid_hex, "allowed": False, "reject-reason": "dust"}
             ],
             rawtxs=[ToHex(tx)],
         )
@@ -491,7 +493,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "multi-op-return",
                 }
@@ -507,7 +509,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "bad-txns-nonfinal",
                 }
@@ -524,7 +526,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         self.check_mempool_result(
             result_expected=[
                 {
-                    "txid": tx.rehash(),
+                    "txid": tx.txid_hex,
                     "allowed": False,
                     "reject-reason": "non-BIP68-final",
                 }

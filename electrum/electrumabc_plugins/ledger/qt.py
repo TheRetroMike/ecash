@@ -1,7 +1,7 @@
 from functools import partial
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import pyqtSignal
+from qtpy import QtWidgets
+from qtpy.QtCore import Signal
 
 from electrumabc.i18n import _
 from electrumabc.plugins import hook
@@ -33,8 +33,8 @@ class Plugin(LedgerPlugin, QtPluginBase):
 
 
 class LedgerHandler(QtHandlerBase):
-    setup_signal = pyqtSignal()
-    auth_signal = pyqtSignal(object)
+    setup_signal = Signal()
+    auth_signal = Signal(object)
 
     def __init__(self, win):
         super(LedgerHandler, self).__init__(win, "Ledger")
@@ -46,7 +46,7 @@ class LedgerHandler(QtHandlerBase):
             self.top_level_window(),
             "Ledger Wallet Authentication",
             msg,
-            QtWidgets.QLineEdit.Password,
+            QtWidgets.QLineEdit.EchoMode.Password,
         )
         if not response[1]:
             self.word = None

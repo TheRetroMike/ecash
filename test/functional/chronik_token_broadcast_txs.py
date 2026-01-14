@@ -68,13 +68,12 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             CTxOut(10000, P2SH_OP_TRUE),
             CTxOut(coinvalue - 100000, P2SH_OP_TRUE),
         ]
-        tx.rehash()
         genesis = TokenTx(
             tx=tx,
             status=pb.TOKEN_STATUS_NORMAL,
             entries=[
                 pb.TokenEntry(
-                    token_id=tx.hash,
+                    token_id=tx.txid_hex,
                     token_type=pb.TokenType(alp=pb.ALP_TOKEN_TYPE_STANDARD),
                     tx_type=pb.GENESIS,
                     actual_burn_atoms="0",
@@ -83,16 +82,16 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             inputs=[pb.Token()],
             outputs=[
                 pb.Token(),
-                alp_token(token_id=tx.hash, atoms=1000),
-                alp_token(token_id=tx.hash, atoms=2000),
-                alp_token(token_id=tx.hash, atoms=3000),
-                alp_token(token_id=tx.hash, atoms=4000),
-                alp_token(token_id=tx.hash, atoms=5000),
-                alp_token(token_id=tx.hash, atoms=6000),
+                alp_token(token_id=tx.txid_hex, atoms=1000),
+                alp_token(token_id=tx.txid_hex, atoms=2000),
+                alp_token(token_id=tx.txid_hex, atoms=3000),
+                alp_token(token_id=tx.txid_hex, atoms=4000),
+                alp_token(token_id=tx.txid_hex, atoms=5000),
+                alp_token(token_id=tx.txid_hex, atoms=6000),
                 pb.Token(),
             ],
             token_info=pb.TokenInfo(
-                token_id=tx.hash,
+                token_id=tx.txid_hex,
                 token_type=pb.TokenType(alp=pb.ALP_TOKEN_TYPE_STANDARD),
                 genesis_info=pb.GenesisInfo(),
             ),
@@ -107,7 +106,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [1000])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        ok_tx.rehash()
 
         burn_tx = CTransaction()
         burn_tx.vin = [CTxIn(COutPoint(int(genesis.txid, 16), 2), SCRIPTSIG_OP_TRUE)]
@@ -115,7 +113,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [1999])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        burn_tx.rehash()
 
         burn2_tx = CTransaction()
         burn2_tx.vin = [CTxIn(COutPoint(int(genesis.txid, 16), 3), SCRIPTSIG_OP_TRUE)]
@@ -123,7 +120,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [3001])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        burn2_tx.rehash()
 
         wrong_sig_tx = CTransaction()
         wrong_sig_tx.vin = [CTxIn(COutPoint(int(genesis.txid, 16), 4), CScript())]
@@ -131,7 +127,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [4000])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        wrong_sig_tx.rehash()
 
         ok2_tx = CTransaction()
         ok2_tx.vin = [CTxIn(COutPoint(int(genesis.txid, 16), 5), SCRIPTSIG_OP_TRUE)]
@@ -139,7 +134,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [5000])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        ok2_tx.rehash()
 
         ok3_tx = CTransaction()
         ok3_tx.vin = [CTxIn(COutPoint(int(genesis.txid, 16), 6), SCRIPTSIG_OP_TRUE)]
@@ -147,7 +141,6 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
             alp_opreturn(alp_send(genesis.txid, [6000])),
             CTxOut(546, P2SH_OP_TRUE),
         ]
-        ok3_tx.rehash()
 
         error = chronik.broadcast_txs(
             [
@@ -161,8 +154,8 @@ class ChronikTokenBroadcastTxs(BitcoinTestFramework):
         assert_equal(
             error.msg,
             f"""\
-400: Tx {burn_tx.hash} failed token checks: Unexpected burn: Burns 1 atoms. Tx \
-{burn2_tx.hash} failed token checks: Unexpected burn: Burns 3000 atoms. \
+400: Tx {burn_tx.txid_hex} failed token checks: Unexpected burn: Burns 1 atoms. Tx \
+{burn2_tx.txid_hex} failed token checks: Unexpected burn: Burns 3000 atoms. \
 Reason(s): Insufficient token input output sum: 3000 < 3001.""",
         )
 
@@ -176,13 +169,13 @@ Reason(s): Insufficient token input output sum: 3000 < 3001.""",
         ).err(400)
         assert_equal(
             error.msg,
-            """\
-400: Broadcast failed: Transaction rejected by mempool: \
-mandatory-script-verify-flag-failed (Operation not valid with the current stack size)\
-""",
+            "400: Broadcast failed: Transaction rejected by mempool: "
+            "mandatory-script-verify-flag-failed (Operation not valid with the "
+            f"current stack size), input 0 of {wrong_sig_tx.txid_hex}, spending "
+            f"{genesis.txid}:4",
         )
-        chronik.tx(ok_tx.hash).ok()
-        chronik.tx(ok2_tx.hash).err(404)
+        chronik.tx(ok_tx.txid_hex).ok()
+        chronik.tx(ok2_tx.txid_hex).err(404)
 
         # Broadcast multiple txs successfully
         txids = (
@@ -194,7 +187,10 @@ mandatory-script-verify-flag-failed (Operation not valid with the current stack 
         )
         assert_equal(
             txids,
-            [bytes.fromhex(ok2_tx.hash)[::-1], bytes.fromhex(ok3_tx.hash)[::-1]],
+            [
+                bytes.fromhex(ok2_tx.txid_hex)[::-1],
+                bytes.fromhex(ok3_tx.txid_hex)[::-1],
+            ],
         )
 
         # Skip token checks, broadcast burns without complaining
@@ -208,7 +204,10 @@ mandatory-script-verify-flag-failed (Operation not valid with the current stack 
         )
         assert_equal(
             txids,
-            [bytes.fromhex(burn_tx.hash)[::-1], bytes.fromhex(burn2_tx.hash)[::-1]],
+            [
+                bytes.fromhex(burn_tx.txid_hex)[::-1],
+                bytes.fromhex(burn2_tx.txid_hex)[::-1],
+            ],
         )
 
 

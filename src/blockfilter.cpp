@@ -15,19 +15,13 @@
 #include <mutex>
 #include <sstream>
 
-/// SerType used to serialize parameters in GCS filter encoding.
-static constexpr int GCS_SER_TYPE = SER_NETWORK;
-
-/// Protocol version used to serialize parameters in GCS filter encoding.
-static constexpr int GCS_SER_VERSION = 0;
-
 static const std::map<BlockFilterType, std::string> g_filter_types = {
     {BlockFilterType::BASIC, "basic"},
 };
 
 uint64_t GCSFilter::HashToRange(const Element &element) const {
     uint64_t hash = CSipHasher(m_params.m_siphash_k0, m_params.m_siphash_k1)
-                        .Write(element.data(), element.size())
+                        .Write(element)
                         .Finalize();
     return FastRange64(hash, m_F);
 }
@@ -48,7 +42,7 @@ GCSFilter::GCSFilter(const Params &params)
 
 GCSFilter::GCSFilter(const Params &params, std::vector<uint8_t> encoded_filter)
     : m_params(params), m_encoded(std::move(encoded_filter)) {
-    SpanReader stream{GCS_SER_TYPE, GCS_SER_VERSION, m_encoded};
+    SpanReader stream{m_encoded};
 
     uint64_t N = ReadCompactSize(stream);
     m_N = static_cast<uint32_t>(N);
@@ -60,7 +54,7 @@ GCSFilter::GCSFilter(const Params &params, std::vector<uint8_t> encoded_filter)
     // Verify that the encoded filter contains exactly N elements. If it has too
     // much or too little data, a std::ios_base::failure exception will be
     // raised.
-    BitStreamReader<SpanReader> bitreader{stream};
+    BitStreamReader bitreader{stream};
     for (uint64_t i = 0; i < m_N; ++i) {
         GolombRiceDecode(bitreader, m_params.m_P);
     }
@@ -78,7 +72,7 @@ GCSFilter::GCSFilter(const Params &params, const ElementSet &elements)
     }
     m_F = static_cast<uint64_t>(m_N) * static_cast<uint64_t>(m_params.m_M);
 
-    CVectorWriter stream(GCS_SER_TYPE, GCS_SER_VERSION, m_encoded, 0);
+    VectorWriter stream{m_encoded, 0};
 
     WriteCompactSize(stream, m_N);
 
@@ -86,7 +80,7 @@ GCSFilter::GCSFilter(const Params &params, const ElementSet &elements)
         return;
     }
 
-    BitStreamWriter<CVectorWriter> bitwriter(stream);
+    BitStreamWriter bitwriter{stream};
 
     uint64_t last_value = 0;
     for (uint64_t value : BuildHashedSet(elements)) {
@@ -100,13 +94,13 @@ GCSFilter::GCSFilter(const Params &params, const ElementSet &elements)
 
 bool GCSFilter::MatchInternal(const uint64_t *element_hashes,
                               size_t size) const {
-    SpanReader stream{GCS_SER_TYPE, GCS_SER_VERSION, m_encoded};
+    SpanReader stream{m_encoded};
 
     // Seek forward by size of N
     uint64_t N = ReadCompactSize(stream);
     assert(N == m_N);
 
-    BitStreamReader<SpanReader> bitreader{stream};
+    BitStreamReader bitreader{stream};
 
     uint64_t value = 0;
     size_t hashes_index = 0;

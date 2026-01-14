@@ -9,7 +9,7 @@
 #include <tinyformat.h>
 
 BlockHash CBlockHeader::GetHash() const {
-    return BlockHash(SerializeHash(*this));
+    return BlockHash{(HashWriter{} << *this).GetHash()};
 }
 
 std::string CBlock::ToString() const {

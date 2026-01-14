@@ -1,4 +1,4 @@
-// Copyright (c) 2018-2019 The Bitcoin Core developers
+// Copyright (c) 2018-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -15,6 +15,7 @@
 #include <random.h>
 #include <script/standard.h>
 #include <test/util/random.h>
+#include <test/util/script.h>
 #include <test/util/setup_common.h>
 #include <util/time.h>
 #include <validation.h>
@@ -27,7 +28,9 @@ enum class ChainstateRole;
 using node::BlockAssembler;
 
 namespace validation_block_tests {
-struct MinerTestingSetup : public RegTestingSetup {
+struct MinerTestingSetup : public TestingSetup {
+    MinerTestingSetup();
+
     std::shared_ptr<CBlock> Block(const Config &config,
                                   const BlockHash &prev_hash);
     std::shared_ptr<const CBlock> GoodBlock(const Config &config,
@@ -74,26 +77,22 @@ struct TestSubscriber final : public CValidationInterface {
     }
 };
 
+// Disable reorg protection for this test.
+MinerTestingSetup::MinerTestingSetup()
+    : TestingSetup(ChainType::REGTEST, {"-parkdeepreorg=0"}) {}
+
 std::shared_ptr<CBlock> MinerTestingSetup::Block(const Config &config,
                                                  const BlockHash &prev_hash) {
     static int i = 0;
     static uint64_t time = config.GetChainParams().GenesisBlock().nTime;
 
-    CScript pubKey;
-    pubKey << i++ << OP_TRUE;
-
     auto ptemplate = BlockAssembler{config, m_node.chainman->ActiveChainstate(),
                                     m_node.mempool.get()}
-                         .CreateNewBlock(pubKey);
+                         .CreateNewBlock(CScript{} << i++ << OP_TRUE);
     auto pblock = std::make_shared<CBlock>(ptemplate->block);
     pblock->hashPrevBlock = prev_hash;
     pblock->nTime = ++time;
 
-    pubKey.clear();
-    {
-        pubKey << OP_HASH160 << ToByteVector(CScriptID(CScript() << OP_TRUE))
-               << OP_EQUAL;
-    }
     // Make the coinbase transaction with two outputs:
     // One zero-value one that has a unique pubkey to make sure that blocks at
     // the same height can have a different hash. Another one that has the
@@ -101,7 +100,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::Block(const Config &config,
     // spend
     CMutableTransaction txCoinbase(*pblock->vtx[0]);
     txCoinbase.vout.resize(2);
-    txCoinbase.vout[1].scriptPubKey = pubKey;
+    txCoinbase.vout[1].scriptPubKey = P2SH_OP_TRUE;
     txCoinbase.vout[1].nValue = txCoinbase.vout[0].nValue;
     txCoinbase.vout[0].nValue = Amount::zero();
     pblock->vtx[0] = MakeTransactionRef(std::move(txCoinbase));
@@ -155,8 +154,8 @@ void MinerTestingSetup::BuildChain(
         return;
     }
 
-    bool gen_invalid = InsecureRandRange(100) < invalid_rate;
-    bool gen_fork = InsecureRandRange(100) < branch_rate;
+    bool gen_invalid = m_rng.randrange(100U) < invalid_rate;
+    bool gen_fork = m_rng.randrange(100U) < branch_rate;
 
     const std::shared_ptr<const CBlock> pblock =
         gen_invalid ? BadBlock(config, root) : GoodBlock(config, root);
@@ -292,7 +291,11 @@ BOOST_AUTO_TEST_CASE(avalanche_finalization_bad_state) {
     // Set the tip to pindex because AvalancheFinalizeBlock checks it is in the
     // active chain.
     activeChainstate.m_chain.SetTip(*Assert(pindex));
-    BOOST_CHECK(activeChainstate.AvalancheFinalizeBlock(pindex, *avalanche));
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK(
+            activeChainstate.AvalancheFinalizeBlock(pindex, *avalanche));
+    }
     activeChainstate.m_chain.SetTip(*Assert(pindex->pprev));
 
     // Process the block. It should be found invalid and finalization reverted.
@@ -306,6 +309,8 @@ BOOST_AUTO_TEST_CASE(avalanche_finalization_bad_state) {
     }
     BOOST_CHECK(!activeChainstate.IsBlockAvalancheFinalized(pindex));
     BOOST_CHECK(activeChainstate.IsBlockAvalancheFinalized(pindex->pprev));
+
+    SyncWithValidationInterfaceQueue();
 }
 
 /**

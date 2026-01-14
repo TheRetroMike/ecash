@@ -15,8 +15,8 @@
 #include <serialize.h>
 #include <streams.h>
 #include <uint256.h>
+#include <util/overflow.h>
 #include <util/vector.h>
-#include <version.h>
 
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
@@ -76,20 +76,23 @@ void CallOneOf(FuzzedDataProvider &fuzzed_data_provider,
     return ((i++ == call_index ? callables() : void()), ...);
 }
 
-[[nodiscard]] inline std::vector<uint8_t>
+template <typename B = uint8_t>
+[[nodiscard]] inline std::vector<B>
 ConsumeRandomLengthByteVector(FuzzedDataProvider &fuzzed_data_provider,
                               const size_t max_length = 4096) noexcept {
+    static_assert(sizeof(B) == 1);
     const std::string s =
         fuzzed_data_provider.ConsumeRandomLengthString(max_length);
-    return {s.begin(), s.end()};
+    std::vector<B> ret(s.size());
+    std::copy(s.begin(), s.end(), reinterpret_cast<char *>(ret.data()));
+    return ret;
 }
 
-[[nodiscard]] inline CDataStream
+[[nodiscard]] inline DataStream
 ConsumeDataStream(FuzzedDataProvider &fuzzed_data_provider,
                   const size_t max_length = 4096) noexcept {
-    return CDataStream{
-        ConsumeRandomLengthByteVector(fuzzed_data_provider, max_length),
-        SER_NETWORK, INIT_PROTO_VERSION};
+    return DataStream{
+        ConsumeRandomLengthByteVector(fuzzed_data_provider, max_length)};
 }
 
 [[nodiscard]] inline std::vector<std::string>
@@ -119,13 +122,33 @@ ConsumeRandomLengthIntegralVector(FuzzedDataProvider &fuzzed_data_provider,
     return r;
 }
 
+template <typename P>
+[[nodiscard]] P
+ConsumeDeserializationParams(FuzzedDataProvider &fuzzed_data_provider) noexcept;
+
+template <typename T, typename P>
+[[nodiscard]] std::optional<T>
+ConsumeDeserializable(FuzzedDataProvider &fuzzed_data_provider, const P &params,
+                      const size_t max_length = 4096) noexcept {
+    const std::vector<uint8_t> buffer{
+        ConsumeRandomLengthByteVector(fuzzed_data_provider, max_length)};
+    DataStream ds{buffer};
+    T obj;
+    try {
+        ds >> WithParams(params, obj);
+    } catch (const std::ios_base::failure &) {
+        return std::nullopt;
+    }
+    return obj;
+}
+
 template <typename T>
 [[nodiscard]] inline std::optional<T>
 ConsumeDeserializable(FuzzedDataProvider &fuzzed_data_provider,
                       const size_t max_length = 4096) noexcept {
     const std::vector<uint8_t> buffer =
         ConsumeRandomLengthByteVector(fuzzed_data_provider, max_length);
-    CDataStream ds{buffer, SER_NETWORK, INIT_PROTO_VERSION};
+    DataStream ds{buffer};
     T obj;
     try {
         ds >> obj;
@@ -240,16 +263,6 @@ template <typename T>
     }
 }
 
-template <class T>
-[[nodiscard]] bool AdditionOverflow(const T i, const T j) noexcept {
-    static_assert(std::is_integral<T>::value, "Integral required.");
-    if (std::numeric_limits<T>::is_signed) {
-        return (i > 0 && j > std::numeric_limits<T>::max() - i) ||
-               (i < 0 && j < std::numeric_limits<T>::min() - i);
-    }
-    return std::numeric_limits<T>::max() - i < j;
-}
-
 [[nodiscard]] inline bool
 ContainsSpentInput(const CTransaction &tx,
                    const CCoinsViewCache &inputs) noexcept {
@@ -286,16 +299,14 @@ inline void SetFuzzedErrNo(FuzzedDataProvider &fuzzed_data_provider) noexcept {
  * bytes available from the fuzzer. Pads with zero value bytes if needed to
  * achieve the specified size.
  */
-[[nodiscard]] inline std::vector<uint8_t>
+template <typename B = uint8_t>
+[[nodiscard]] inline std::vector<B>
 ConsumeFixedLengthByteVector(FuzzedDataProvider &fuzzed_data_provider,
                              const size_t length) noexcept {
-    std::vector<uint8_t> result(length);
-    const std::vector<uint8_t> random_bytes =
-        fuzzed_data_provider.ConsumeBytes<uint8_t>(length);
-    if (!random_bytes.empty()) {
-        std::memcpy(result.data(), random_bytes.data(), random_bytes.size());
-    }
-    return result;
+    static_assert(sizeof(B) == 1);
+    auto random_bytes = fuzzed_data_provider.ConsumeBytes<B>(length);
+    random_bytes.resize(length);
+    return random_bytes;
 }
 
 inline CNetAddr
@@ -343,6 +354,31 @@ ConsumeAddress(FuzzedDataProvider &fuzzed_data_provider) noexcept {
             NodeSeconds{std::chrono::seconds{
                 fuzzed_data_provider.ConsumeIntegral<uint32_t>()}}};
 }
+
+// TODO: move to test/fuzz/util/net.cpp when backporting core#26497
+template <typename P>
+P ConsumeDeserializationParams(
+    FuzzedDataProvider &fuzzed_data_provider) noexcept {
+    constexpr std::array<CNetAddr::Encoding, 2> ADDR_ENCODINGS{{
+        CNetAddr::Encoding::V1,
+        CNetAddr::Encoding::V2,
+    }};
+    constexpr std::array<CAddress::Format, 2> ADDR_FORMATS{{
+        CAddress::Format::Disk,
+        CAddress::Format::Network,
+    }};
+    if constexpr (std::is_same_v<P, CNetAddr::SerParams>) {
+        return P{fuzzed_data_provider.PickValueInArray(ADDR_ENCODINGS)};
+    }
+    if constexpr (std::is_same_v<P, CAddress::SerParams>) {
+        return P{{fuzzed_data_provider.PickValueInArray(ADDR_ENCODINGS)},
+                 fuzzed_data_provider.PickValueInArray(ADDR_FORMATS)};
+    }
+}
+template CNetAddr::SerParams
+ConsumeDeserializationParams(FuzzedDataProvider &) noexcept;
+template CAddress::SerParams
+ConsumeDeserializationParams(FuzzedDataProvider &) noexcept;
 
 template <bool ReturnUniquePtr = false>
 auto ConsumeNode(

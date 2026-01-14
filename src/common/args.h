@@ -32,7 +32,8 @@ bool CheckDataDirOption(const ArgsManager &args);
 fs::path GetConfigFile(const ArgsManager &args,
                        const fs::path &configuration_file_path);
 
-[[nodiscard]] bool ParseKeyValue(std::string &key, std::string &val);
+[[nodiscard]] bool ParseKeyValue(std::string &key,
+                                 std::optional<std::string> &val);
 
 /**
  * Most paths passed as configuration arguments are treated as relative to
@@ -75,16 +76,23 @@ enum class OptionsCategory {
     HIDDEN,
 };
 
+struct KeyInfo {
+    std::string name;
+    std::string section;
+    bool negated{false};
+};
+
+KeyInfo InterpretKey(std::string key);
+
+std::optional<util::SettingsValue>
+InterpretValue(const KeyInfo &key, const std::optional<std::string> &value,
+               unsigned int flags, std::string &error);
+
 struct SectionInfo {
     std::string m_name;
     std::string m_file;
     int m_line;
 };
-
-bool CheckValid(const std::string &key, const util::SettingsValue &val,
-                unsigned int flags, std::string &error);
-util::SettingsValue InterpretOption(std::string &section, std::string &key,
-                                    const std::string &value);
 
 std::string SettingToString(const util::SettingsValue &, const std::string &);
 std::optional<std::string> SettingToString(const util::SettingsValue &);
@@ -97,12 +105,26 @@ std::optional<bool> SettingToBool(const util::SettingsValue &);
 
 class ArgsManager {
 public:
-    enum Flags {
-        // Boolean options can accept negation syntax -noOPTION or -noOPTION=1
-        ALLOW_BOOL = 0x01,
-        ALLOW_INT = 0x02,
-        ALLOW_STRING = 0x04,
-        ALLOW_ANY = ALLOW_BOOL | ALLOW_INT | ALLOW_STRING,
+    /**
+     * Flags controlling how config and command line arguments are validated and
+     * interpreted.
+     */
+    enum Flags : uint32_t {
+        //! disable validation
+        ALLOW_ANY = 0x01,
+        //! unimplemented, draft implementation in #16545
+        // ALLOW_BOOL = 0x02,
+        //! unimplemented, draft implementation in #16545
+        // ALLOW_INT = 0x04,
+        //! unimplemented, draft implementation in #16545
+        // ALLOW_STRING = 0x08,
+        //! unimplemented, draft implementation in #16545
+        // ALLOW_LIST = 0x10,
+        //! disallow -nofoo syntax
+        DISALLOW_NEGATION = 0x20,
+        //! disallow -foo syntax that doesn't assign any value
+        DISALLOW_ELISION = 0x40,
+
         DEBUG_ONLY = 0x100,
         /* Some options would cause cross-contamination if values for
          * mainnet were used while running on regtest/testnet (or vice-versa).
@@ -370,13 +392,6 @@ public:
     std::optional<unsigned int> GetArgFlags(const std::string &name) const;
 
     /**
-     * Read and update settings file with saved settings. This needs to be
-     * called after SelectParams() because the settings file location is
-     * network-specific.
-     */
-    bool InitSettings(std::string &error);
-
-    /**
      * Get settings file path, or return false if read-write settings were
      * disabled with -nosettings.
      */
@@ -414,12 +429,6 @@ public:
      * useful for troubleshooting.
      */
     void LogArgs() const;
-
-    /**
-     * If datadir does not exist, create it along with wallets/
-     * subdirectory(s).
-     */
-    void EnsureDataDir() const;
 
 private:
     /**

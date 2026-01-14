@@ -53,14 +53,37 @@ int64_t UpdateTime(CBlockHeader *pblock, const CChainParams &chainParams,
     return nNewTime - nOldTime;
 }
 
+void ApplyArgsManOptions(const ArgsManager &args,
+                         BlockAssembler::Options &options) {
+    options.fPrintPriority =
+        args.GetBoolArg("-printpriority", DEFAULT_PRINTPRIORITY);
+    options.add_finalized_txs = args.GetBoolArg(
+        "-avalanchepreconsensusmining", DEFAULT_AVALANCHE_MINING_PRECONSENSUS);
+}
+
+static BlockAssembler::Options ConfiguredOptions() {
+    BlockAssembler::Options options;
+    ApplyArgsManOptions(gArgs, options);
+    return options;
+}
+
+BlockAssembler::BlockAssembler(const BlockFitter &fitter,
+                               Chainstate &chainstate,
+                               const CTxMemPool *mempool,
+                               const Options &options,
+                               const avalanche::Processor *avalanche)
+    : blockFitter(fitter), chainParams(chainstate.m_chainman.GetParams()),
+      m_mempool(mempool), m_chainstate(chainstate), m_avalanche(avalanche),
+      fPrintPriority{options.fPrintPriority},
+      test_block_validity{options.test_block_validity},
+      add_finalized_txs{avalanche && options.add_finalized_txs} {}
+
 BlockAssembler::BlockAssembler(const BlockFitter &fitter,
                                Chainstate &chainstate,
                                const CTxMemPool *mempool,
                                const avalanche::Processor *avalanche)
-    : blockFitter(fitter), chainParams(chainstate.m_chainman.GetParams()),
-      m_mempool(mempool), m_chainstate(chainstate), m_avalanche(avalanche),
-      fPrintPriority(
-          gArgs.GetBoolArg("-printpriority", DEFAULT_PRINTPRIORITY)) {}
+    : BlockAssembler(fitter, chainstate, mempool, ConfiguredOptions(),
+                     avalanche) {}
 
 BlockAssembler::BlockAssembler(const Config &config, Chainstate &chainstate,
                                const CTxMemPool *mempool,
@@ -72,7 +95,7 @@ std::optional<int64_t> BlockAssembler::m_last_block_size{std::nullopt};
 
 std::unique_ptr<CBlockTemplate>
 BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
-    int64_t nTimeStart = GetTimeMicros();
+    const auto time_start{SteadyClock::now()};
 
     blockFitter.resetBlock();
 
@@ -104,12 +127,22 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
     pblock->nTime = TicksSinceEpoch<std::chrono::seconds>(GetAdjustedTime());
     m_lock_time_cutoff = pindexPrev->GetMedianTimePast();
 
+    bool shouldAddFinalizedTxs =
+        m_avalanche && add_finalized_txs &&
+        m_avalanche->isPreconsensusActivated(pindexPrev);
+
     if (m_mempool) {
         LOCK(m_mempool->cs);
-        addTxs(*m_mempool);
+        if (shouldAddFinalizedTxs) {
+            addFinalizedTxs(*m_mempool);
+        } else {
+            addTxs(*m_mempool);
+        }
     }
 
-    if (IsMagneticAnomalyEnabled(consensusParams, pindexPrev)) {
+    // Canonical ordering is naturally enforced when using the radix tree
+    if (!shouldAddFinalizedTxs &&
+        IsMagneticAnomalyEnabled(consensusParams, pindexPrev)) {
         // If magnetic anomaly is enabled, we make sure transaction are
         // canonically ordered.
         std::sort(std::begin(pblocktemplate->entries) + 1,
@@ -124,7 +157,7 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
         pblock->vtx.push_back(entry.tx);
     }
 
-    int64_t nTime1 = GetTimeMicros();
+    const auto time_1{SteadyClock::now()};
 
     m_last_block_num_txs = blockFitter.nBlockTx;
     m_last_block_size = blockFitter.nBlockSize;
@@ -161,7 +194,7 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
     }
 
     // Make sure the coinbase is big enough.
-    uint64_t coinbaseSize = ::GetSerializeSize(coinbaseTx, PROTOCOL_VERSION);
+    uint64_t coinbaseSize = ::GetSerializeSize(coinbaseTx);
     if (coinbaseSize < MIN_TX_SIZE) {
         coinbaseTx.vin[0].scriptSig
             << std::vector<uint8_t>(MIN_TX_SIZE - coinbaseSize - 1);
@@ -171,7 +204,7 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
     pblocktemplate->entries[0].fees = -1 * blockFitter.nFees;
     pblock->vtx[0] = pblocktemplate->entries[0].tx;
 
-    uint64_t nSerializeSize = GetSerializeSize(*pblock, PROTOCOL_VERSION);
+    uint64_t nSerializeSize = GetSerializeSize(*pblock);
 
     LogPrintf(
         "CreateNewBlock(): total size: %u txs: %u fees: %ld sigChecks %d\n",
@@ -187,7 +220,8 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
     pblocktemplate->entries[0].sigChecks = 0;
 
     BlockValidationState state;
-    if (!TestBlockValidity(
+    if (test_block_validity &&
+        !TestBlockValidity(
             state, chainParams, m_chainstate, *pblock, pindexPrev,
             GetAdjustedTime,
             BlockValidationOptions(blockFitter.getMaxGeneratedBlockSize())
@@ -196,13 +230,14 @@ BlockAssembler::CreateNewBlock(const CScript &scriptPubKeyIn) {
         throw std::runtime_error(strprintf("%s: TestBlockValidity failed: %s",
                                            __func__, state.ToString()));
     }
-    int64_t nTime2 = GetTimeMicros();
+    const auto time_2{SteadyClock::now()};
 
     LogPrint(
         BCLog::BENCH,
         "CreateNewBlock() addTxs: %.2fms, validity: %.2fms (total %.2fms)\n",
-        0.001 * (nTime1 - nTimeStart), 0.001 * (nTime2 - nTime1),
-        0.001 * (nTime2 - nTimeStart));
+        Ticks<MillisecondsDouble>(time_1 - time_start),
+        Ticks<MillisecondsDouble>(time_2 - time_1),
+        Ticks<MillisecondsDouble>(time_2 - time_start));
 
     return std::move(pblocktemplate);
 }
@@ -354,5 +389,25 @@ void BlockAssembler::addTxs(const CTxMemPool &mempool) {
             }
         }
     }
+}
+
+/**
+ * addFinalizedTxs fills the template with the finalized transactons. The radix
+ * tree is making sure it's all ready to go and already sorted so there is no
+ * check to do anymore.
+ */
+void BlockAssembler::addFinalizedTxs(const CTxMemPool &mempool) {
+    AssertLockHeld(mempool.cs);
+
+    mempool.finalizedTxs.forEachLeaf(
+        [this, &mempool](const CTxMemPoolEntryRef &entry) {
+            // A tx can be added if it exists in the mempool. Otherwise this
+            // means that a block connected but is not yet finalized containing
+            // this tx.
+            if (mempool.exists(entry->GetTx().GetId())) {
+                AddToBlock(entry);
+            }
+            return true;
+        });
 }
 } // namespace node

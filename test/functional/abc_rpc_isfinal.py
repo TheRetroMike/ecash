@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the isfinalxxx RPCS."""
+
 import random
 
 from test_framework.address import ADDRESS_ECREG_UNSPENDABLE
@@ -10,7 +11,12 @@ from test_framework.avatools import AvaP2PInterface, can_find_inv_in_poll
 from test_framework.blocktools import COINBASE_MATURITY, create_block, create_coinbase
 from test_framework.messages import CBlockHeader, msg_headers
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, assert_raises_rpc_error, uint256_hex
+from test_framework.util import (
+    assert_equal,
+    assert_raises_rpc_error,
+    sync_txindex,
+    uint256_hex,
+)
 
 QUORUM_NODE_COUNT = 16
 
@@ -148,11 +154,11 @@ class AvalancheIsFinalTest(BitcoinTestFramework):
                         " the process of being indexed."
                     )
             else:
-                assert (
-                    False
-                ), "The isfinaltransaction RPC call did not throw as expected."
+                assert False, (
+                    "The isfinaltransaction RPC call did not throw as expected."
+                )
 
-            self.wait_until(lambda: node.getindexinfo()["txindex"]["synced"] is True)
+            sync_txindex(self, node)
 
             self.wait_until(lambda: is_finalblock(tip))
             assert node.isfinaltransaction(wallet_txid)
@@ -201,7 +207,7 @@ class AvalancheIsFinalTest(BitcoinTestFramework):
             "Block data not downloaded yet.",
             node.isfinaltransaction,
             uint256_hex(random.randint(0, 2**256 - 1)),
-            uint256_hex(block.sha256),
+            uint256_hex(block.hash_int),
         )
 
 

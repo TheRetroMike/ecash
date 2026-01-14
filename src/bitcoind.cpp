@@ -10,6 +10,7 @@
 #include <chainparams.h>
 #include <clientversion.h>
 #include <common/args.h>
+#include <common/init.h>
 #include <common/system.h>
 #include <compat.h>
 #include <config.h>
@@ -127,7 +128,7 @@ int fork_daemon(bool nochdir, bool noclose, TokenPipeEnd &endpoint) {
 //
 // Start
 //
-static bool AppInit(int argc, char *argv[]) {
+static bool AppInit(NodeContext &node, int argc, char *argv[]) {
     // FIXME: Ideally, we'd like to build the config here, but that's currently
     // not possible as the whole application has too many global state. However,
     // this is a first step.
@@ -135,7 +136,6 @@ static bool AppInit(int argc, char *argv[]) {
 
     RPCServer rpcServer;
 
-    NodeContext node;
     std::any context{&node};
 
     HTTPRPCRequestProcessor httpRPCRequestProcessor(config, rpcServer, context);
@@ -151,7 +151,7 @@ static bool AppInit(int argc, char *argv[]) {
     std::string error;
     if (!args.ParseParameters(argc, argv, error)) {
         return InitError(Untranslated(
-            strprintf("Error parsing command line arguments: %s\n", error)));
+            strprintf("Error parsing command line arguments: %s", error)));
     }
 
     // Process help and version before taking care about datadir
@@ -182,21 +182,8 @@ static bool AppInit(int argc, char *argv[]) {
     TokenPipeEnd daemon_ep;
 #endif
     try {
-        if (!CheckDataDirOption(args)) {
-            return InitError(Untranslated(
-                strprintf("Specified data directory \"%s\" does not exist.\n",
-                          args.GetArg("-datadir", ""))));
-        }
-        if (!args.ReadConfigFiles(error, true)) {
-            return InitError(Untranslated(
-                strprintf("Error reading configuration file: %s\n", error)));
-        }
-        // Check for -chain, -testnet or -regtest parameter (Params() calls are
-        // only valid after this clause)
-        try {
-            SelectParams(args.GetChainType());
-        } catch (const std::exception &e) {
-            return InitError(Untranslated(strprintf("%s\n", e.what())));
+        if (auto err = common::InitConfig(args)) {
+            return InitError(err->message, err->details);
         }
 
         // Make sure we create the net-specific data directory early on: if it
@@ -214,14 +201,9 @@ static bool AppInit(int argc, char *argv[]) {
             if (!IsSwitchChar(argv[i][0])) {
                 return InitError(Untranslated(
                     strprintf("Command line contains unexpected token '%s', "
-                              "see bitcoind -h for a list of options.\n",
+                              "see bitcoind -h for a list of options.",
                               argv[i])));
             }
-        }
-
-        if (!args.InitSettings(error)) {
-            InitError(Untranslated(error));
-            return false;
         }
 
         // -server defaults to true for bitcoind but not for the GUI so do this
@@ -230,7 +212,7 @@ static bool AppInit(int argc, char *argv[]) {
         // Set this early so that parameter interactions go to console
         InitLogging(args);
         InitParameterInteraction(args);
-        if (!AppInitBasicSetup(args)) {
+        if (!AppInitBasicSetup(args, node.exit_status)) {
             // InitError will have been called with detailed error, which ends
             // up on console
             return false;
@@ -268,7 +250,7 @@ static bool AppInit(int argc, char *argv[]) {
                 case -1:
                     // Error happened.
                     return InitError(Untranslated(strprintf(
-                        "fork_daemon() failed: %s\n", SysErrorString(errno))));
+                        "fork_daemon() failed: %s", SysErrorString(errno))));
                 default: {
                     // Parent: wait and exit.
                     int token = daemon_ep.TokenRead();
@@ -285,7 +267,7 @@ static bool AppInit(int argc, char *argv[]) {
             }
 #else
             return InitError(Untranslated(
-                "-daemon is not supported on this operating system\n"));
+                "-daemon is not supported on this operating system"));
 #endif // HAVE_DECL_FORK
         }
 
@@ -311,6 +293,8 @@ static bool AppInit(int argc, char *argv[]) {
 #endif
     if (fRet) {
         WaitForShutdown();
+    } else {
+        node.exit_status = EXIT_FAILURE;
     }
     Interrupt(node);
     Shutdown(node);
@@ -323,10 +307,12 @@ int main(int argc, char *argv[]) {
     common::WinCmdLineArgs winArgs;
     std::tie(argc, argv) = winArgs.get();
 #endif
+    NodeContext node;
+
     SetupEnvironment();
 
     // Connect bitcoind signal handlers
     noui_connect();
 
-    return (AppInit(argc, argv) ? EXIT_SUCCESS : EXIT_FAILURE);
+    return (AppInit(node, argc, argv) ? node.exit_status.load() : EXIT_FAILURE);
 }

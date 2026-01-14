@@ -28,6 +28,7 @@
 This requires serializing some keys and UTXO metadata (stakes), and signing
 the hash of the stakes to prove ownership of the UTXO.
 """
+
 from __future__ import annotations
 
 import struct
@@ -69,13 +70,13 @@ class StakeAndSigningData:
 class Stake(SerializableObject):
     def __init__(
         self,
-        utxo: OutPoint,
+        outpoint: OutPoint,
         amount: int,
         height: int,
         is_coinbase: bool,
         pubkey: Optional[PublicKey] = None,
     ):
-        self.utxo = utxo
+        self.outpoint = outpoint
         self.amount = amount
         """Amount in satoshis (int64)"""
         self.height = height
@@ -98,7 +99,7 @@ class Stake(SerializableObject):
         height_ser = self.height << 1 | is_coinbase
 
         return (
-            self.utxo.serialize()
+            self.outpoint.serialize()
             + struct.pack("qI", self.amount, height_ser)
             + self.pubkey.serialize()
         )

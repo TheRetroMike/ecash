@@ -37,9 +37,6 @@ MINIMALPUSH_ERROR = (
     "mandatory-script-verify-flag-failed (Data push larger than necessary)"
 )
 
-# Blocks with invalid scripts give this error:
-BADINPUTS_ERROR = "blk-bad-inputs"
-
 
 class MinimaldataTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -60,26 +57,24 @@ class MinimaldataTest(BitcoinTestFramework):
         block_height = node.getblockcount()
         blockhash = node.getblockhash(block_height)
         block = FromHex(CBlock(), node.getblock(blockhash, 0))
-        block.calc_sha256()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def build_block(self, parent, transactions=(), nTime=None):
         """Make a new block with an OP_1 coinbase output.
 
         Requires parent to have its height registered."""
-        parent.calc_sha256()
-        block_height = self.block_heights[parent.sha256] + 1
+        block_height = self.block_heights[parent.hash_int] + 1
         block_time = (parent.nTime + 1) if nTime is None else nTime
 
         block = create_block(
-            parent.sha256,
+            parent.hash_int,
             create_coinbase(block_height),
             block_time,
             txlist=transactions,
         )
         block.solve()
-        self.block_heights[block.sha256] = block_height
+        self.block_heights[block.hash_int] = block_height
         return block
 
     def check_for_ban_on_rejected_tx(self, tx, reject_reason=None):
@@ -142,18 +137,16 @@ class MinimaldataTest(BitcoinTestFramework):
             txfund = create_tx_with_script(
                 spendfrom, 0, b"", amount=value, script_pub_key=script
             )
-            txfund.rehash()
             fundings.append(txfund)
 
             # Spend transaction
             txspend = CTransaction()
             txspend.vout.append(CTxOut(value - 1000, CScript([OP_TRUE])))
-            txspend.vin.append(CTxIn(COutPoint(txfund.sha256, 0), b""))
+            txspend.vin.append(CTxIn(COutPoint(txfund.txid_int, 0), b""))
 
             # Sign the transaction
             txspend.vin[0].scriptSig = CScript(b"\x01\x01\x51")  # PUSH1(0x01) OP_1
             pad_tx(txspend)
-            txspend.rehash()
 
             return txspend
 
@@ -165,7 +158,7 @@ class MinimaldataTest(BitcoinTestFramework):
 
         self.log.info("Trying to mine a minimaldata violation.")
         self.check_for_ban_on_rejected_block(
-            self.build_block(tip, [nonminimaltx]), BADINPUTS_ERROR
+            self.build_block(tip, [nonminimaltx]), MINIMALPUSH_ERROR
         )
         self.log.info("If we try to submit it by mempool or RPC we are banned")
         assert_raises_rpc_error(

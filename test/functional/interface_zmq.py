@@ -2,6 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the ZMQ notification interface."""
+
 import struct
 from io import BytesIO
 from time import sleep
@@ -181,7 +182,7 @@ class ZMQTest(BitcoinTestFramework):
         rawtx = subs[3]
 
         num_blocks = 5
-        self.log.info("Generate {0} blocks (and {0} coinbase txes)".format(num_blocks))
+        self.log.info(f"Generate {num_blocks} blocks (and {num_blocks} coinbase txes)")
         genhashes = self.generatetoaddress(
             self.nodes[0], num_blocks, ADDRESS_ECREG_UNSPENDABLE
         )
@@ -194,8 +195,7 @@ class ZMQTest(BitcoinTestFramework):
             tx_hex = rawtx.receive()
             tx = CTransaction()
             tx.deserialize(BytesIO(tx_hex))
-            tx.calc_sha256()
-            assert_equal(tx.hash, txid.hex())
+            assert_equal(tx.txid_hex, txid.hex())
 
             # Should receive the generated raw block.
             block = rawblock.receive()
@@ -532,7 +532,7 @@ class ZMQTest(BitcoinTestFramework):
             block.solve()
             assert_equal(self.nodes[0].submitblock(block.serialize().hex()), None)
             tip = self.nodes[0].getbestblockhash()
-            assert_equal(int(tip, 16), block.sha256)
+            assert_equal(tip, block.hash_hex)
             orig_txid_2 = self.nodes[0].sendtoaddress(
                 address=self.nodes[0].getnewaddress(), amount=1_000_000
             )

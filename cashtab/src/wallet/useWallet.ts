@@ -8,12 +8,10 @@ import {
     isValidCashtabCache,
     isValidContactList,
     migrateLegacyCashtabSettings,
-    isValidCashtabWallet,
 } from 'validation';
-import localforage from 'localforage';
+import { storage, initializeStorage } from 'platform';
 import {
-    getUtxos,
-    getHistory,
+    getTransactionHistory,
     organizeUtxosByType,
     parseTx,
     getTokenBalances,
@@ -21,26 +19,24 @@ import {
     getTxNotificationMsg,
 } from 'chronik';
 import appConfig from 'config/app';
+import { chronik as chronikConfig } from 'config/chronik';
 import { CashReceivedNotificationIcon } from 'components/Common/CustomIcons';
 import CashtabSettings, {
     supportedFiatCurrencies,
 } from 'config/CashtabSettings';
 import {
-    cashtabCacheToJSON,
     storedCashtabCacheToMap,
-    cashtabWalletsFromJSON,
-    cashtabWalletsToJSON,
     CashtabCacheJson,
-    StoredCashtabWallet,
+    cashtabCacheToJSON,
 } from 'helpers';
 import {
     createCashtabWallet,
-    getLegacyPaths,
     getBalanceSats,
-    getHashes,
-    hasUnfinalizedTxsInHistory,
-    CashtabWallet,
+    ActiveCashtabWallet,
+    StoredCashtabWallet,
+    createActiveCashtabWallet,
     LegacyCashtabWallet,
+    CashtabTx,
 } from 'wallet';
 import { toast } from 'react-toastify';
 import CashtabState, { CashtabContact } from 'config/CashtabState';
@@ -54,19 +50,35 @@ import {
 } from 'chronik-client';
 import { Agora } from 'ecash-agora';
 import { Ecc } from 'ecash-lib';
+import { Wallet } from 'ecash-wallet';
+import { fromHex } from 'ecash-lib';
 import CashtabCache from 'config/CashtabCache';
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 
-export type UpdateCashtabState = (
-    key: string,
-    value:
-        | CashtabWallet[]
+/**
+ * We keep the first page of tx history in context
+ * This allows us to update it piecemeal without full
+ * chronik calls by using websocket handlers, and keep
+ * tx history (which is important for user info not
+ * wallet actions) separate from the wallet state
+ */
+export interface TransactionHistory {
+    firstPageTxs: CashtabTx[];
+    numPages: number;
+    numTxs: number;
+}
+
+export type UpdateCashtabState = (updates: {
+    [key: string]:
+        | ActiveCashtabWallet
         | CashtabCache
         | CashtabContact[]
         | CashtabSettings
         | CashtabCacheJson
         | StoredCashtabWallet[]
-        | (LegacyCashtabWallet | StoredCashtabWallet)[],
-) => Promise<boolean>;
+        | string;
+}) => Promise<boolean>;
 
 export interface UseWalletReturnType {
     chronik: ChronikClient;
@@ -77,20 +89,28 @@ export interface UseWalletReturnType {
     firmaPrice: number | null;
     cashtabLoaded: boolean;
     loading: boolean;
+    initialUtxoSyncComplete: boolean;
     setLoading: React.Dispatch<React.SetStateAction<boolean>>;
     apiError: boolean;
     updateCashtabState: UpdateCashtabState;
-    processChronikWsMsg: (
-        msg: WsMsgClient,
-        cashtabState: CashtabState,
-        fiatPrice: null | number,
-    ) => Promise<boolean>;
+    handleActivatingCopiedWallet: (walletAddress: string) => Promise<void>;
+    processChronikWsMsg: (msg: WsMsgClient) => Promise<boolean>;
     cashtabState: CashtabState;
+    transactionHistory: TransactionHistory | null;
+    refreshTransactionHistory: () => Promise<void>;
+    /**
+     * Sync wallet data by fetching latest UTXOs and token balances
+     */
+    update: () => Promise<void>;
     /**
      * In some cases, we only want to set CashtabState as setting the state
      * will trigger storage writing, and we want to minimize this
      */
     setCashtabState: React.Dispatch<React.SetStateAction<CashtabState>>;
+    /**
+     * Wallet instance from ecash-wallet, initialized from active wallet sk
+     */
+    ecashWallet: Wallet | null;
 }
 
 const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
@@ -102,11 +122,43 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
     const [checkFiatInterval, setCheckFiatInterval] =
         useState<null | NodeJS.Timeout>(null);
     const [loading, setLoading] = useState<boolean>(true);
+    const [initialUtxoSyncComplete, setInitialUtxoSyncComplete] =
+        useState<boolean>(false);
     const [chaintipBlockheight, setChaintipBlockheight] = useState(0);
     const [cashtabState, setCashtabState] = useState<CashtabState>(
         new CashtabState(),
     );
+    const [transactionHistory, setTransactionHistory] =
+        useState<TransactionHistory | null>(null);
+    const [ecashWallet, setEcashWallet] = useState<Wallet | null>(null);
     const locale = getUserLocale();
+
+    const refreshTransactionHistory = async () => {
+        if (!currentCashtabStateRef.current.activeWallet) {
+            setTransactionHistory(null);
+            return;
+        }
+
+        try {
+            // NB this gives us page 0 as we call without specifying page number
+            const result = await getTransactionHistory(
+                chronik,
+                currentCashtabStateRef.current.activeWallet.address,
+                currentCashtabStateRef.current.cashtabCache.tokens,
+            );
+
+            const newTransactionHistory: TransactionHistory = {
+                firstPageTxs: result.txs,
+                numPages: result.numPages,
+                numTxs: result.txs.length,
+            };
+
+            setTransactionHistory(newTransactionHistory);
+        } catch (err) {
+            console.error('Error refreshing transaction history:', err);
+            setTransactionHistory(null);
+        }
+    };
 
     // Ref https://stackoverflow.com/questions/53446020/how-to-compare-oldvalues-and-newvalues-on-react-hooks-useeffect
     // Get the previous value of a state variable
@@ -121,39 +173,473 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
     const prevFiatPrice = usePrevious(fiatPrice);
     const prevFiatCurrency = usePrevious(cashtabState.settings.fiatCurrency);
 
-    const update = async (cashtabState: CashtabState) => {
-        if (!cashtabLoaded) {
-            // Wait for cashtab to get state from localforage before updating
+    // Refs to always hold current state
+    const currentCashtabStateRef = useRef<CashtabState>(cashtabState);
+    const currentFiatPriceRef = useRef<number | null>(fiatPrice);
+    const currentCashtabLoadedRef = useRef<boolean>(cashtabLoaded);
+    // Use ref to store current websocket to avoid closure issues in app lifecycle handlers
+    const wsRef = useRef<WsEndpoint | null>(null);
+    // Track app state to prevent reconnection attempts when backgrounded
+    const isAppActiveRef = useRef<boolean>(true);
+    // Store Wallet instance from ecash-wallet (for internal use in hook)
+    const ecashWalletRef = useRef<Wallet | null>(null);
+
+    // Update refs whenever state changes
+    useEffect(() => {
+        currentCashtabStateRef.current = cashtabState;
+    }, [cashtabState]);
+
+    useEffect(() => {
+        currentFiatPriceRef.current = fiatPrice;
+    }, [fiatPrice]);
+
+    useEffect(() => {
+        currentCashtabLoadedRef.current = cashtabLoaded;
+    }, [cashtabLoaded]);
+
+    useEffect(() => {
+        ecashWalletRef.current = ecashWallet;
+    }, [ecashWallet]);
+
+    // Update wsRef whenever ws changes
+    useEffect(() => {
+        wsRef.current = ws;
+    }, [ws]);
+
+    // Refresh transaction history when active wallet changes
+    useEffect(() => {
+        if (cashtabLoaded && cashtabState.activeWallet) {
+            refreshTransactionHistory();
+        } else {
+            setTransactionHistory(null);
+        }
+    }, [cashtabState.activeWallet?.address, cashtabLoaded]);
+
+    // Queue for processing messages in order
+    const messageQueue = useRef<Array<WsMsgClient>>([]);
+    const isProcessing = useRef<boolean>(false);
+
+    // Process messages sequentially
+    const processMessageQueue = async () => {
+        if (isProcessing.current) {
+            return;
+        }
+
+        isProcessing.current = true;
+
+        while (messageQueue.current.length > 0) {
+            const msg = messageQueue.current.shift()!;
+
+            try {
+                await processMessage(
+                    msg,
+                    currentCashtabStateRef.current,
+                    currentFiatPriceRef.current,
+                );
+            } catch (error) {
+                console.error('Error processing message:', error);
+            }
+        }
+
+        isProcessing.current = false;
+    };
+
+    // Process individual message
+    const processMessage = async (
+        msg: WsMsgClient,
+        cashtabState: CashtabState,
+        fiatPrice: number | null,
+    ) => {
+        if (!('msgType' in msg)) {
+            // No processing chronik error msgs
+            console.error(`Error from chronik websocket`, msg);
+            return;
+        }
+
+        const { msgType } = msg;
+        const { settings, cashtabCache } = cashtabState;
+
+        switch (msgType) {
+            case 'TX_ADDED_TO_MEMPOOL': {
+                // Update wallet utxo set when we see a new tx
+                await update();
+
+                // We parse txs that are added to the mempool for notifications
+                const txid = (msg as MsgTxClient).txid;
+
+                let incomingTxDetails;
+                try {
+                    incomingTxDetails = await chronik.tx(txid);
+                } catch (err) {
+                    // In this case, no notification
+                    return console.error(
+                        `Error in chronik.tx(${txid} while processing an incoming websocket tx`,
+                        err,
+                    );
+                }
+
+                const tokenCacheForParsingThisTx = cashtabCache.tokens;
+                let thisTokenCachedInfo;
+                let tokenId;
+                if (
+                    incomingTxDetails.tokenStatus !==
+                        'TOKEN_STATUS_NON_TOKEN' &&
+                    incomingTxDetails.tokenEntries.length > 0
+                ) {
+                    // If this is a token tx with at least one tokenId that is NOT cached, get token info
+                    // TODO we must get token info for multiple token IDs when we start supporting
+                    // token types other than slpv1
+                    tokenId = incomingTxDetails.tokenEntries[0].tokenId;
+                    thisTokenCachedInfo = cashtabCache.tokens.get(tokenId);
+                    if (typeof thisTokenCachedInfo === 'undefined') {
+                        // If we do not have this token cached
+                        // Note we do not update the cache here because this is handled in update
+                        try {
+                            thisTokenCachedInfo = await getTokenGenesisInfo(
+                                chronik,
+                                tokenId,
+                            );
+                            tokenCacheForParsingThisTx.set(
+                                tokenId,
+                                thisTokenCachedInfo,
+                            );
+                        } catch (err) {
+                            console.error(
+                                `Error fetching chronik.token(${tokenId})`,
+                                err,
+                            );
+
+                            // Do not throw, in this case tokenCacheForParsingThisTx will still not
+                            // include this token info, and the tx will be parsed as if it has 0 decimals
+
+                            // We do not show the (wrong) amount in the notification if this is the case
+                        }
+                    }
+                }
+
+                // parse tx for notification
+                const parsedTx = parseTx(incomingTxDetails, [
+                    cashtabState.activeWallet!.hash,
+                ]);
+
+                // Add the new transaction to the beginning of the first page history
+                setTransactionHistory(prev => {
+                    if (!prev) {
+                        return prev;
+                    }
+
+                    // Create the new transaction object
+                    const newTx: CashtabTx = {
+                        ...incomingTxDetails,
+                        parsed: parsedTx,
+                    };
+
+                    // Add to beginning of first page
+                    const updatedFirstPageTxs = [newTx, ...prev.firstPageTxs];
+
+                    // If we're at the page limit, remove the last transaction
+                    if (
+                        updatedFirstPageTxs.length >
+                        chronikConfig.txHistoryPageSize
+                    ) {
+                        updatedFirstPageTxs.pop();
+                    }
+
+                    // Calculate new counts
+                    const newNumTxs = prev.numTxs + 1;
+                    const newNumPages = Math.ceil(
+                        newNumTxs / chronikConfig.txHistoryPageSize,
+                    );
+
+                    return {
+                        ...prev,
+                        firstPageTxs: updatedFirstPageTxs,
+                        numTxs: newNumTxs,
+                        numPages: newNumPages,
+                    };
+                });
+
+                // parse tx for notification msg
+                const notificationMsg = getTxNotificationMsg(
+                    parsedTx,
+                    fiatPrice,
+                    locale,
+                    settings.fiatCurrency.toUpperCase(),
+                    thisTokenCachedInfo?.genesisInfo,
+                );
+
+                if (typeof notificationMsg === 'undefined') {
+                    // We do not send a notification for some msgs
+                    return;
+                }
+
+                // eToken txs should have token icon
+                if (parsedTx.parsedTokenEntries.length > 0) {
+                    toast(notificationMsg, {
+                        icon: React.createElement(TokenIconToast, {
+                            type: 'default',
+                            theme: 'default',
+                            size: 32,
+                            tokenId: tokenId as string,
+                        }),
+                    });
+                } else {
+                    // Otherwise normal
+                    toast(notificationMsg, {
+                        icon: CashReceivedNotificationIcon,
+                    });
+                }
+                return true;
+            }
+            case 'BLK_FINALIZED': {
+                // Handle avalanche finalized block
+                // NB we use BLK_FINALIZED msgs to set tipHeight, which is used for determining maturity
+                // of Coinbase utxos (necessary to avoid errors trying to spend staking rewards with
+                // less than 100 confirmations)
+                // Set chaintip height
+                setChaintipBlockheight(msg.blockHeight);
+                return;
+            }
+            case 'TX_FINALIZED': {
+                // Update tx if it is in the first page of history
+                const txid = (msg as MsgTxClient).txid;
+
+                // Use functional update to avoid race conditions
+                setTransactionHistory(prev => {
+                    if (!prev || prev.firstPageTxs.length === 0) {
+                        return prev;
+                    }
+
+                    const txIndex = prev.firstPageTxs.findIndex(
+                        tx => tx.txid === txid,
+                    );
+                    if (txIndex !== -1 && !prev.firstPageTxs[txIndex].isFinal) {
+                        // Create a new array with the updated transaction
+                        const updatedFirstPageTxs = [...prev.firstPageTxs];
+                        updatedFirstPageTxs[txIndex] = {
+                            ...updatedFirstPageTxs[txIndex],
+                            isFinal: true,
+                        };
+
+                        return { ...prev, firstPageTxs: updatedFirstPageTxs };
+                    }
+
+                    return prev;
+                });
+
+                return;
+            }
+            case 'TX_REMOVED_FROM_MEMPOOL': {
+                // Rare
+                // But, when this happens, we better be sure we are not showing this in the history
+                console.info(`Tx removed from mempool: ${msg.txid}`);
+
+                // Remove the transaction from the first page history if it exists
+                setTransactionHistory(prev => {
+                    if (!prev || prev.firstPageTxs.length === 0) {
+                        return prev;
+                    }
+
+                    const txid = msg.txid;
+                    const txIndex = prev.firstPageTxs.findIndex(
+                        tx => tx.txid === txid,
+                    );
+
+                    if (txIndex === -1) {
+                        // Transaction not in first page, no update needed
+                        return prev;
+                    }
+
+                    // Remove the transaction from first page
+                    const updatedFirstPageTxs = prev.firstPageTxs.filter(
+                        tx => tx.txid !== txid,
+                    );
+
+                    // NB we do not attempt to pull in the "next" tx from the next page, we can live
+                    // with missing a tx in this exceptionally rare case, we just want to be sure
+                    // we are not showing the user a dropped tx
+
+                    // Calculate new counts
+                    const newNumTxs = Math.max(0, prev.numTxs - 1);
+                    const newNumPages = Math.max(
+                        1,
+                        Math.ceil(newNumTxs / chronikConfig.txHistoryPageSize),
+                    ); // At least 1 page
+
+                    return {
+                        ...prev,
+                        firstPageTxs: updatedFirstPageTxs,
+                        numTxs: newNumTxs,
+                        numPages: newNumPages,
+                    };
+                });
+
+                // Refresh cashtab state
+                await update();
+                return;
+            }
+            default: {
+                // Do nothing for other msg types
+                return;
+            }
+        }
+    };
+
+    // We handle ws msgs by adding them to a queue and processing them sequentially
+    const wsMessageHandler = async (msg: WsMsgClient) => {
+        // Add to queue
+        messageQueue.current.push(msg);
+
+        // Process queue if not already processing
+        if (!isProcessing.current) {
+            await processMessageQueue();
+        }
+    };
+
+    /**
+     * Initialize Wallet from ecash-wallet when activeWallet changes
+     */
+    const initializeWallet = async () => {
+        if (currentCashtabStateRef.current.activeWallet === undefined) {
+            setEcashWallet(null);
+            return;
+        }
+
+        const activeWallet = currentCashtabStateRef.current.activeWallet;
+        const sk = fromHex(activeWallet.sk);
+        const newWallet = Wallet.fromSk(sk, chronik);
+        ecashWalletRef.current = newWallet;
+        // Sync on init (so we sync on app startup and on wallet switch)
+        // NB we do not sync before sending txs, as ecash-wallet auto updates utxo sets on sending txs,
+        // and we call "update" to sync when txs are received
+
+        try {
+            await newWallet.sync();
+            // Update state after sync so components re-render with updated wallet
+            setEcashWallet(newWallet);
+        } catch (error) {
+            console.error(
+                `Error in update(cashtabState) from cashtabState`,
+                cashtabState,
+            );
+            console.error(error);
+            // Set this in state so that transactions are disabled until the issue is resolved
+            setApiError(true);
+            // Set loading false, as we may not have set it to false by updating the wallet
+            setLoading(false);
+        }
+    };
+
+    /**
+     * For users opening the app in the extension or a webapp window,
+     * the only thing that must be up-to-date is the utxo set; we do not
+     * care about the token balances or tx history
+     *
+     * Speed and accurate utxo set are critical
+     *
+     * So, we load the utxo set first and unlock the UI
+     *
+     * Then we lazy load everything else
+     */
+    const startupUtxoSync = async () => {
+        if (currentCashtabStateRef.current.activeWallet === undefined) {
+            // Should never happen, we only call this in a useEffect when activeWallet is defined
+            return;
+        }
+        // Get the active wallet
+        const activeWallet = currentCashtabStateRef.current.activeWallet;
+
+        // Initialize Wallet from ecash-wallet (this syncs the wallet)
+        await initializeWallet();
+
+        if (ecashWalletRef.current === null) {
+            // Should never happen if activeWallet is defined
+            return;
+        }
+
+        try {
+            // Get UTXOs from the synced wallet
+            const walletUtxos = ecashWalletRef.current.utxos;
+
+            // TODO deprecate in-Cashtab utxo org and use ecash-wallet's org
+            const { slpUtxos, nonSlpUtxos } = organizeUtxosByType(walletUtxos);
+
+            const newState = {
+                ...activeWallet.state,
+                balanceSats: getBalanceSats(nonSlpUtxos),
+                slpUtxos,
+                nonSlpUtxos,
+            };
+
+            // Set wallet with new state field
+            activeWallet.state = newState;
+
+            // Update only the active wallet, wallets[0], in state
+            await updateCashtabState({ activeWallet: activeWallet });
+
+            // Update chaintipBlockheight from wallet
+            setChaintipBlockheight(ecashWalletRef.current.tipHeight);
+        } catch (error) {
+            // We only log errors, leaving API Error handling to update()
+            console.error(`Error in utxoSync() `, cashtabState);
+            console.error(error);
+        }
+
+        // We clear this flag even if we fail to get the latest utxo set
+        // as we anticipate update() will catch the same API error
+        setInitialUtxoSyncComplete(true);
+
+        // Call the full update
+        update();
+    };
+
+    const update = async () => {
+        if (!currentCashtabLoadedRef.current) {
+            // Wait for cashtab to get state from storage before updating
             return;
         }
 
         // Get the active wallet
-        const activeWallet = cashtabState.wallets[0];
+        const activeWallet = currentCashtabStateRef.current.activeWallet;
+        if (activeWallet === undefined) {
+            return;
+        }
+
+        // Initialize Wallet if not already initialized (this syncs the wallet)
+        if (ecashWalletRef.current === null) {
+            // In practice we do not expect to get to update with an un-initialized wallet
+            await initializeWallet();
+        }
+
+        if (ecashWalletRef.current === null) {
+            // Should never happen if activeWallet is defined
+            return;
+        }
 
         try {
-            const chronikUtxos = await getUtxos(chronik, activeWallet);
-            const { slpUtxos, nonSlpUtxos } = organizeUtxosByType(chronikUtxos);
+            // Sync wallet to get latest UTXOs
+            await ecashWalletRef.current.sync();
+            // Update state after sync so components re-render with updated wallet
+            setEcashWallet(ecashWalletRef.current);
+
+            // Get UTXOs from the synced wallet
+            const walletUtxos = ecashWalletRef.current.utxos;
+            const { slpUtxos, nonSlpUtxos } = organizeUtxosByType(walletUtxos);
 
             // Get map of all tokenIds held by this wallet and their balances
             // Note: this function will also update cashtabCache.tokens if any tokens in slpUtxos are not in cache
             const tokens = await getTokenBalances(
                 chronik,
                 slpUtxos,
-                cashtabState.cashtabCache.tokens,
+                currentCashtabStateRef.current.cashtabCache.tokens,
             );
 
-            // Fetch and parse tx history
-            // Note: this function will also update cashtabCache.tokens if any tokens in tx history are not in cache
-            const parsedTxHistory = await getHistory(
-                chronik,
-                activeWallet,
-                cashtabState.cashtabCache.tokens,
-            );
-
-            // Update cashtabCache.tokens in state and localforage
-            updateCashtabState('cashtabCache', {
-                ...cashtabState.cashtabCache,
-                tokens: cashtabState.cashtabCache.tokens,
+            // Update cashtabCache.tokens in state and storage
+            updateCashtabState({
+                cashtabCache: {
+                    ...currentCashtabStateRef.current.cashtabCache,
+                    tokens: currentCashtabStateRef.current.cashtabCache.tokens,
+                },
             });
 
             const newState = {
@@ -161,17 +647,16 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
                 slpUtxos,
                 nonSlpUtxos,
                 tokens,
-                parsedTxHistory,
             };
 
             // Set wallet with new state field
             activeWallet.state = newState;
 
-            // Update only the active wallet, wallets[0], in state
-            updateCashtabState('wallets', [
-                activeWallet,
-                ...cashtabState.wallets.slice(1),
-            ]);
+            // We do not update the wallets in state, only the activeWallet
+            await updateCashtabState({ activeWallet: activeWallet });
+
+            // Update chaintipBlockheight from wallet
+            setChaintipBlockheight(ecashWalletRef.current.tipHeight);
 
             // If everything executed correctly, remove apiError
             setApiError(false);
@@ -193,49 +678,59 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
      * @param string
      * @param value what is being stored at this key
      */
-    const updateCashtabState = async (
-        key: string,
-        value:
-            | CashtabWallet[]
+    const updateCashtabState = async (updates: {
+        [key: string]:
+            | ActiveCashtabWallet
             | CashtabCache
             | CashtabContact[]
             | CashtabSettings
             | CashtabCacheJson
             | StoredCashtabWallet[]
-            | (LegacyCashtabWallet | StoredCashtabWallet)[],
-    ) => {
-        // If we are dealing with savedWallets, sort alphabetically by wallet name
-        if (key === 'savedWallets') {
-            (value as CashtabWallet[]).sort((a, b) =>
-                a.name.localeCompare(b.name),
-            );
-        }
+            | string;
+    }) => {
+        // Update all keys in state atomically
+        setCashtabState(prevState => ({ ...prevState, ...updates }));
 
-        // Update the changed key in state
-        setCashtabState({ ...cashtabState, [`${key}`]: value });
-
-        // Update the changed key in localforage
-
-        // Handle any items that must be converted to JSON before storage
-        // For now, this is just cashtabCache
-        if (key === 'cashtabCache') {
-            value = cashtabCacheToJSON(value as CashtabCache);
-        }
-        if (key === 'wallets') {
-            value = cashtabWalletsToJSON(value as CashtabWallet[]);
-        }
-
-        // We lock the UI by setting loading to true while we set items in localforage
+        // We lock the UI by setting loading to true while we set items in storage
         // This is to prevent rapid user action from corrupting the db
         setLoading(true);
-        await localforage.setItem(key, value);
-        setLoading(false);
 
+        // Process each key for storage
+        for (const [key, value] of Object.entries(updates)) {
+            let storageKey = key;
+            let storageValue = value;
+
+            // We do not store the full activeWallet, only the address
+            // We choose the address because it is not changeable, like a name, and it is also not secret
+            if (key === 'activeWallet') {
+                /**
+                 * Special handling for the activeWallet
+                 * - We update the activeWalletAddress key with the address of the active wallet
+                 * - In the future, we will update cache with its utxos or other things that would be useful to cache
+                 *
+                 * Potential confusion that we are calling updateCashtabState with the 'activeWallet' key, which actually does not exist
+                 * But on balance, I think it's better to make sure the key we actually use matches what it actually stores, and to optimize
+                 * Cashtab storage and caching, we need to move beyond "everything is key value"
+                 */
+                storageKey = 'activeWalletAddress';
+                storageValue = (value as ActiveCashtabWallet).address;
+            }
+
+            // Handle any items that must be converted to JSON before storage
+            // For now, this is just cashtabCache
+            if (storageKey === 'cashtabCache') {
+                storageValue = cashtabCacheToJSON(value as CashtabCache);
+            }
+
+            await storage.set(storageKey, storageValue);
+        }
+
+        setLoading(false);
         return true;
     };
 
     /**
-     * Load all keys from localforage into state
+     * Load all keys from storage into state
      *
      * If any are invalid, migrate them to valid and update in storage
      *
@@ -243,62 +738,58 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
      *
      * While the app is running, we use cashtabState as the source of truth
      *
-     * We save to localforage on state changes in updateCashtabState
+     * We save to storage on state changes in updateCashtabState
      * so that these persist if the user navigates away from Cashtab     *
      */
     const loadCashtabState = async () => {
         // cashtabState is initialized with defaults when this component loads
 
         // contactList
-        let contactList: null | CashtabContact[] = await localforage.getItem(
-            'contactList',
-        );
+        let contactList: null | CashtabContact[] =
+            await storage.get<CashtabContact[]>('contactList');
         if (contactList !== null) {
-            // If we find a contactList in localforage
+            // If we find a contactList in storage
             if (!isValidContactList(contactList)) {
                 // and this contactList is invalid, migrate
 
                 // contactList is only expected to be invalid as legacy empty, i.e. [{}]
                 // We do not call a function to migrate contactList as no other migration is expected
                 contactList = [];
-                // Update localforage on app load only if existing values are in an obsolete format
-                updateCashtabState(
-                    'contactList',
-                    contactList as CashtabContact[],
-                );
+                // Update storage on app load only if existing values are in an obsolete format
+                updateCashtabState({
+                    contactList: contactList as CashtabContact[],
+                });
             }
-            // Set cashtabState contactList to valid localforage or migrated
+            // Set cashtabState contactList to valid storage or migrated
             cashtabState.contactList = contactList as CashtabContact[];
         }
 
         // settings
-        let settings: null | CashtabSettings = await localforage.getItem(
-            'settings',
-        );
+        let settings: null | CashtabSettings =
+            await storage.get<CashtabSettings>('settings');
         if (settings !== null) {
-            // If we find settings in localforage
+            // If we find settings in storage
             if (!isValidCashtabSettings(settings)) {
                 // If a settings object is present but invalid, parse to find and add missing keys
                 settings = migrateLegacyCashtabSettings(
                     settings as unknown as CashtabSettings,
                 );
-                // Update localforage on app load only if existing values are in an obsolete format
-                updateCashtabState(
-                    'settings',
-                    settings as unknown as CashtabSettings,
-                );
+                // Update storage on app load only if existing values are in an obsolete format
+                updateCashtabState({
+                    settings: settings as unknown as CashtabSettings,
+                });
             }
 
-            // Set cashtabState settings to valid localforage or migrated settings
+            // Set cashtabState settings to valid storage or migrated settings
             cashtabState.settings = settings as CashtabSettings;
         }
 
         // cashtabCache
         let cashtabCache: null | CashtabCacheJson | CashtabCache =
-            await localforage.getItem('cashtabCache');
+            await storage.get<CashtabCacheJson | CashtabCache>('cashtabCache');
 
         if (cashtabCache !== null) {
-            // If we find cashtabCache in localforage
+            // If we find cashtabCache in storage
 
             // cashtabCache must be converted from JSON as it stores a Map
             cashtabCache = storedCashtabCacheToMap(
@@ -308,273 +799,143 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
             if (!isValidCashtabCache(cashtabCache)) {
                 // If a cashtabCache object is present but invalid, nuke it and start again
                 cashtabCache = cashtabState.cashtabCache;
-                // Update localforage on app load only if existing values are in an obsolete format
-                updateCashtabState('cashtabCache', cashtabCache);
+                // Update storage on app load only if existing values are in an obsolete format
+                updateCashtabState({ cashtabCache: cashtabCache });
             }
 
-            // Set cashtabState cashtabCache to valid localforage or migrated settings
+            // Set cashtabState cashtabCache to valid storage or migrated settings
             cashtabState.cashtabCache = cashtabCache;
         }
 
         // Load wallets if present
-        // Make sure case of nothing at wallet or wallets is handled properly
-
-        // A legacy Cashtab user may have the active wallet stored at the wallet key
-        const storedWallet: null | LegacyCashtabWallet =
-            await localforage.getItem('wallet');
-
-        // After version 1.7.x, Cashtab users have all wallets stored at the wallets key
-        const storedWallets:
-            | null
-            | LegacyCashtabWallet[]
-            | StoredCashtabWallet[] = await localforage.getItem('wallets');
 
         /**
-         * Possible cases
+         * Five possibilities
          *
-         * 1 - NEW CASHTAB USER
-         * wallet === null && wallets === null
-         * nothing in localforage for wallet or wallets
-         *
-         * 2 - PARTIALLY MIGRATED CASHTAB USER
-         * wallet !== null && wallets !== null
-         * User first used Cashtab.com on legacy wallet/savedWallet keys
-         * but has now been migrated to use the wallets key
-         * No action required, load as normal. We could delete the legacy keys
-         * but we do not need the space so there is no expected benefit
-         *
-         * 3 - FULLY MIGRATED CASHTAB USER
-         * wallet === null && wallets !== null
-         * User created first wallet at Cashtab 1.7.0 or higher
-         *
-         * 4 - MIGRATION REQUIRED
-         * wallet !== null && wallets === null
-         * User has stored wallet information at old keys
-         * wallet for active wallet
-         * savedWallets for savedWallets
-         * Migrate to wallets key
+         * 1 - SuperLegacy user
+         *     - No activeWallet key
+         *     - activeWallet at the "wallet" key
+         *     - wallets, including activeWallet, at the "savedWallets" key
+         *     All wallets legacy format and must be recreated
+         * 2 - Legacy user
+         *     - No "activeWallet" key
+         *     - wallets at the "wallets" key
+         *     - No "savedWallets" key
+         * 3 - New user
+         *     - No "activeWallet" key
+         *     - No "wallets" key
+         *     - No "savedWallets" key
+         * 4 - Returning user
+         *     - "activeWallet" key
+         *     - "wallets" key
+         * 5 - Corrupted wallet data, user must wipe and reboot
          */
 
-        const legacyKeyMigrationRequired =
-            storedWallet !== null && storedWallets === null;
+        // As of 3.41.0, we should have an activeWalletAddress key, which stores the address of the active wallet
+        const activeWalletAddress: null | string = await storage.get<string>(
+            'activeWalletAddress',
+        );
+        const wallets: null | StoredCashtabWallet[] =
+            await storage.get<StoredCashtabWallet[]>('wallets');
 
-        let wallets: CashtabWallet[] = [];
-        if (legacyKeyMigrationRequired) {
-            // No need to check if a wallet stored at legacy 'wallet' key is valid
-            // We know it won't be, rebuild it
-            // Migrate this Cashtab user from keys "wallet" and "savedWallets" to key "wallets"
+        if (activeWalletAddress !== null && wallets !== null) {
+            // Normal startup
+            // We do not validate wallets as, if we have these keys in place, we know structure is the latest
+            const storedActiveWallet = wallets.find(
+                wallet => wallet.address === activeWalletAddress,
+            );
+            if (!storedActiveWallet) {
+                // Would reflect corrupted storage
+                throw new Error(
+                    'Corrupted storage: Active wallet not found in wallets',
+                );
+            }
+            const activeWallet = await createActiveCashtabWallet(
+                chronik,
+                storedActiveWallet,
+                cashtabState.cashtabCache,
+            );
+            cashtabState.activeWallet = activeWallet;
+            cashtabState.wallets = wallets;
+        } else if (wallets !== null) {
+            // Legacy user
+            console.info('Legacy user found in storage, migrating wallets');
 
-            // Determine if this wallet has legacy paths
-            // Cashtab wallets used to be created with Path145, Path245, and Path1899 keys
-            const extraPathsToMigrate = getLegacyPaths(storedWallet);
-
-            // If wallet is invalid, rebuild to latest Cashtab schema
-            let newWallet = await createCashtabWallet(
-                storedWallet.mnemonic,
-                extraPathsToMigrate,
+            // Migrate all wallets
+            const migratedLegacyWallets: StoredCashtabWallet[] = [];
+            for (const wallet of wallets) {
+                migratedLegacyWallets.push(
+                    createCashtabWallet(wallet.mnemonic, wallet.name),
+                );
+            }
+            cashtabState.wallets = migratedLegacyWallets;
+            cashtabState.activeWallet = await createActiveCashtabWallet(
+                chronik,
+                migratedLegacyWallets[0],
+                cashtabState.cashtabCache,
             );
 
-            // Keep original name
-            newWallet = { ...newWallet, name: storedWallet.name };
-
-            // wallets[0] is the active wallet in upgraded Cashtab localforage model
-            wallets.push(newWallet);
-
-            // Also migrate savedWallets
-            // Note that savedWallets is also a legacy key
-            const savedWallets: null | LegacyCashtabWallet[] =
-                await localforage.getItem('savedWallets');
-
-            if (savedWallets !== null) {
-                // If we find savedWallets in localforage, they will all be invalid
-                // as this key is deprecated
-
-                // Iterate over all savedWallets.
-                // If valid, do not change.
-                // If invalid, migrate and update savedWallets
-                const migratedSavedWallets = await Promise.all(
-                    savedWallets.map(
-                        async (savedWallet): Promise<CashtabWallet> => {
-                            // We may also have to migrate legacy paths for a saved wallet
-                            const extraPathsToMigrate =
-                                getLegacyPaths(savedWallet);
-                            // Recreate this wallet at latest format from mnemonic
-
-                            const newSavedWallet = await createCashtabWallet(
-                                savedWallet.mnemonic,
-                                extraPathsToMigrate,
-                            );
-
-                            return {
-                                ...newSavedWallet,
-                                name: savedWallet.name,
-                            };
-                        },
-                    ),
-                );
-
-                // Because Promise.all() will not preserve order, sort alphabetically by name
-                migratedSavedWallets.sort((a, b) =>
-                    a.name.localeCompare(b.name),
-                );
-
-                // In legacy Cashtab storage, the key savedWallets also stored the active wallet
-                // Delete wallet from savedWallets
-                const indexOfSavedWalletMatchingWallet =
-                    migratedSavedWallets.findIndex(
-                        savedWallet =>
-                            savedWallet.mnemonic === newWallet.mnemonic,
-                    );
-                migratedSavedWallets.splice(
-                    indexOfSavedWalletMatchingWallet,
-                    1,
-                );
-
-                // Update wallets array to include legacy wallet and legacy savedWallets
-                // migrated to current Cashtab format
-                wallets = wallets.concat(migratedSavedWallets);
-
-                // Set cashtabState wallets to migrated wallet + savedWallets
-                cashtabState.wallets = wallets;
-
-                // We do not updateCashtabState('wallets', wallets) here
-                // because it will happen in the update routine as soon as
-                // the active wallet is populated
-            }
+            // For migrating users, we must update the wallets key
+            await updateCashtabState({ wallets: migratedLegacyWallets });
         } else {
-            // Load from wallets key, or initialize new user
+            // Test for superLegacy user
+            const wallet: null | StoredCashtabWallet =
+                await storage.get<StoredCashtabWallet>('wallet');
+            const savedWallets: null | LegacyCashtabWallet[] =
+                await storage.get<LegacyCashtabWallet[]>('savedWallets');
 
-            // If the user has already migrated to latest keys, we load wallets from localforage key directly
+            if (wallet === null && savedWallets === null) {
+                // A new user
+                console.info(
+                    `No wallets found in storage, initializing for new user`,
+                );
+                // For this case, there is no need to sync utxos
+                setInitialUtxoSyncComplete(true);
+                cashtabState.wallets = [];
+                // We leave activeWallet undefined to denote a new user
+                // This will trigger rendering the OnBoarding screen
+            } else if (wallet !== null && savedWallets !== null) {
+                // SuperLegacy
+                console.info(
+                    `SuperLegacy user found in storage, migrating wallets`,
+                );
+                const migratedSuperLegacyWallets: StoredCashtabWallet[] = [];
 
-            if (storedWallets !== null && storedWallets.length > 0) {
-                // If we find wallets in localforage
-                // In this case, we do not need to migrate from the wallet and savedWallets keys
-                // We may or may not need to migrate wallets found at the wallets key to a new format
+                // superLegacy stored the active wallet at the 'wallet' key
+                const migratedActiveWallet = createCashtabWallet(
+                    wallet.mnemonic,
+                    wallet.name,
+                );
 
-                // Revive from storage
-                const loadedPossiblyLegacyWallets =
-                    cashtabWalletsFromJSON(storedWallets);
-
-                // Validate
-                let walletsValid = true;
-                for (const loadedPossiblyLegacyWallet of loadedPossiblyLegacyWallets) {
-                    if (!isValidCashtabWallet(loadedPossiblyLegacyWallet)) {
-                        walletsValid = false;
-                        // Any invalid wallet means we need to migrate
-                        break;
-                    }
-                }
-
-                if (walletsValid) {
-                    // Set cashtabState wallets to wallets from localforage
-                    // (or migrated wallets if localforage included any invalid wallet)
-                    cashtabState.wallets =
-                        loadedPossiblyLegacyWallets as CashtabWallet[];
-
-                    // We do not updateCashtabState('wallets', wallets) here
-                    // because it will happen in the update routine as soon as
-                    // the active wallet is populated
-                } else {
-                    // Handle the 0-index wallet separately, as this is the active wallet
-                    const activeWallet = loadedPossiblyLegacyWallets.shift() as
-                        | LegacyCashtabWallet
-                        | CashtabWallet;
-                    let migratedWallets: CashtabWallet[] = [];
-                    if (!isValidCashtabWallet(activeWallet)) {
-                        // Migrate the active wallet
-                        // We may also have to migrate legacy paths for a saved wallet
-                        const extraPathsToMigrate =
-                            getLegacyPaths(activeWallet);
-
-                        // Recreate this wallet at latest format from mnemonic
-                        const migratedUnnamedActiveWallet =
-                            await createCashtabWallet(
-                                activeWallet.mnemonic,
-                                extraPathsToMigrate,
-                            );
-
-                        // Keep the same name as existing wallet
-                        const migratedNamedActiveWallet = {
-                            ...migratedUnnamedActiveWallet,
-                            name: activeWallet.name,
-                        };
-                        migratedWallets.push(migratedNamedActiveWallet);
-                    } else {
-                        migratedWallets.push(activeWallet as CashtabWallet);
-                    }
-                    // Iterate over all wallets. If valid, do not change. If invalid, migrate and update array.
-                    const otherMigratedWallets = await Promise.all(
-                        loadedPossiblyLegacyWallets.map(
-                            async loadedPossiblyLegacyWallet => {
-                                if (
-                                    !isValidCashtabWallet(
-                                        loadedPossiblyLegacyWallet,
-                                    )
-                                ) {
-                                    // We may also have to migrate legacy paths for a saved wallet
-                                    const extraPathsToMigrate = getLegacyPaths(
-                                        loadedPossiblyLegacyWallet as LegacyCashtabWallet,
-                                    );
-
-                                    // Recreate this wallet at latest format from mnemonic
-
-                                    const migratedWallet =
-                                        await createCashtabWallet(
-                                            loadedPossiblyLegacyWallet.mnemonic,
-                                            extraPathsToMigrate,
-                                        );
-
-                                    // Keep the same name as existing wallet
-                                    return {
-                                        ...migratedWallet,
-                                        name: loadedPossiblyLegacyWallet.name,
-                                    };
-                                }
-
-                                // No modification if it is valid
-                                return loadedPossiblyLegacyWallet as CashtabWallet;
-                            },
-                        ),
+                for (const wallet of savedWallets) {
+                    migratedSuperLegacyWallets.push(
+                        createCashtabWallet(wallet.mnemonic, wallet.name),
                     );
-                    // Because Promise.all() will not preserve order, sort wallets alphabetically by name
-                    otherMigratedWallets.sort((a, b) =>
-                        a.name.localeCompare(b.name),
-                    );
-
-                    migratedWallets =
-                        migratedWallets.concat(otherMigratedWallets);
-
-                    // Set cashtabState wallets to wallets from localforage
-                    // (or migrated wallets if localforage included any invalid wallet)
-                    cashtabState.wallets = migratedWallets;
                 }
+                cashtabState.wallets = migratedSuperLegacyWallets;
+
+                cashtabState.activeWallet = await createActiveCashtabWallet(
+                    chronik,
+                    migratedActiveWallet,
+                    cashtabState.cashtabCache,
+                );
+
+                // For migrating users, we must update the wallets key
+                await updateCashtabState({
+                    wallets: migratedSuperLegacyWallets,
+                });
             } else {
-                // So, if we do not find wallets from localforage, cashtabState will be initialized with default
-                // wallets []
-                cashtabState.wallets = wallets;
+                // Corrupt storage
+                toast.error(
+                    'Corrupted storage: Cashtab was unable to load wallets from storage',
+                );
+                // Load as new user
+                cashtabState.wallets = [];
             }
         }
+
         setCashtabState(cashtabState);
         setCashtabLoaded(true);
-
-        // Get chaintip height
-        // We do not have to lock UI while this is unavailable
-        // Impact of not having this:
-        // 1) txs may not be marked as avalanche finalized until we get it
-        // 2) we ignore all coinbase utxos in tx building
-        try {
-            const info = await chronik.blockchainInfo();
-            const { tipHeight } = info;
-            // See if it is finalized
-            const blockDetails = await chronik.block(tipHeight);
-
-            if (blockDetails.blockInfo.isFinal) {
-                // We only set a chaintip if it is avalanche finalized
-                setChaintipBlockheight(tipHeight);
-            }
-        } catch (err) {
-            console.error(`Error fetching chaintipBlockheight`, err);
-        }
 
         // Initialize the websocket connection
 
@@ -600,12 +961,12 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
         // We always subscribe to blocks
         ws.subscribeToBlocks();
 
-        if (cashtabState.wallets.length > 0) {
-            // Subscribe to addresses of current wallet, if you have one
-            const hash160Array = getHashes(cashtabState.wallets[0]);
-            for (const hash of hash160Array) {
-                ws.subscribeToScript('p2pkh', hash);
-            }
+        if (
+            cashtabState.wallets.length > 0 &&
+            cashtabState.activeWallet !== undefined
+        ) {
+            // Subscribe to address of current wallet, if you have one
+            ws.subscribeToAddress(cashtabState.activeWallet.address);
         } else {
             // Set loading to false if we have no wallet
             // as we will not get to the update() until the user creates a wallet
@@ -620,22 +981,19 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
     /**
      * Update websocket subscriptions when active wallet changes
      * Update websocket onMessage handler when fiatPrice changes
-     * @param cashtabState
-     * @param fiatPrice
      */
-    const updateWebsocket = (
-        cashtabState: CashtabState,
-        fiatPrice: number | null,
-    ) => {
+    const updateWebsocket = () => {
         if (ws === null) {
             // Should never happen, we only call this in a useEffect when ws is not null
             return;
         }
+        if (cashtabState.activeWallet === undefined) {
+            // Should never happen, we only call this in a useEffect when activeWallet is defined
+            return;
+        }
         // Set or update the onMessage handler
         // We can only set this when wallet is defined, so we do not set it in loadCashtabState
-        ws.onMessage = msg => {
-            processChronikWsMsg(msg, cashtabState, fiatPrice);
-        };
+        ws.onMessage = wsMessageHandler;
 
         // Check if current subscriptions match current wallet
         const { subs } = ws;
@@ -650,179 +1008,23 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
             subscribedPayloads.push(script.payload);
         }
 
-        let subscriptionUpdateRequired = false;
-        const hash160Array = getHashes(cashtabState.wallets[0]);
-        if (scripts.length !== hash160Array.length) {
-            // If the websocket is not subscribed to the same amount of addresses as the wallet,
-            // we need to update subscriptions
-            subscriptionUpdateRequired = true;
-        }
-
-        for (const script of scripts) {
-            // If any wallet hash is not subscribed to, we need to update subscriptions
-            if (!hash160Array.includes(script.payload)) {
-                subscriptionUpdateRequired = true;
-            }
-        }
-
-        if (subscriptionUpdateRequired) {
-            // If we need to update subscriptions
+        if (
+            subscribedPayloads.length !== 1 ||
+            subscribedPayloads[0] !== cashtabState.activeWallet.hash
+        ) {
+            // If we are subscribed to no addresses, more than 1 address, or the wrong address, we need to update subscriptions
 
             // Unsubscribe from all existing subscriptions
             for (const payload of subscribedPayloads) {
                 ws.unsubscribeFromScript('p2pkh', payload);
             }
 
-            // Subscribe to all hashes in the active wallet
-            for (const hash of hash160Array) {
-                ws.subscribeToScript('p2pkh', hash);
-            }
+            // Subscribe to active wallet appConfig.derivationPath address
+            ws.subscribeToAddress(cashtabState.activeWallet.address);
         }
 
         // Update ws in state
         return setWs(ws);
-    };
-
-    // Parse chronik ws message for incoming tx notifications
-    const processChronikWsMsg = async (
-        msg: WsMsgClient,
-        cashtabState: CashtabState,
-        fiatPrice: null | number,
-    ) => {
-        if (!('msgType' in msg)) {
-            // No processing chronik error msgs
-            console.error(`Error from chronik websocket`, msg);
-            return;
-        }
-        // get the message type
-        const { msgType } = msg;
-        // get cashtabState params from param, so you know they are the most recent
-        const { settings, cashtabCache } = cashtabState;
-        // Cashtab only processes "first seen" transactions and new blocks, i.e. where
-        // type === 'AddedToMempool' or 'BlockConnected'
-        // Dev note: Other chronik msg types
-        // "Confirmed", arrives as subscribed + seen txid is confirmed in a block
-        if (msgType !== 'TX_ADDED_TO_MEMPOOL' && msgType !== 'BLK_FINALIZED') {
-            return;
-        }
-
-        if (msgType === 'BLK_FINALIZED') {
-            // Handle avalanche finalized block
-            const { blockHeight } = msg;
-            // Set chaintip height
-            setChaintipBlockheight(blockHeight);
-
-            // If you have unfinalized txs in tx history,
-            // Update cashtab state on avalanche finalized block
-            // This will update tx history and finalize any txs that are now finalized
-            // Do it here instead of from a tx_finalized msg bc you may have several finalized txs
-            // and, at the moment, all txs would only be finalized on a block
-            const { wallets } = cashtabState;
-            if (hasUnfinalizedTxsInHistory(wallets[0])) {
-                // If we have unfinalized txs, update cashtab state to see if they are finalized
-                // by this block
-                update(cashtabState);
-            }
-
-            return;
-        }
-
-        // For all other messages, update cashtabState
-        update(cashtabState);
-
-        // get txid info
-        const txid = (msg as MsgTxClient).txid;
-
-        let incomingTxDetails;
-        try {
-            incomingTxDetails = await chronik.tx(txid);
-        } catch (err) {
-            // In this case, no notification
-            return console.error(
-                `Error in chronik.tx(${txid} while processing an incoming websocket tx`,
-                err,
-            );
-        }
-
-        const tokenCacheForParsingThisTx = cashtabCache.tokens;
-        let thisTokenCachedInfo;
-        let tokenId;
-        if (
-            incomingTxDetails.tokenStatus !== 'TOKEN_STATUS_NON_TOKEN' &&
-            incomingTxDetails.tokenEntries.length > 0
-        ) {
-            // If this is a token tx with at least one tokenId that is NOT cached, get token info
-            // TODO we must get token info for multiple token IDs when we start supporting
-            // token types other than slpv1
-            tokenId = incomingTxDetails.tokenEntries[0].tokenId;
-            thisTokenCachedInfo = cashtabCache.tokens.get(tokenId);
-            if (typeof thisTokenCachedInfo === 'undefined') {
-                // If we do not have this token cached
-                // Note we do not update the cache here because this is handled in update
-                try {
-                    thisTokenCachedInfo = await getTokenGenesisInfo(
-                        chronik,
-                        tokenId,
-                    );
-                    tokenCacheForParsingThisTx.set(
-                        tokenId,
-                        thisTokenCachedInfo,
-                    );
-                } catch (err) {
-                    console.error(
-                        `Error fetching chronik.token(${tokenId})`,
-                        err,
-                    );
-
-                    // Do not throw, in this case tokenCacheForParsingThisTx will still not
-                    // include this token info, and the tx will be parsed as if it has 0 decimals
-
-                    // We do not show the (wrong) amount in the notification if this is the case
-                }
-            }
-        }
-
-        // parse tx for notification
-        const parsedTx = parseTx(
-            incomingTxDetails,
-            getHashes(cashtabState.wallets[0]),
-        );
-
-        // if token tx, get tokenId
-
-        // parse tx for notification msg
-        const notificationMsg = getTxNotificationMsg(
-            parsedTx,
-            fiatPrice,
-            locale,
-            settings.fiatCurrency.toUpperCase(),
-            thisTokenCachedInfo?.genesisInfo,
-        );
-
-        if (typeof notificationMsg === 'undefined') {
-            // We do not send a notification for some msgs
-            return;
-        }
-
-        // eToken txs should have token icon
-        if (parsedTx.parsedTokenEntries.length > 0) {
-            toast(notificationMsg, {
-                icon: React.createElement(TokenIconToast, {
-                    type: 'default',
-                    theme: 'default',
-                    size: 32,
-                    tokenId: tokenId as string,
-                }),
-            });
-        } else {
-            // Otherwise normal
-            toast(notificationMsg, {
-                icon: CashReceivedNotificationIcon,
-            });
-        }
-
-        // Return true if we get here
-        return true;
     };
 
     // With different currency selections possible, need unique intervals for price checks
@@ -939,6 +1141,13 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
     };
 
     const cashtabBootup = async () => {
+        // Initialize platform storage
+        const storageInit = await initializeStorage();
+        if (!storageInit.success) {
+            console.error('Failed to initialize storage:', storageInit.error);
+            // We continue anyway as storage adapters have fallbacks
+        }
+
         await loadCashtabState();
     };
 
@@ -946,17 +1155,23 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
         cashtabBootup();
     }, []);
 
+    // Initialize Wallet when activeWallet changes
+    useEffect(() => {
+        if (cashtabLoaded && cashtabState.activeWallet) {
+            initializeWallet();
+        } else {
+            setEcashWallet(null);
+        }
+    }, [cashtabLoaded, cashtabState.activeWallet?.address]);
+
     // Call the update loop every time the user changes the active wallet
     // and immediately after cashtab is loaded
     useEffect(() => {
-        if (cashtabLoaded !== true || cashtabState.wallets.length === 0) {
-            // Do not update the active wallet unless
-            // 1. Cashtab is loaded
-            // 2. You have a valid active wallet in cashtabState
-            return;
+        if (cashtabLoaded) {
+            // Sync utxos to unlock the UI, and then lazy load the rest of Cashtab state
+            startupUtxoSync();
         }
-        update(cashtabState);
-    }, [cashtabLoaded, cashtabState.wallets[0]?.name]);
+    }, [cashtabLoaded]);
 
     // Clear price API and update to new price API when fiat currency changes
     useEffect(() => {
@@ -1057,8 +1272,68 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
             // We can call with fiatPrice of null, we will not always have fiatPrice
             return;
         }
-        updateWebsocket(cashtabState, fiatPrice);
+        updateWebsocket();
     }, [cashtabState, fiatPrice, ws, cashtabLoaded]);
+
+    // Handle app lifecycle events to keep websocket alive on mobile
+    useEffect(() => {
+        // Only set up app lifecycle listeners on native platforms
+        if (Capacitor.isNativePlatform()) {
+            console.log(
+                `Setting up app lifecycle listeners on native platform`,
+            );
+            let appStateListener: { remove: () => void } | null = null;
+
+            const setupAppListeners = async () => {
+                // Listen for app state changes (foreground/background)
+                appStateListener = await App.addListener(
+                    'appStateChange',
+                    state => {
+                        if (state.isActive) {
+                            // App came to foreground - update state and resume websocket
+                            isAppActiveRef.current = true;
+                            console.log(
+                                'App came to foreground, resuming websocket...',
+                            );
+                            const currentWs = wsRef.current;
+                            if (currentWs) {
+                                currentWs.resume();
+                            }
+                        } else {
+                            // App went to background - pause websocket to save resources
+                            isAppActiveRef.current = false;
+                            const currentWs = wsRef.current;
+                            if (currentWs) {
+                                currentWs.pause();
+                                console.log(
+                                    'App went to background, paused websocket',
+                                );
+                            } else {
+                                console.log('App went to background');
+                            }
+                        }
+                    },
+                );
+            };
+
+            setupAppListeners();
+
+            return () => {
+                if (appStateListener) {
+                    appStateListener.remove();
+                }
+            };
+        }
+    }, []);
+
+    /**
+     * Handle activating a copied wallet by only updating the activeWalletAddress in storage
+     * This is used for address sharing scenarios where we don't need to fully initialize the wallet
+     * @param walletAddress The address of the wallet to activate
+     */
+    const handleActivatingCopiedWallet = async (walletAddress: string) => {
+        await storage.set('activeWalletAddress', walletAddress);
+    };
 
     return {
         chronik,
@@ -1070,11 +1345,20 @@ const useWallet = (chronik: ChronikClient, agora: Agora, ecc: Ecc) => {
         cashtabLoaded,
         loading,
         setLoading,
+        initialUtxoSyncComplete,
         apiError,
         updateCashtabState,
-        processChronikWsMsg,
+        handleActivatingCopiedWallet,
+        processChronikWsMsg: async (msg: WsMsgClient) => {
+            await wsMessageHandler(msg);
+            return true;
+        },
         cashtabState,
+        transactionHistory,
+        refreshTransactionHistory,
+        update,
         setCashtabState,
+        ecashWallet,
     } as UseWalletReturnType;
 };
 

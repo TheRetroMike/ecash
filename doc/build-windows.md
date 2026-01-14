@@ -5,7 +5,7 @@ Below are some notes on how to build Bitcoin ABC for Windows.
 
 The options known to work for building Bitcoin ABC on Windows are:
 
-* On Linux, using the [Mingw-w64](https://mingw-w64.org/doku.php) cross compiler tool chain. Debian Bullseye is recommended
+* On Linux, using the [Mingw-w64](https://mingw-w64.org/doku.php) cross compiler tool chain. Debian Bookworm is recommended
 and is the platform used to build the Bitcoin ABC Windows release binaries.
 * On Windows, using [Windows
 Subsystem for Linux (WSL)](https://msdn.microsoft.com/commandline/wsl/about) and the Mingw-w64 cross compiler tool chain.
@@ -15,7 +15,7 @@ Other options which may work, but which have not been extensively tested are (pl
 * On Windows, using a POSIX compatibility layer application such as [cygwin](http://www.cygwin.com/) or [msys2](http://www.msys2.org/).
 * On Windows, using a native compiler tool chain such as [Visual Studio](https://www.visualstudio.com).
 
-In any case please make sure that the compiler supports C++17.
+In any case please make sure that the compiler supports C++20.
 
 Installing Windows Subsystem for Linux
 ---------------------------------------
@@ -120,7 +120,7 @@ Once the source code is ready the build steps are below:
     cd ..
     mkdir build
     cd build
-    cmake -GNinja .. -DCMAKE_TOOLCHAIN_FILE=../cmake/platforms/Win64.cmake -DBUILD_BITCOIN_SEEDER=OFF # seeder not supported in Windows yet
+    cmake -GNinja .. -DCMAKE_TOOLCHAIN_FILE=../cmake/platforms/Win64.cmake -DBUILD_SEEDER=OFF # seeder not supported in Windows yet
     ninja
 
 ## Depends system
@@ -135,7 +135,7 @@ executables to a directory on the Windows drive in the same directory structure
 as they appear in the release `.zip` archive. This can be done in the following
 way. This will install to `c:\workspace\bitcoin-abc`, for example:
 
-    cmake -GNinja .. -DCMAKE_TOOLCHAIN_FILE=../cmake/platforms/Win64.cmake -DBUILD_BITCOIN_SEEDER=OFF -DCMAKE_INSTALL_PREFIX=/mnt/c/workspace/bitcoin-abc
+    cmake -GNinja .. -DCMAKE_TOOLCHAIN_FILE=../cmake/platforms/Win64.cmake -DBUILD_SEEDER=OFF -DCMAKE_INSTALL_PREFIX=/mnt/c/workspace/bitcoin-abc
     ninja install
 
 Footnotes

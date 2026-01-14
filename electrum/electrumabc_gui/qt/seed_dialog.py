@@ -23,13 +23,14 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import mnemonic
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt
+from qtpy.QtGui import QIcon
 
 from electrumabc import mnemo, old_mnemonic, slip39
 from electrumabc.constants import PROJECT_NAME
 from electrumabc.i18n import _
+from electrumabc.simple_config import SimpleConfig
 
 from .completion_text_edit import CompletionTextEdit
 from .qrtextedit import ScanQRTextEdit
@@ -197,7 +198,10 @@ class SeedLayout(QtWidgets.QVBoxLayout):
             seed_type_text = mnemo.format_seed_type_name_for_ui(seed_type)
             grid_maybe.addWidget(QtWidgets.QLabel(_("Seed format") + ":"), grid_row, 0)
             grid_maybe.addWidget(
-                QtWidgets.QLabel(f"<b>{seed_type_text}</b>"), grid_row, 1, Qt.AlignLeft
+                QtWidgets.QLabel(f"<b>{seed_type_text}</b>"),
+                grid_row,
+                1,
+                Qt.AlignmentFlag.AlignLeft,
             )
             grid_row += 1
         if passphrase:
@@ -404,11 +408,18 @@ class SeedLayout(QtWidgets.QVBoxLayout):
 
 
 class KeysLayout(QtWidgets.QVBoxLayout):
-    def __init__(self, parent=None, title=None, is_valid=None, allow_multi=False):
+    def __init__(
+        self,
+        config: SimpleConfig,
+        parent=None,
+        title=None,
+        is_valid=None,
+        allow_multi=False,
+    ):
         QtWidgets.QVBoxLayout.__init__(self)
         self.parent = parent
         self.is_valid = is_valid
-        self.text_e = ScanQRTextEdit(allow_multi=allow_multi)
+        self.text_e = ScanQRTextEdit(config, allow_multi=allow_multi)
         self.text_e.textChanged.connect(self.on_edit)
         self.addWidget(WWLabel(title))
         self.addWidget(self.text_e)

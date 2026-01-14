@@ -30,7 +30,9 @@ FILE *FlatFileSeq::Open(const FlatFilePos &pos, bool read_only) {
         return nullptr;
     }
     fs::path path = FileName(pos);
-    fs::create_directories(path.parent_path());
+    if (!read_only) {
+        fs::create_directories(path.parent_path());
+    }
     FILE *file = fsbridge::fopen(path, read_only ? "rb" : "rb+");
     if (!file && !read_only) {
         file = fsbridge::fopen(path, "wb+");
@@ -81,15 +83,18 @@ bool FlatFileSeq::Flush(const FlatFilePos &pos, bool finalize) {
     // Avoid fseek to nPos
     FILE *file = Open(FlatFilePos(pos.nFile, 0));
     if (!file) {
-        return error("%s: failed to open file %d", __func__, pos.nFile);
+        LogError("%s: failed to open file %d\n", __func__, pos.nFile);
+        return false;
     }
     if (finalize && !TruncateFile(file, pos.nPos)) {
         fclose(file);
-        return error("%s: failed to truncate file %d", __func__, pos.nFile);
+        LogError("%s: failed to truncate file %d\n", __func__, pos.nFile);
+        return false;
     }
     if (!FileCommit(file)) {
         fclose(file);
-        return error("%s: failed to commit file %d", __func__, pos.nFile);
+        LogError("%s: failed to commit file %d\n", __func__, pos.nFile);
+        return false;
     }
     DirectoryCommit(m_dir);
 

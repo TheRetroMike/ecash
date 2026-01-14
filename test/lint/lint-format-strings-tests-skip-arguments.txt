@@ -1,22 +1,23 @@
-++++++++++ With --skip_arguments=1 ++++++++++
-The following tests will throw an error if skip-argument is not 1
+++++++++++ With 1 skipped argument ++++++++++
 
 --- Good ones ---
+LogDebug(skipped, "%d", 1);
 fprintf(skipped, "%d", 1);
-fprintf(skipped, "%a%b%z", 1, "anything", 3);
+fprintf(skipped, "%a%s%f", 1, "anything", 3);
 
 -- Too many arguments ---
 fprintf(skipped, "%d", 1, 2); => error
+LogDebug(skipped, "%d", 1, 2);
 
 --- Not enough argument ---
 fprintf(skipped, "%d"); should throw => error
+LogTrace(skipped, "%d%f", 1);
 
-++++++++++ With --skip_arguments=2 ++++++++++
-The following tests will throw an error if skip-argument is not 2
+++++++++++ With 2 skipped arguments ++++++++++
 
 --- Good ones ---
 snprintf(skip1, skip2, "%d", 1);
-snprintf(skip1, skip2, "%a%b%z", 1, "anything", 3);
+snprintf(skip1, skip2, "%a%s%f", 1, "anything", 3);
 
 -- Too many arguments ---
 snprintf(skip1, skip2, "%d", 1, 2); => error

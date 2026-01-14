@@ -2,8 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { WalletContext, isWalletContextLoaded } from 'wallet/context';
+import { ActiveCashtabWallet } from 'wallet';
 import {
     TrashcanIcon,
     EditIcon,
@@ -11,7 +12,7 @@ import {
     BankIcon,
 } from 'components/Common/CustomIcons';
 import Modal from 'components/Common/Modal';
-import { ModalInput } from 'components/Common/Inputs';
+import { ModalInput, ModalTextArea } from 'components/Common/Inputs';
 import { toast } from 'react-toastify';
 import PrimaryButton, {
     SecondaryButton,
@@ -28,19 +29,25 @@ import {
     WalletName,
     ButtonPanel,
     SvgButtonPanel,
-    WalletBalance,
     ActivateButton,
+    AddressShareModal,
+    WalletAddressRow,
+    WalletInfo,
+    WalletNameText,
+    WalletAddress,
+    CopyButton,
+    ActiveIndicator,
 } from 'components/Wallets/styles';
 import { getWalletNameError, validateMnemonic } from 'validation';
 import {
     createCashtabWallet,
     generateMnemonic,
-    getWalletsForNewActiveWallet,
-    CashtabWallet,
+    StoredCashtabWallet,
+    createActiveCashtabWallet,
 } from 'wallet';
-import { getUserLocale } from 'helpers';
+import { previewAddress } from 'helpers';
+import { sortWalletsForDisplay } from 'wallet';
 import { Event } from 'components/Common/GoogleAnalytics';
-import { toFormattedXec } from 'formatting';
 import debounce from 'lodash.debounce';
 import { PageHeader } from 'components/Common/Atoms';
 
@@ -59,15 +66,22 @@ interface WalletsFormDataErrors {
 }
 
 const Wallets = () => {
-    const userLocale = getUserLocale(navigator);
     const ContextValue = useContext(WalletContext);
     if (!isWalletContextLoaded(ContextValue)) {
         // Confirm we have all context required to load the page
         return null;
     }
-    const { cashtabState, setCashtabState, setLoading, updateCashtabState } =
-        ContextValue;
-    const { wallets, contactList } = cashtabState;
+    const {
+        cashtabState,
+        chronik,
+        setLoading,
+        updateCashtabState,
+        handleActivatingCopiedWallet,
+    } = ContextValue;
+    const { wallets, contactList, activeWallet } = cashtabState;
+    if (activeWallet === undefined) {
+        return null;
+    }
 
     const emptyFormData: WalletsFormData = {
         renamedWalletName: '',
@@ -88,20 +102,49 @@ const Wallets = () => {
     const [formDataErrors, setFormDataErrors] =
         useState<WalletsFormDataErrors>(emptyFormDataErrors);
     const [walletToBeRenamed, setWalletToBeRenamed] =
-        useState<null | CashtabWallet>(null);
+        useState<null | StoredCashtabWallet>(null);
     const [walletToBeDeleted, setWalletToBeDeleted] =
-        useState<null | CashtabWallet>(null);
+        useState<null | StoredCashtabWallet>(null);
     const [showImportWalletModal, setShowImportWalletModal] =
         useState<boolean>(false);
+    const [showAddressShareModal, setShowAddressShareModal] =
+        useState<boolean>(false);
+
+    // Check for address sharing URL parameter on component mount
+    useEffect(() => {
+        if (
+            !window.location ||
+            !window.location.hash ||
+            window.location.hash === '#/wallets'
+        ) {
+            return;
+        }
+
+        try {
+            const windowHash = window.location.hash;
+            const queryStringArray = windowHash.split('#/wallets?');
+            if (queryStringArray.length < 2) {
+                return;
+            }
+            const queryString = queryStringArray[1];
+            const queryStringParams = new URLSearchParams(queryString);
+            const shareAddresses = queryStringParams.get('shareAddresses');
+
+            if (shareAddresses === 'true') {
+                setShowAddressShareModal(true);
+            }
+        } catch {
+            // If you can't parse this, forget about it
+            return;
+        }
+    }, []);
 
     /**
      * Update formData with user input
      * e.target.value will be input value
      * e.target.name will be name of originating input field
      */
-    const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const { name, value } = e.target;
-
+    const handleInputCommon = (name: string, value: string) => {
         if (name === 'renamedWalletName') {
             setFormDataErrors(previous => ({
                 ...previous,
@@ -138,6 +181,16 @@ const Wallets = () => {
         }));
     };
 
+    const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, value } = e.target;
+        handleInputCommon(name, value);
+    };
+
+    const handleTextAreaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        handleInputCommon(name, value);
+    };
+
     /**
      * Get user input to rename a wallet
      * We only expect to be in this function if walletToBeRenamed is not null
@@ -166,7 +219,16 @@ const Wallets = () => {
             walletToUpdate.name = formData.renamedWalletName;
 
             // Update localforage and state
-            await updateCashtabState('wallets', wallets);
+            const updates: {
+                wallets: StoredCashtabWallet[];
+                activeWallet?: ActiveCashtabWallet;
+            } = { wallets };
+            if (activeWallet.mnemonic === walletToBeRenamed.mnemonic) {
+                // Also update the active wallet name
+                activeWallet.name = formData.renamedWalletName;
+                updates.activeWallet = activeWallet;
+            }
+            await updateCashtabState(updates);
             toast.success(
                 `"${oldName}" renamed to "${formData.renamedWalletName}"`,
             );
@@ -198,7 +260,7 @@ const Wallets = () => {
         );
 
         // Update localforage and state
-        await updateCashtabState('wallets', updatedWallets);
+        await updateCashtabState({ wallets: updatedWallets });
         toast.success(`"${walletToBeDeleted.name}" deleted`);
 
         // Reset walletToBeDeleted to hide the modal
@@ -217,7 +279,7 @@ const Wallets = () => {
     const addNewWallet = async () => {
         // Generate a new wallet with a new mnemonic
         const mnemonic = generateMnemonic();
-        const newAddedWallet = await createCashtabWallet(mnemonic);
+        const newAddedWallet = createCashtabWallet(mnemonic);
 
         // Note: technically possible though highly unlikley that a wallet already exists with this name
         // Also technically possible though ... er, almost impossibly improbable for wallet with same mnemonic to exist
@@ -241,7 +303,7 @@ const Wallets = () => {
         // Track number of times a different wallet is activated
         Event('Configure.js', 'Create Wallet', 'New');
         // Add it to the end of the wallets object
-        updateCashtabState('wallets', [...wallets, newAddedWallet]);
+        updateCashtabState({ wallets: [...wallets, newAddedWallet] });
 
         toast.success(`New wallet "${newAddedWallet.name}" added to wallets`);
     };
@@ -268,7 +330,7 @@ const Wallets = () => {
         }
 
         // Create a new wallet from mnemonic
-        const newImportedWallet = await createCashtabWallet(formData.mnemonic);
+        const newImportedWallet = createCashtabWallet(formData.mnemonic);
 
         // Handle edge case of another wallet having the same name
         const existingWalletHasSameName = wallets.find(
@@ -292,7 +354,7 @@ const Wallets = () => {
         Event('Configure.js', 'Create Wallet', 'Imported');
 
         // Add it to the end of the wallets object
-        updateCashtabState('wallets', [...wallets, newImportedWallet]);
+        updateCashtabState({ wallets: [...wallets, newImportedWallet] });
 
         // Import success modal
         toast.success(
@@ -309,8 +371,8 @@ const Wallets = () => {
     /**
      * Add a wallet to contacts
      */
-    const addWalletToContacts = async (wallet: CashtabWallet) => {
-        const addressToAdd = wallet.paths.get(1899).address;
+    const addWalletToContacts = async (wallet: StoredCashtabWallet) => {
+        const addressToAdd = wallet.address;
 
         // Check to see if the contact exists
         const contactExists = contactList.find(
@@ -328,42 +390,58 @@ const Wallets = () => {
                 address: addressToAdd,
             });
             // update localforage and state
-            await updateCashtabState('contactList', contactList);
+            await updateCashtabState({ contactList: contactList });
             toast.success(
                 `${wallet.name} (${addressToAdd}) added to Contact List`,
             );
         }
     };
 
-    const activateWallet = (
-        walletToActivate: CashtabWallet,
-        wallets: CashtabWallet[],
-    ) => {
-        // Get desired wallets array after activating walletToActivate
-        const walletsAfterActivation = getWalletsForNewActiveWallet(
-            walletToActivate,
-            wallets,
-        );
+    /**
+     * Copy wallet address and close tab
+     */
+    const copyWalletAddress = async (address: string, walletName: string) => {
+        if (navigator.clipboard) {
+            await navigator.clipboard.writeText(address);
+        }
+        toast.success(`"${address}" copied to clipboard`);
 
+        // Find the wallet that was copied
+        const copiedWallet = wallets.find(wallet => wallet.name === walletName);
+
+        // If the copied wallet is not the active wallet, activate it
+        if (copiedWallet && activeWallet.mnemonic !== copiedWallet.mnemonic) {
+            // Event("Category", "Action", "Label")
+            // Track number of times a different wallet is activated
+            Event('Configure.js', 'Activate', '');
+
+            // Only update the activeWalletAddress in storage for address copying
+            await handleActivatingCopiedWallet(copiedWallet.address);
+        }
+
+        // Close the tab after copying - this works when the tab was opened by JavaScript
+        window.close();
+    };
+
+    const activateWallet = async (walletToActivate: StoredCashtabWallet) => {
+        setLoading(true);
         // Event("Category", "Action", "Label")
         // Track number of times a different wallet is activated
         Event('Configure.js', 'Activate', '');
 
-        /**
-         * Update state
-         * useWallet.ts has a useEffect that will then sync this new
-         * active wallet with the network and update it in storage
-         *
-         * We also setLoading(true) on a wallet change, because we want
-         * to prevent rapid wallet cycling
-         *
-         * setLoading(false) is called after the wallet is updated in useWallet.ts
-         */
-        setLoading(true);
-        setCashtabState(prevState => ({
-            ...prevState,
-            wallets: walletsAfterActivation,
-        }));
+        try {
+            const activeWallet = await createActiveCashtabWallet(
+                chronik,
+                walletToActivate,
+                cashtabState.cashtabCache,
+            );
+            await updateCashtabState({ activeWallet: activeWallet });
+        } catch (error) {
+            console.error('Error activating wallet:', error);
+            toast.error('Failed to activate wallet. Please try again.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -415,7 +493,7 @@ const Wallets = () => {
             )}
             {showImportWalletModal && (
                 <Modal
-                    height={180}
+                    height={265}
                     title={`Import wallet`}
                     handleOk={importNewWallet}
                     handleCancel={() => setShowImportWalletModal(false)}
@@ -425,73 +503,118 @@ const Wallets = () => {
                         formData.mnemonic === ''
                     }
                 >
-                    <ModalInput
-                        type="email"
+                    <ModalTextArea
                         placeholder="mnemonic (seed phrase)"
                         name="mnemonic"
                         value={formData.mnemonic}
                         error={formDataErrors.mnemonic}
-                        handleInput={handleInput}
+                        handleInput={handleTextAreaInput}
+                        height={96}
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
                     />
+                </Modal>
+            )}
+            {showAddressShareModal && (
+                <Modal
+                    height={400}
+                    title="Connect Wallet"
+                    description="Select a wallet to connect"
+                    handleCancel={() => setShowAddressShareModal(false)}
+                    showCancelButton={false}
+                    showButtons={false}
+                >
+                    <AddressShareModal>
+                        <div
+                            style={{
+                                marginBottom: '16px',
+                                textAlign: 'center',
+                            }}
+                        >
+                            <button
+                                onClick={() => setShowAddressShareModal(false)}
+                                style={{
+                                    padding: '8px 16px',
+                                    backgroundColor: '#dc3545',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                }}
+                            >
+                                Reject
+                            </button>
+                        </div>
+                        {sortWalletsForDisplay(activeWallet, wallets).map(
+                            (wallet, index) => (
+                                <WalletAddressRow
+                                    key={`${wallet.name}_${index}`}
+                                >
+                                    <WalletInfo>
+                                        <WalletNameText>
+                                            {wallet.name}
+                                            {index === 0 && (
+                                                <ActiveIndicator>
+                                                    [active]
+                                                </ActiveIndicator>
+                                            )}
+                                        </WalletNameText>
+                                        <WalletAddress>
+                                            {(() => {
+                                                const preview = previewAddress(
+                                                    wallet.address,
+                                                );
+                                                const firstChar =
+                                                    preview.charAt(0);
+                                                const rest = preview.slice(1);
+                                                return (
+                                                    <>
+                                                        <span
+                                                            style={{
+                                                                color: 'var(--accent)',
+                                                            }}
+                                                        >
+                                                            {firstChar}
+                                                        </span>
+                                                        {rest}
+                                                    </>
+                                                );
+                                            })()}
+                                        </WalletAddress>
+                                    </WalletInfo>
+                                    <CopyButton
+                                        onClick={() =>
+                                            copyWalletAddress(
+                                                wallet.address,
+                                                wallet.name,
+                                            )
+                                        }
+                                    >
+                                        Connect
+                                    </CopyButton>
+                                </WalletAddressRow>
+                            ),
+                        )}
+                    </AddressShareModal>
                 </Modal>
             )}
             <WalletsList title="Wallets">
                 <WalletsPanel>
-                    {wallets.map((wallet, index) =>
-                        index === 0 ? (
-                            <WalletRow key={`${wallet.name}_${index}`}>
-                                <ActiveWalletName className="notranslate">
-                                    {wallet.name}
-                                </ActiveWalletName>
-                                <h4>(active)</h4>
-                                <SvgButtonPanel>
-                                    <CopyIconButton
-                                        name={`Copy address of ${wallet.name}`}
-                                        data={wallet.paths.get(1899).address}
-                                        showToast
-                                    />
-                                    <IconButton
-                                        name={`Rename ${wallet.name}`}
-                                        icon={<EditIcon />}
-                                        onClick={() =>
-                                            setWalletToBeRenamed(wallet)
-                                        }
-                                    />
-                                    <IconButton
-                                        name={`Add ${wallet.name} to contacts`}
-                                        icon={<AddContactIcon />}
-                                        onClick={() =>
-                                            addWalletToContacts(wallet)
-                                        }
-                                    />
-                                </SvgButtonPanel>
-                            </WalletRow>
-                        ) : (
-                            <Wallet key={`${wallet.name}_${index}`}>
-                                <WalletRow>
-                                    <WalletName>
-                                        <h3 className="overflow notranslate">
+                    {sortWalletsForDisplay(activeWallet, wallets).map(
+                        (wallet, index) =>
+                            index === 0 ? (
+                                <Wallet key={`${wallet.name}_${index}`}>
+                                    <WalletRow>
+                                        <ActiveWalletName className="notranslate">
                                             {wallet.name}
-                                        </h3>
-                                    </WalletName>
-                                    <WalletBalance>
-                                        {wallet?.state?.balanceSats !== 0
-                                            ? `${toFormattedXec(
-                                                  wallet.state.balanceSats,
-                                                  userLocale,
-                                              )} XEC`
-                                            : '-'}
-                                    </WalletBalance>
-                                </WalletRow>
-                                <ActionsRow>
-                                    <ButtonPanel>
+                                        </ActiveWalletName>
+                                        <h4>(active)</h4>
                                         <SvgButtonPanel>
                                             <CopyIconButton
                                                 name={`Copy address of ${wallet.name}`}
-                                                data={
-                                                    wallet.paths.get(1899)
-                                                        .address
-                                                }
+                                                data={wallet.address}
                                                 showToast
                                             />
                                             <IconButton
@@ -508,31 +631,68 @@ const Wallets = () => {
                                                     addWalletToContacts(wallet)
                                                 }
                                             />
-                                            <IconButton
-                                                name={`Delete ${wallet.name}`}
-                                                icon={<TrashcanIcon />}
-                                                onClick={() =>
-                                                    setWalletToBeDeleted(wallet)
-                                                }
-                                            />
                                         </SvgButtonPanel>
-                                        <ActivateButton
-                                            aria-label={`Activate ${wallet.name}`}
-                                            onClick={debounce(
-                                                () =>
-                                                    activateWallet(
-                                                        wallet,
-                                                        wallets,
-                                                    ),
-                                                500,
-                                            )}
-                                        >
-                                            Activate
-                                        </ActivateButton>
-                                    </ButtonPanel>
-                                </ActionsRow>
-                            </Wallet>
-                        ),
+                                    </WalletRow>
+                                </Wallet>
+                            ) : (
+                                <Wallet key={`${wallet.name}_${index}`}>
+                                    <WalletRow>
+                                        <WalletName>
+                                            <h3 className="overflow notranslate">
+                                                {wallet.name}
+                                            </h3>
+                                        </WalletName>
+                                    </WalletRow>
+                                    <ActionsRow>
+                                        <ButtonPanel>
+                                            <SvgButtonPanel>
+                                                <CopyIconButton
+                                                    name={`Copy address of ${wallet.name}`}
+                                                    data={wallet.address}
+                                                    showToast
+                                                />
+                                                <IconButton
+                                                    name={`Rename ${wallet.name}`}
+                                                    icon={<EditIcon />}
+                                                    onClick={() =>
+                                                        setWalletToBeRenamed(
+                                                            wallet,
+                                                        )
+                                                    }
+                                                />
+                                                <IconButton
+                                                    name={`Add ${wallet.name} to contacts`}
+                                                    icon={<AddContactIcon />}
+                                                    onClick={() =>
+                                                        addWalletToContacts(
+                                                            wallet,
+                                                        )
+                                                    }
+                                                />
+                                                <IconButton
+                                                    name={`Delete ${wallet.name}`}
+                                                    icon={<TrashcanIcon />}
+                                                    onClick={() =>
+                                                        setWalletToBeDeleted(
+                                                            wallet,
+                                                        )
+                                                    }
+                                                />
+                                            </SvgButtonPanel>
+                                            <ActivateButton
+                                                aria-label={`Activate ${wallet.name}`}
+                                                onClick={debounce(
+                                                    () =>
+                                                        activateWallet(wallet),
+                                                    500,
+                                                )}
+                                            >
+                                                Activate
+                                            </ActivateButton>
+                                        </ButtonPanel>
+                                    </ActionsRow>
+                                </Wallet>
+                            ),
                     )}
                 </WalletsPanel>
                 <WalletRow>

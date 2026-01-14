@@ -50,8 +50,8 @@ TEST_EXIT_PASSED = 0
 TEST_EXIT_FAILED = 1
 TEST_EXIT_SKIPPED = 77
 
-# Timestamp is May. 16th, 2024 at 08:00:00
-TIMESTAMP_IN_THE_PAST = 1715846400
+# Timestamp is May. 16th, 2025 at 08:00:00
+TIMESTAMP_IN_THE_PAST = 1747382400
 
 TMPDIR_PREFIX = "bitcoin_func_test_"
 
@@ -143,9 +143,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def main(self):
         """Main function. This should not be overridden by the subclass test scripts."""
-        assert hasattr(
-            self, "num_nodes"
-        ), "Test must set self.num_nodes in set_test_params()"
+        assert hasattr(self, "num_nodes"), (
+            "Test must set self.num_nodes in set_test_params()"
+        )
 
         try:
             self.setup()
@@ -291,11 +291,11 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             help="Run test using a descriptor wallet",
         )
         parser.add_argument(
-            "--with-schumpeteractivation",
-            dest="schumpeteractivation",
+            "--with-obolenskyactivation",
+            dest="obolenskyactivation",
             default=False,
             action="store_true",
-            help=f"Activate Schumpeter update on timestamp {TIMESTAMP_IN_THE_PAST}",
+            help=f"Activate Obolensky update on timestamp {TIMESTAMP_IN_THE_PAST}",
         )
         parser.add_argument(
             "--timeout-factor",
@@ -543,7 +543,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         wallet_name = (
             self.default_wallet_name
             if self.wallet_names is None
-            else self.wallet_names[i] if i < len(self.wallet_names) else False
+            else self.wallet_names[i]
+            if i < len(self.wallet_names)
+            else False
         )
         if wallet_name is not False:
             n = self.nodes[i]
@@ -612,9 +614,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 )
             )
 
-            if self.options.schumpeteractivation:
+            if self.options.obolenskyactivation:
                 self.nodes[i].extend_default_args(
-                    [f"-schumpeteractivationtime={TIMESTAMP_IN_THE_PAST}"]
+                    [f"-obolenskyactivationtime={TIMESTAMP_IN_THE_PAST}"]
                 )
 
     def start_node(self, i, *args, **kwargs):
@@ -977,9 +979,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 )
             )
 
-            if self.options.schumpeteractivation:
+            if self.options.obolenskyactivation:
                 self.nodes[CACHE_NODE_ID].extend_default_args(
-                    [f"-schumpeteractivationtime={TIMESTAMP_IN_THE_PAST}"]
+                    [f"-obolenskyactivationtime={TIMESTAMP_IN_THE_PAST}"]
                 )
 
             self.start_node(CACHE_NODE_ID)

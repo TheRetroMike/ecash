@@ -45,7 +45,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_roundtrip) {
         CompactProofs cpw;
         BOOST_CHECK_EQUAL(cpw.size(), 0);
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_NO_THROW(ss << cpw);
 
         CompactProofs cpr;
@@ -68,7 +68,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_roundtrip) {
             cp, std::numeric_limits<uint32_t>::max(),
             buildRandomProof(active_chainstate, MIN_VALID_PROOF_SCORE));
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_NO_THROW(ss << cp);
 
         auto prefilledProofs = TestCompactProofs::getPrefilledProofs(cp);
@@ -94,12 +94,13 @@ BOOST_AUTO_TEST_CASE(compactproofs_roundtrip) {
         for (size_t i = 0; i < numofPrefilledProof; i++) {
             TestCompactProofs::addPrefilledProof(
                 cpw, prefilledProofIndex++,
-                buildRandomProof(active_chainstate, GetRand<uint32_t>()));
+                buildRandomProof(active_chainstate,
+                                 FastRandomContext().rand<uint32_t>()));
         }
         auto prefilledProofs = TestCompactProofs::getPrefilledProofs(cpw);
         BOOST_CHECK_EQUAL(prefilledProofs.size(), numofPrefilledProof);
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_NO_THROW(ss << cpw);
 
         CompactProofs cpr;
@@ -156,7 +157,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
         TestCompactProofs::addPrefilledProof(
             cp, 0, buildRandomProof(active_chainstate, MIN_VALID_PROOF_SCORE));
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_EXCEPTION(ss << cp, std::ios_base::failure,
                               HasReason("differential value overflow"));
     }
@@ -169,7 +170,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
         TestCompactProofs::addPrefilledProof(
             cp, 0, buildRandomProof(active_chainstate, MIN_VALID_PROOF_SCORE));
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_EXCEPTION(ss << cp, std::ios_base::failure,
                               HasReason("differential value overflow"));
     }
@@ -183,13 +184,13 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
         TestCompactProofs::addPrefilledProof(
             cp, 0, buildRandomProof(active_chainstate, MIN_VALID_PROOF_SCORE));
 
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         BOOST_CHECK_EXCEPTION(ss << cp, std::ios_base::failure,
                               HasReason("differential value overflow"));
     }
 
     {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()
@@ -201,7 +202,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
     }
 
     {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()
@@ -215,7 +216,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
     }
 
     {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()
@@ -246,7 +247,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
     uint32_t remainder = uint32_t(overflow - ((MAX_SIZE + 1) * overflowIter));
 
     {
-        CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()
@@ -269,7 +270,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
     }
 
     {
-        CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()
@@ -296,7 +297,7 @@ BOOST_AUTO_TEST_CASE(compactproofs_overflow) {
     }
 
     {
-        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        DataStream ss{};
         // shortproofidk0, shortproofidk1
         ss << uint64_t(0) << uint64_t(0);
         // shortproofids.size()

@@ -90,6 +90,14 @@ const CashtabTextArea = styled.textarea<{ height: number }>`
     }
 `;
 
+const ModalTextAreaField = styled(CashtabTextArea)<{ invalid?: boolean }>`
+    background-color: transparent;
+    border: ${props =>
+        props.invalid
+            ? `1px solid ${props.theme.formError}`
+            : `1px solid ${props.theme.accent} !important`};
+`;
+
 const LeftInput = styled(CashtabInput)`
     border-radius: 9px 0 0 9px;
 `;
@@ -150,6 +158,7 @@ const ErrorMsg = styled.div`
     line-height: var(--text-sm--line-height);
     color: ${props => props.theme.formError};
     word-break: break-all;
+    min-height: 1.25rem; /* Reserve space to prevent content jumping */
 `;
 
 export const InputFlex = styled.div`
@@ -198,6 +207,10 @@ interface InputProps {
     style?: React.CSSProperties;
     prefix?: InputLogoPrefixProps;
     suffix?: string;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const Input: React.FC<InputProps> = ({
     placeholder = '',
@@ -210,6 +223,10 @@ export const Input: React.FC<InputProps> = ({
     style,
     prefix,
     suffix,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -229,6 +246,10 @@ export const Input: React.FC<InputProps> = ({
                         (e.target as HTMLInputElement).blur();
                     }}
                     type={type}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 {typeof suffix !== 'undefined' && (
                     <TextSuffix>{suffix}</TextSuffix>
@@ -246,6 +267,10 @@ interface ModalInputProps {
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
     error: string | boolean;
     type?: string;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const ModalInput: React.FC<ModalInputProps> = ({
     placeholder = '',
@@ -254,6 +279,10 @@ export const ModalInput: React.FC<ModalInputProps> = ({
     handleInput,
     error = false,
     type = 'text',
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -265,6 +294,10 @@ export const ModalInput: React.FC<ModalInputProps> = ({
                     invalid={typeof error === 'string'}
                     onChange={e => handleInput(e)}
                     type={type}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
             </InputRow>
             <ErrorMsg>{typeof error === 'string' ? error : ''}</ErrorMsg>
@@ -290,6 +323,7 @@ const TextAreaErrorMsg = styled.div`
     line-height: var(--text-sm--line-height);
     color: ${props => props.theme.formError};
     word-break: break-all;
+    min-height: 1.25rem; /* Reserve space to prevent content jumping */
 `;
 
 interface TextAreaProps {
@@ -303,6 +337,10 @@ interface TextAreaProps {
     showCount?: boolean;
     customCount?: boolean | number;
     max?: string | number;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const TextArea: React.FC<TextAreaProps> = ({
     placeholder = '',
@@ -315,6 +353,10 @@ export const TextArea: React.FC<TextAreaProps> = ({
     showCount = false,
     customCount = false,
     max = '',
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -325,6 +367,10 @@ export const TextArea: React.FC<TextAreaProps> = ({
                 height={height}
                 disabled={disabled}
                 onChange={handleInput}
+                autoComplete={autocomplete}
+                spellCheck={spellCheck}
+                autoCorrect={autoCorrect}
+                autoCapitalize={autoCapitalize}
             />
             <CountAndErrorFlex>
                 <TextAreaErrorMsg>
@@ -336,12 +382,62 @@ export const TextArea: React.FC<TextAreaProps> = ({
                             {customCount !== false
                                 ? customCount
                                 : value === null
-                                ? 0
-                                : value.length}
+                                  ? 0
+                                  : value.length}
                         </Count>
                         /{max}
                     </CountHolder>
                 )}
+            </CountAndErrorFlex>
+        </CashtabInputWrapper>
+    );
+};
+
+interface ModalTextAreaProps {
+    placeholder: string;
+    name: string;
+    value: string | null;
+    handleInput?: React.ChangeEventHandler<HTMLTextAreaElement>;
+    disabled?: boolean;
+    height?: number;
+    error?: string | boolean;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
+}
+export const ModalTextArea: React.FC<ModalTextAreaProps> = ({
+    placeholder = '',
+    name = '',
+    value = '',
+    handleInput,
+    disabled = false,
+    height = 142,
+    error = false,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
+}) => {
+    return (
+        <CashtabInputWrapper>
+            <ModalTextAreaField
+                placeholder={placeholder}
+                name={name}
+                value={value === null ? '' : value}
+                height={height}
+                disabled={disabled}
+                onChange={handleInput}
+                invalid={typeof error === 'string'}
+                autoComplete={autocomplete}
+                spellCheck={spellCheck}
+                autoCorrect={autoCorrect}
+                autoCapitalize={autoCapitalize}
+            />
+            <CountAndErrorFlex>
+                <TextAreaErrorMsg>
+                    {typeof error === 'string' ? error : ''}
+                </TextAreaErrorMsg>
             </CountAndErrorFlex>
         </CashtabInputWrapper>
     );
@@ -354,6 +450,10 @@ interface InputWithScannerProps {
     disabled?: boolean;
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
     error: false | string;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const InputWithScanner: React.FC<InputWithScannerProps> = ({
     placeholder = '',
@@ -362,6 +462,10 @@ export const InputWithScanner: React.FC<InputWithScannerProps> = ({
     disabled = false,
     handleInput,
     error = false,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -373,6 +477,10 @@ export const InputWithScanner: React.FC<InputWithScannerProps> = ({
                     placeholder={placeholder}
                     invalid={typeof error === 'string'}
                     onChange={handleInput}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 <ScanQRCode
                     onScan={result =>
@@ -401,6 +509,10 @@ interface SendXecInputProps {
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
     handleSelect: React.ChangeEventHandler<HTMLSelectElement>;
     handleOnMax: () => void;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const SendXecInput: React.FC<SendXecInputProps> = ({
     name = '',
@@ -413,6 +525,10 @@ export const SendXecInput: React.FC<SendXecInputProps> = ({
     handleInput,
     handleSelect,
     handleOnMax,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -425,6 +541,10 @@ export const SendXecInput: React.FC<SendXecInputProps> = ({
                     value={value}
                     onChange={handleInput}
                     disabled={inputDisabled}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 <SendXecDropdown
                     data-testid="currency-select-dropdown"
@@ -460,6 +580,10 @@ interface SendTokenInputProps {
     error: false | string;
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
     handleOnMax: () => void;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const SendTokenInput: React.FC<SendTokenInputProps> = ({
     name = '',
@@ -469,6 +593,10 @@ export const SendTokenInput: React.FC<SendTokenInputProps> = ({
     error = false,
     handleInput,
     handleOnMax,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -479,41 +607,12 @@ export const SendTokenInput: React.FC<SendTokenInputProps> = ({
                     value={value}
                     onChange={e => handleInput(e)}
                     disabled={inputDisabled}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 <OnMaxBtnToken onClick={handleOnMax}>max</OnMaxBtnToken>
-            </InputRow>
-            <ErrorMsg>{typeof error === 'string' ? error : ''}</ErrorMsg>
-        </CashtabInputWrapper>
-    );
-};
-
-/**
- * We only render this input from bip21 input into other fields
- * So, it is always disabled
- * But it needs to validate for slp decimals, since this info may not
- * be available until we render this component
- */
-interface SendTokenBip21InputProps {
-    name: string;
-    placeholder: string;
-    value: string;
-    error?: false | string;
-}
-export const SendTokenBip21Input: React.FC<SendTokenBip21InputProps> = ({
-    name,
-    placeholder,
-    value,
-    error = false,
-}) => {
-    return (
-        <CashtabInputWrapper>
-            <InputRow invalid={typeof error === 'string'}>
-                <CashtabInput
-                    name={name}
-                    placeholder={placeholder}
-                    value={value}
-                    disabled
-                />
             </InputRow>
             <ErrorMsg>{typeof error === 'string' ? error : ''}</ErrorMsg>
         </CashtabInputWrapper>
@@ -531,6 +630,10 @@ interface ListPriceInputProps {
     error: false | string;
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
     handleSelect: React.ChangeEventHandler<HTMLSelectElement>;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const ListPriceInput: React.FC<ListPriceInputProps> = ({
     name = 'listPriceInput',
@@ -543,6 +646,10 @@ export const ListPriceInput: React.FC<ListPriceInputProps> = ({
     error = false,
     handleInput,
     handleSelect,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -558,6 +665,10 @@ export const ListPriceInput: React.FC<ListPriceInputProps> = ({
                     onWheel={(e: React.WheelEvent<HTMLInputElement>) => {
                         (e.target as HTMLInputElement).blur();
                     }}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 <SellPriceDropdown
                     data-testid="currency-select-dropdown"
@@ -585,6 +696,10 @@ interface AliasInputProps {
     inputDisabled: boolean;
     error: false | string;
     handleInput: React.ChangeEventHandler<HTMLInputElement>;
+    autocomplete?: string;
+    spellCheck?: boolean;
+    autoCorrect?: string;
+    autoCapitalize?: string;
 }
 export const AliasInput: React.FC<AliasInputProps> = ({
     name = '',
@@ -593,6 +708,10 @@ export const AliasInput: React.FC<AliasInputProps> = ({
     inputDisabled = false,
     error = false,
     handleInput,
+    autocomplete = 'off',
+    spellCheck = false,
+    autoCorrect = 'off',
+    autoCapitalize = 'off',
 }) => {
     return (
         <CashtabInputWrapper>
@@ -604,6 +723,10 @@ export const AliasInput: React.FC<AliasInputProps> = ({
                     value={value}
                     onChange={e => handleInput(e)}
                     disabled={inputDisabled}
+                    autoComplete={autocomplete}
+                    spellCheck={spellCheck}
+                    autoCorrect={autoCorrect}
+                    autoCapitalize={autoCapitalize}
                 />
                 <AliasSuffixHolder>.xec</AliasSuffixHolder>
             </InputRow>

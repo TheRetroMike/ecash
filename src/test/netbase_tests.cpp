@@ -11,7 +11,6 @@
 #include <streams.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
-#include <version.h>
 
 #include <test/util/setup_common.h>
 
@@ -232,10 +231,22 @@ BOOST_AUTO_TEST_CASE(subnet_test) {
     // IPv4 address with IPv6 netmask or the other way around.
     BOOST_CHECK(!CSubNet(ResolveIP("1.1.1.1"), ResolveIP("ffff::")).IsValid());
     BOOST_CHECK(!CSubNet(ResolveIP("::1"), ResolveIP("255.0.0.0")).IsValid());
-    // Can't subnet TOR (or any other non-IPv4 and non-IPv6 network).
-    BOOST_CHECK(
-        !CSubNet(ResolveIP("5wyqrzbvrdsumnok.onion"), ResolveIP("255.0.0.0"))
-             .IsValid());
+
+    // Create Non-IP subnets.
+
+    const CNetAddr tor_addr{ResolveIP(
+        "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion")};
+
+    subnet = CSubNet(tor_addr);
+    BOOST_CHECK(subnet.IsValid());
+    BOOST_CHECK_EQUAL(subnet.ToString(), tor_addr.ToString());
+    BOOST_CHECK(subnet.Match(tor_addr));
+    BOOST_CHECK(!subnet.Match(ResolveIP(
+        "kpgvmscirrdqpekbqjsvw5teanhatztpp2gl6eee4zkowvwfxwenqaid.onion")));
+    BOOST_CHECK(!subnet.Match(ResolveIP("1.2.3.4")));
+
+    BOOST_CHECK(!CSubNet(tor_addr, 200).IsValid());
+    BOOST_CHECK(!CSubNet(tor_addr, ResolveIP("255.0.0.0")).IsValid());
 
     subnet = ResolveSubNet("1.2.3.4/255.255.255.255");
     BOOST_CHECK_EQUAL(subnet.ToString(), "1.2.3.4/32");
@@ -579,8 +590,7 @@ BOOST_AUTO_TEST_CASE(
     BOOST_CHECK(!LookupSubNet("1.2.3.0/24\0"s, ret));
     BOOST_CHECK(!LookupSubNet("1.2.3.0/24\0example.com"s, ret));
     BOOST_CHECK(!LookupSubNet("1.2.3.0/24\0example.com\0"s, ret));
-    // We only do subnetting for IPv4 and IPv6
-    BOOST_CHECK(!LookupSubNet("5wyqrzbvrdsumnok.onion"s, ret));
+    BOOST_CHECK(LookupSubNet("5wyqrzbvrdsumnok.onion"s, ret));
     BOOST_CHECK(!LookupSubNet("5wyqrzbvrdsumnok.onion\0"s, ret));
     BOOST_CHECK(!LookupSubNet("5wyqrzbvrdsumnok.onion\0example.com"s, ret));
     BOOST_CHECK(!LookupSubNet("5wyqrzbvrdsumnok.onion\0example.com\0"s, ret));
@@ -686,33 +696,32 @@ static constexpr const char *stream_addrv2_hex =
     "f1f2";
 
 BOOST_AUTO_TEST_CASE(caddress_serialize_v1) {
-    CDataStream s(SER_NETWORK, PROTOCOL_VERSION);
+    DataStream s{};
 
-    s << fixture_addresses;
+    s << WithParams(CAddress::V1_NETWORK, fixture_addresses);
     BOOST_CHECK_EQUAL(HexStr(s), stream_addrv1_hex);
 }
 
 BOOST_AUTO_TEST_CASE(caddress_unserialize_v1) {
-    CDataStream s(ParseHex(stream_addrv1_hex), SER_NETWORK, PROTOCOL_VERSION);
+    DataStream s{ParseHex(stream_addrv1_hex)};
     std::vector<CAddress> addresses_unserialized;
 
-    s >> addresses_unserialized;
+    s >> WithParams(CAddress::V1_NETWORK, addresses_unserialized);
     BOOST_CHECK(fixture_addresses == addresses_unserialized);
 }
 
 BOOST_AUTO_TEST_CASE(caddress_serialize_v2) {
-    CDataStream s(SER_NETWORK, PROTOCOL_VERSION | ADDRV2_FORMAT);
+    DataStream s{};
 
-    s << fixture_addresses;
+    s << WithParams(CAddress::V2_NETWORK, fixture_addresses);
     BOOST_CHECK_EQUAL(HexStr(s), stream_addrv2_hex);
 }
 
 BOOST_AUTO_TEST_CASE(caddress_unserialize_v2) {
-    CDataStream s(ParseHex(stream_addrv2_hex), SER_NETWORK,
-                  PROTOCOL_VERSION | ADDRV2_FORMAT);
+    DataStream s{ParseHex(stream_addrv2_hex)};
     std::vector<CAddress> addresses_unserialized;
 
-    s >> addresses_unserialized;
+    s >> WithParams(CAddress::V2_NETWORK, addresses_unserialized);
     BOOST_CHECK(fixture_addresses == addresses_unserialized);
 }
 

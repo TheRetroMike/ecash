@@ -10,8 +10,8 @@
 #include <consensus/merkle.h>
 #include <key_io.h>
 #include <net.h>
+#include <node/blockfitter.h>
 #include <node/context.h>
-#include <node/miner.h>
 #include <pow/pow.h>
 #include <primitives/block.h>
 #include <script/standard.h>
@@ -19,6 +19,7 @@
 #include <validation.h>
 
 using node::BlockAssembler;
+using node::BlockFitter;
 using node::NodeContext;
 
 CTxIn generatetoaddress(const Config &config, const NodeContext &node,
@@ -47,20 +48,30 @@ CTxIn MineBlock(const Config &config, const NodeContext &node,
     return CTxIn{block->vtx[0]->GetId(), 0};
 }
 
-std::shared_ptr<CBlock> PrepareBlock(const Config &config,
-                                     const NodeContext &node,
-                                     const CScript &coinbase_scriptPubKey) {
-    auto block = std::make_shared<CBlock>(
-        BlockAssembler{config, Assert(node.chainman)->ActiveChainstate(),
-                       Assert(node.mempool.get())}
-            .CreateNewBlock(coinbase_scriptPubKey)
-            ->block);
+std::shared_ptr<CBlock>
+PrepareBlock(const Config &config, const NodeContext &node,
+             const CScript &coinbase_scriptPubKey,
+             const node::BlockAssembler::Options &assembler_options) {
+    auto block =
+        std::make_shared<CBlock>(BlockAssembler{
+            BlockFitter(config), Assert(node.chainman)->ActiveChainstate(),
+            Assert(node.mempool.get()), assembler_options, node.avalanche.get()}
+                                     .CreateNewBlock(coinbase_scriptPubKey)
+                                     ->block);
 
     LOCK(cs_main);
     block->nTime = Assert(node.chainman)->ActiveTip()->GetMedianTimePast() + 1;
     block->hashMerkleRoot = BlockMerkleRoot(*block);
 
     return block;
+}
+
+std::shared_ptr<CBlock> PrepareBlock(const Config &config,
+                                     const node::NodeContext &node,
+                                     const CScript &coinbase_scriptPubKey) {
+    BlockAssembler::Options assembler_options;
+    ApplyArgsManOptions(*node.args, assembler_options);
+    return PrepareBlock(config, node, coinbase_scriptPubKey, assembler_options);
 }
 
 static std::vector<uint8_t>
@@ -83,14 +94,14 @@ void createCoinbaseAndMerkleRoot(CBlock *pblock, const CBlockIndex *pindexPrev,
                   << getExcessiveBlockSizeSig(nExcessiveBlockSize);
 
     // Make sure the coinbase is big enough.
-    uint64_t coinbaseSize = ::GetSerializeSize(tx_coinbase, PROTOCOL_VERSION);
+    uint64_t coinbaseSize = ::GetSerializeSize(tx_coinbase);
     if (coinbaseSize < MIN_TX_SIZE) {
         tx_coinbase.vin[0].scriptSig
             << std::vector<uint8_t>(MIN_TX_SIZE - coinbaseSize - 1);
     }
 
     assert(tx_coinbase.vin[0].scriptSig.size() <= MAX_COINBASE_SCRIPTSIG_SIZE);
-    assert(::GetSerializeSize(tx_coinbase, PROTOCOL_VERSION) >= MIN_TX_SIZE);
+    assert(::GetSerializeSize(tx_coinbase) >= MIN_TX_SIZE);
 
     pblock->vtx[0] = MakeTransactionRef(std::move(tx_coinbase));
     pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);

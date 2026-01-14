@@ -6,21 +6,19 @@
 #include <txdb.h>
 
 #include <chain.h>
+#include <clientversion.h>
 #include <common/system.h>
 #include <logging.h>
-#include <node/ui_interface.h>
 #include <pow/pow.h>
 #include <random.h>
-#include <shutdown.h>
+#include <util/signalinterrupt.h>
 #include <util/translation.h>
 #include <util/vector.h>
-#include <version.h>
 
 #include <cstdint>
 #include <memory>
 
 static constexpr uint8_t DB_COIN{'C'};
-static constexpr uint8_t DB_COINS{'c'};
 static constexpr uint8_t DB_BLOCK_FILES{'f'};
 static constexpr uint8_t DB_BLOCK_INDEX{'b'};
 
@@ -31,6 +29,7 @@ static constexpr uint8_t DB_REINDEX_FLAG{'R'};
 static constexpr uint8_t DB_LAST_BLOCK{'l'};
 
 // Keys used in previous version that might still be found in the DB:
+static constexpr uint8_t DB_COINS{'c'};
 static constexpr uint8_t DB_TXINDEX_BLOCK{'T'};
 //               uint8_t DB_TXINDEX{'t'}
 
@@ -58,13 +57,20 @@ util::Result<void> CheckLegacyTxindex(CBlockTreeDB &block_tree_db) {
     return {};
 }
 
+bool CCoinsViewDB::NeedsUpgrade() {
+    std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
+    // DB_COINS was deprecated in v0.15.0 (D512)
+    cursor->Seek(std::make_pair(DB_COINS, uint256{}));
+    return cursor->Valid();
+}
+
 namespace {
 
 struct CoinEntry {
     COutPoint *outpoint;
-    uint8_t key;
+    uint8_t key{DB_COIN};
     explicit CoinEntry(const COutPoint *ptr)
-        : outpoint(const_cast<COutPoint *>(ptr)), key(DB_COIN) {}
+        : outpoint(const_cast<COutPoint *>(ptr)) {}
 
     SERIALIZE_METHODS(CoinEntry, obj) {
         TxId id = obj.outpoint->GetTxId();
@@ -116,8 +122,8 @@ std::vector<BlockHash> CCoinsViewDB::GetHeadBlocks() const {
     return vhashHeadBlocks;
 }
 
-bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const BlockHash &hashBlock,
-                              bool erase) {
+bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor &cursor,
+                              const BlockHash &hashBlock) {
     CDBBatch batch(*m_db);
     size_t count = 0;
     size_t changed = 0;
@@ -140,8 +146,8 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const BlockHash &hashBlock,
     batch.Erase(DB_BEST_BLOCK);
     batch.Write(DB_HEAD_BLOCKS, Vector(hashBlock, old_tip));
 
-    for (CCoinsMap::iterator it = mapCoins.begin(); it != mapCoins.end();) {
-        if (it->second.flags & CCoinsCacheEntry::DIRTY) {
+    for (auto it{cursor.Begin()}; it != cursor.End();) {
+        if (it->second.IsDirty()) {
             CoinEntry entry(&it->first);
             if (it->second.coin.IsSpent()) {
                 batch.Erase(entry);
@@ -151,7 +157,7 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const BlockHash &hashBlock,
             changed++;
         }
         count++;
-        it = erase ? mapCoins.erase(it) : std::next(it);
+        it = cursor.NextAndMaybeErase(*it);
         if (batch.SizeEstimate() > m_options.batch_write_bytes) {
             LogPrint(BCLog::COINDB, "Writing partial batch of %.2f MiB\n",
                      batch.SizeEstimate() * (1.0 / 1048576.0));
@@ -294,7 +300,8 @@ bool CBlockTreeDB::ReadFlag(const std::string &name, bool &fValue) {
 
 bool CBlockTreeDB::LoadBlockIndexGuts(
     const Consensus::Params &params,
-    std::function<CBlockIndex *(const BlockHash &)> insertBlockIndex) {
+    std::function<CBlockIndex *(const BlockHash &)> insertBlockIndex,
+    const util::SignalInterrupt &interrupt) {
     AssertLockHeld(::cs_main);
     std::unique_ptr<CDBIterator> pcursor(NewIterator());
 
@@ -305,15 +312,16 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
     }
 
     if (version != CLIENT_VERSION) {
-        return error("%s: Invalid block index database version: %s", __func__,
-                     version);
+        LogError("%s: Invalid block index database version: %s\n", __func__,
+                 version);
+        return false;
     }
 
     pcursor->Seek(std::make_pair(DB_BLOCK_INDEX, uint256()));
 
     // Load m_block_index
     while (pcursor->Valid()) {
-        if (ShutdownRequested()) {
+        if (interrupt) {
             return false;
         }
         std::pair<uint8_t, uint256> key;
@@ -323,7 +331,8 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
 
         CDiskBlockIndex diskindex;
         if (!pcursor->GetValue(diskindex)) {
-            return error("%s : failed to read value", __func__);
+            LogError("%s : failed to read value\n", __func__);
+            return false;
         }
 
         // Construct block index object
@@ -344,144 +353,15 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
 
         if (!CheckProofOfWork(pindexNew->GetBlockHash(), pindexNew->nBits,
                               params)) {
-            return error("%s: CheckProofOfWork failed: %s", __func__,
-                         pindexNew->ToString());
+            LogError("%s: CheckProofOfWork failed: %s\n", __func__,
+                     pindexNew->ToString());
+            return false;
         }
 
         pcursor->Next();
     }
 
     return true;
-}
-
-namespace {
-//! Legacy class to deserialize pre-pertxout database entries without reindex.
-class CCoins {
-public:
-    //! whether transaction is a coinbase
-    bool fCoinBase;
-
-    //! unspent transaction outputs; spent outputs are .IsNull(); spent outputs
-    //! at the end of the array are dropped
-    std::vector<CTxOut> vout;
-
-    //! at which height this transaction was included in the active block chain
-    int nHeight;
-
-    //! empty constructor
-    CCoins() : fCoinBase(false), vout(0), nHeight(0) {}
-
-    template <typename Stream> void Unserialize(Stream &s) {
-        uint32_t nCode = 0;
-        // version
-        unsigned int nVersionDummy = 0;
-        ::Unserialize(s, VARINT(nVersionDummy));
-        // header code
-        ::Unserialize(s, VARINT(nCode));
-        fCoinBase = nCode & 1;
-        std::vector<bool> vAvail(2, false);
-        vAvail[0] = (nCode & 2) != 0;
-        vAvail[1] = (nCode & 4) != 0;
-        uint32_t nMaskCode = (nCode / 8) + ((nCode & 6) != 0 ? 0 : 1);
-        // spentness bitmask
-        while (nMaskCode > 0) {
-            uint8_t chAvail = 0;
-            ::Unserialize(s, chAvail);
-            for (unsigned int p = 0; p < 8; p++) {
-                bool f = (chAvail & (1 << p)) != 0;
-                vAvail.push_back(f);
-            }
-            if (chAvail != 0) {
-                nMaskCode--;
-            }
-        }
-        // txouts themself
-        vout.assign(vAvail.size(), CTxOut());
-        for (size_t i = 0; i < vAvail.size(); i++) {
-            if (vAvail[i]) {
-                ::Unserialize(s, Using<TxOutCompression>(vout[i]));
-            }
-        }
-        // coinbase height
-        ::Unserialize(s, VARINT_MODE(nHeight, VarIntMode::NONNEGATIVE_SIGNED));
-    }
-};
-} // namespace
-
-/**
- * Upgrade the database from older formats.
- *
- * Currently implemented: from the per-tx utxo model (0.8..0.14.x) to per-txout.
- */
-bool CCoinsViewDB::Upgrade() {
-    std::unique_ptr<CDBIterator> pcursor(m_db->NewIterator());
-    pcursor->Seek(std::make_pair(DB_COINS, uint256()));
-    if (!pcursor->Valid()) {
-        return true;
-    }
-
-    int64_t count = 0;
-    LogPrintf("Upgrading utxo-set database...\n");
-    size_t batch_size = 1 << 24;
-    CDBBatch batch(*m_db);
-    int reportDone = -1;
-    std::pair<uint8_t, uint256> key;
-    std::pair<uint8_t, uint256> prev_key = {DB_COINS, uint256()};
-    while (pcursor->Valid()) {
-        if (ShutdownRequested()) {
-            break;
-        }
-
-        if (!pcursor->GetKey(key) || key.first != DB_COINS) {
-            break;
-        }
-
-        if (count++ % 256 == 0) {
-            uint32_t high =
-                0x100 * *key.second.begin() + *(key.second.begin() + 1);
-            int percentageDone = (int)(high * 100.0 / 65536.0 + 0.5);
-            uiInterface.ShowProgress(_("Upgrading UTXO database").translated,
-                                     percentageDone, true);
-            if (reportDone < percentageDone / 10) {
-                // report max. every 10% step
-                LogPrintfToBeContinued("[%d%%]...", percentageDone);
-                reportDone = percentageDone / 10;
-            }
-        }
-
-        CCoins old_coins;
-        if (!pcursor->GetValue(old_coins)) {
-            return error("%s: cannot parse CCoins record", __func__);
-        }
-
-        const TxId id(key.second);
-        for (size_t i = 0; i < old_coins.vout.size(); ++i) {
-            if (!old_coins.vout[i].IsNull() &&
-                !old_coins.vout[i].scriptPubKey.IsUnspendable()) {
-                Coin newcoin(std::move(old_coins.vout[i]), old_coins.nHeight,
-                             old_coins.fCoinBase);
-                COutPoint outpoint(id, i);
-                CoinEntry entry(&outpoint);
-                batch.Write(entry, newcoin);
-            }
-        }
-
-        batch.Erase(key);
-        if (batch.SizeEstimate() > batch_size) {
-            m_db->WriteBatch(batch);
-            batch.Clear();
-            m_db->CompactRange(prev_key, key);
-            prev_key = key;
-        }
-
-        pcursor->Next();
-    }
-
-    m_db->WriteBatch(batch);
-    m_db->CompactRange({DB_COINS, uint256()}, key);
-    uiInterface.ShowProgress("", 100, false);
-    LogPrintf("[%s].\n", ShutdownRequested() ? "CANCELLED" : "DONE");
-    return !ShutdownRequested();
 }
 
 bool CBlockTreeDB::Upgrade() {
@@ -505,7 +385,8 @@ bool CBlockTreeDB::Upgrade() {
 
     // The DB is not empty, and the version is either non-existent or too old.
     // The node requires a reindex.
-    if (pcursor->Valid() && version < CDiskBlockIndex::TRACK_SIZE_VERSION) {
+    constexpr int TRACK_SIZE_VERSION = 220800;
+    if (pcursor->Valid() && version < TRACK_SIZE_VERSION) {
         LogPrintf(
             "\nThe database is too old. The block index cannot be upgraded "
             "and reindexing is required.\n");
